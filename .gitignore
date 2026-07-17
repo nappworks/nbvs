@@ -1,3 +1,27 @@
 nimcache/
 nimblecache/
 htmldocs/
+.nimcache/
+.nimcache*/
+**/.nimcache*/
+
+# テストとベンチマークのコンパイル済み実行ファイル
+/tests/all
+/tests/all_portable
+/tests/tbit_vector
+/tests/tpacked_array
+/tests/tsuccinct_bit_vector
+/tests/telias_fano
+/tests/twavelet_matrix
+/tests/treversed_wavelet_matrix
+/benchmarks/ef_perf_simd
+/benchmarks/ef_perf_nosimd
+/benchmarks/sbv_perf_simd
+/benchmarks/sbv_perf_nosimd
+/benchmarks/wm_perf_simd
+/benchmarks/wm_perf_nosimd
+/benchmarks/wm_perf_simd_optimized
+/benchmarks/wm_range_rank_perf
+
+# APIドキュメントは `nimble docs` で再生成する。
+/docs/api/
