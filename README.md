@@ -6,9 +6,11 @@
 
 `nbvs` は Nim 製の Bit Vector / Succinct Data Structures ライブラリです。
 
-The default implementation uses the x86/x86_64 AVX2 + BMI2 backend.  A portable scalar backend is available with `-d:nbvsNoSimd`.
+The default implementation uses the portable scalar backend. The x86/x86_64
+AVX2 + BMI2 backend is available with `-d:nbvsSimd`.
 
-デフォルト実装は x86/x86_64 向けの AVX2 + BMI2 backend を使います。`-d:nbvsNoSimd` を指定すると portable scalar backend を利用できます。
+デフォルト実装はportable scalar backendを使います。`-d:nbvsSimd` を指定すると、
+x86/x86_64向けのAVX2 + BMI2 backendを利用できます。
 
 ---
 
@@ -23,28 +25,28 @@ including rank/select queries, Elias-Fano encoding, and wavelet matrices.
 
 - `BitVector`: simple mutable byte-backed bit vector.
 - `PackedArray`: fixed-width packed unsigned integer array.
-- `SuccinctBitVector`: AVX2/BMI2-backed bit vector with `rank` and `select`; portable scalar backend available with `-d:nbvsNoSimd`.
+- `SuccinctBitVector`: portable bit vector with `rank` and `select`; an AVX2/BMI2 backend is available with `-d:nbvsSimd`.
 - `EliasFano`: Elias-Fano encoding for nondecreasing `uint64` sequences.
 - `WaveletMatrix`: rank/select, quantile, and range-frequency index for `uint64` sequences.
 - `ReversedWaveletMatrix`: LSB-first wavelet matrix with access, rank, and select.
 
 ### Requirements
 
-- Nim `>= 2.0.0`
-- x86 or x86_64 CPU target with AVX2 and BMI2 support for the default `SuccinctBitVector` and `EliasFano` backend
+- Nim `>= 2.2.10`
+- An x86 or x86_64 CPU with AVX2 and BMI2 support when using `-d:nbvsSimd`
 - GCC/Clang or MSVC
 
-The AVX2/BMI2 backend is used by default:
+The portable scalar backend is used by default:
 
 ```sh
 nimble test
 ```
 
-Use the portable scalar backend with `-d:nbvsNoSimd`:
+Enable the AVX2/BMI2 backend explicitly on a supported CPU:
 
 ```sh
-nim c -d:nbvsNoSimd -r tests/all.nim
-nimble testPortable
+nim c -d:nbvsSimd -r tests/all.nim
+nimble testSimd
 ```
 
 For GCC/Clang, the AVX2/BMI2 backend passes:
@@ -313,7 +315,7 @@ Run the full test suite:
 nimble test
 ```
 
-The tests cover public API behavior, error paths, boundary values, packed-word crossing, rank/select semantics, Elias-Fano queries, key AVX2/BMI2 helper paths, and portable helper paths when `testPortable` is used.
+The tests cover public API behavior, error paths, boundary values, packed-word crossing, rank/select semantics, Elias-Fano queries, the default portable backend, and key AVX2/BMI2 helper paths when `testSimd` is used.
 
 ### License
 
@@ -332,28 +334,28 @@ compact bit vector と succinct data structure を Nim 向けに提供します�
 
 - `BitVector`: 基本的な可変 byte-backed bit vector。
 - `PackedArray`: 固定ビット幅の packed unsigned integer array。
-- `SuccinctBitVector`: `rank` / `select` 対応の AVX2/BMI2 bit vector。`-d:nbvsNoSimd` で portable scalar backend を利用できます。
+- `SuccinctBitVector`: `rank` / `select` 対応のportable bit vector。`-d:nbvsSimd` でAVX2/BMI2 backendを利用できます。
 - `EliasFano`: 非減少 `uint64` 列の Elias-Fano 符号化。
 - `WaveletMatrix`: `uint64` 列の rank/select、quantile、値域頻度 index。
 - `ReversedWaveletMatrix`: access、rank、select 対応の LSB-first Wavelet Matrix。
 
 ### 必要環境
 
-- Nim `>= 2.0.0`
-- デフォルトの `SuccinctBitVector` / `EliasFano` backend では、AVX2 と BMI2 に対応した x86 または x86_64 CPU target
+- Nim `>= 2.2.10`
+- `-d:nbvsSimd` を使用する場合は、AVX2とBMI2に対応したx86またはx86_64 CPU
 - GCC/Clang または MSVC
 
-デフォルトでは AVX2/BMI2 backend を使います。
+デフォルトではportable scalar backendを使います。
 
 ```sh
 nimble test
 ```
 
-portable scalar backend は `-d:nbvsNoSimd` で有効化します。
+対応CPUでAVX2/BMI2 backendを明示的に有効化する場合は、次を実行します。
 
 ```sh
-nim c -d:nbvsNoSimd -r tests/all.nim
-nimble testPortable
+nim c -d:nbvsSimd -r tests/all.nim
+nimble testSimd
 ```
 
 GCC/Clang では、AVX2/BMI2 backend が次のフラグを渡します。
@@ -622,7 +624,9 @@ nimble docs
 nimble test
 ```
 
-公開 API、エラー系、境界値、word 境界をまたぐ packed storage、rank/select semantics、Elias-Fano query、主要 AVX2/BMI2 helper path、`testPortable` 利用時の portable helper path をテスト対象にしています。
+公開API、エラー系、境界値、word境界をまたぐpacked storage、rank/select semantics、
+Elias-Fano query、デフォルトのportable backend、`testSimd` 利用時の主要な
+AVX2/BMI2 helper pathをテスト対象にしています。
 
 ### ライセンス
 

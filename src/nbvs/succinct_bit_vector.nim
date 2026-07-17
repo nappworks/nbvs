@@ -1,4 +1,4 @@
-## Succinct bit vector with an AVX2/BMI2 backend and a portable fallback.
+## portable scalar backendと任意のAVX2/BMI2 backendを持つsuccinct bit vectorです。
 ##
 ## `SuccinctBitVector` supports constant-time `access`, fast `rank`, and fast
 ## `select` over a mutable bit vector after `build` has created the rank/select
@@ -12,17 +12,17 @@
 ##   of range.
 ## * `rank1Incl(pos)` and `rank0Incl(pos)` use the closed interval `[0, pos]`.
 ##
-## The implementation uses a StartPrefix dictionary.  By default it uses AVX2
-## for 512-bit block popcount/select scans and BMI2 `PDEP` for selecting within
-## a 64-bit word.  Define `nbvsNoSimd` to use portable scalar code.
+## デフォルトではportable scalar実装を使用します。`nbvsSimd` をdefineすると、
+## 512-bit blockのpopcount/select scanにAVX2を使用し、64-bit word内の
+## selectにBMI2の `PDEP` を使用します。
 import std/bitops
 
-when not defined(nbvsNoSimd):
+when defined(nbvsSimd):
   {.pragma: selectInline, inline.}
 else:
   {.pragma: selectInline.}
 
-when not defined(nbvsNoSimd):
+when defined(nbvsSimd):
   when defined(gcc) or defined(clang):
     {.localPassc: "-mavx2".}
     {.localPassc: "-mbmi2".}
@@ -42,7 +42,7 @@ const
   L7* = 268435456'i64
   L8* = 2147483648'i64
 
-when not defined(nbvsNoSimd):
+when defined(nbvsSimd):
   const
     PopcountNibbleLookup = [
       0'i8, 1'i8, 1'i8, 2'i8,
@@ -274,7 +274,7 @@ func genSuccinctBitVector*(maxBits: int64): SuccinctBitVector =
 
   result.dataWords = int(ceilDiv(maxBits, 64'i64))
   result.data = newSeq[uint64](int(alignUp(int64(result.dataWords), 8'i64)))
-  when not defined(nbvsNoSimd):
+  when defined(nbvsSimd):
     if maxBits > L5 and maxBits <= int64(uint32.high):
       result.blockPairPrefix = newSeq[uint32](int(ceilDiv(maxBits, L1 * 2)))
 
@@ -391,7 +391,7 @@ func logicalLevel8*(sbv: SuccinctBitVector): seq[int64] =
     result = newSeq[int64](sbv.level8Len)
     for i in 0..<result.len: result[i] = sbv.level8At(i)
 
-when not defined(nbvsNoSimd):
+when defined(nbvsSimd):
   func popcount64Lanes256*(x: M256i): M256i =
     ## Computes popcount for four 64-bit lanes in a 256-bit vector.
     let lookup = mm256_loadu_si256(cast[ptr M256i](unsafeAddr PopcountNibbleLookup[0]))
@@ -409,7 +409,7 @@ when not defined(nbvsNoSimd):
 
 func popcount512At*(sbv: SuccinctBitVector, baseBit: int64): int64 =
   ## Returns the number of one bits in the 512-bit block starting at `baseBit`.
-  when not defined(nbvsNoSimd):
+  when defined(nbvsSimd):
     let startWord = int(baseBit div 64)
     let v0 = mm256_loadu_si256(cast[ptr M256i](addr sbv.data[startWord]))
     let v1 = mm256_loadu_si256(cast[ptr M256i](addr sbv.data[startWord + 4]))
@@ -665,7 +665,7 @@ func rank0Incl*(sbv: SuccinctBitVector, pos: int64): int64 =
   sbv.checkPos(pos)
   result = sbv.rank0(pos + 1)
 
-when not defined(nbvsNoSimd):
+when defined(nbvsSimd):
   func highestSetBitIndex32(mask: int32): int =
     let m = uint32(mask)
     result = 31 - countLeadingZeroBits(m)
@@ -685,7 +685,7 @@ when not defined(nbvsNoSimd):
 
 func selectChildOnesL1x16*(p: ptr int16, target: int16, validCount = 16): int =
   ## Selects the child block containing a one-bit target from 16 int16 prefixes.
-  when not defined(nbvsNoSimd):
+  when defined(nbvsSimd):
     let vals = mm256_loadu_si256(cast[ptr M256i](p))
     let t = mm256_set1_epi16(target)
     let cmp = mm256_cmpgt_epi16(t, vals)
@@ -701,7 +701,7 @@ func selectChildOnesL1x16*(p: ptr int16, target: int16, validCount = 16): int =
 
 func selectChildOnesI32x8*(p: ptr int32, target: int32, validCount = 8): int =
   ## Selects the child block containing a one-bit target from 8 int32 prefixes.
-  when not defined(nbvsNoSimd):
+  when defined(nbvsSimd):
     let vals = mm256_loadu_si256(cast[ptr M256i](p))
     let t = mm256_set1_epi32(target)
     let cmp = mm256_cmpgt_epi32(t, vals)
@@ -723,7 +723,7 @@ func selectChildOnesL7x8*(p: ptr int32, target: int64, validCount = 8): int =
 
 func selectChildZerosL1x16*(p: ptr int16, target: int16, validCount = 16): int =
   ## Selects the child block containing a zero-bit target from 16 int16 one-prefixes.
-  when not defined(nbvsNoSimd):
+  when defined(nbvsSimd):
     let oneVals = mm256_loadu_si256(cast[ptr M256i](p))
     let offsets = mm256_loadu_si256(cast[ptr M256i](unsafeAddr L1ZeroOffsetsI16[0]))
     let zeroVals = mm256_sub_epi16(offsets, oneVals)
@@ -740,7 +740,7 @@ func selectChildZerosL1x16*(p: ptr int16, target: int16, validCount = 16): int =
       if zerosBeforeChild < target:
         result = i
 
-when not defined(nbvsNoSimd):
+when defined(nbvsSimd):
   func offsetVecI32x8(childSize: int32): M256i =
     case childSize
     of int32(L2):
@@ -769,7 +769,7 @@ when not defined(nbvsNoSimd):
 
 func selectChildZerosI32x8*(p: ptr int32, target: int32, childSize: int32, validCount = 8): int =
   ## Selects the child block containing a zero-bit target from 8 int32 one-prefixes.
-  when not defined(nbvsNoSimd):
+  when defined(nbvsSimd):
     let oneVals = mm256_loadu_si256(cast[ptr M256i](p))
     let offsets = offsetVecI32x8(childSize)
     let zeroVals = mm256_sub_epi32(offsets, oneVals)
@@ -818,9 +818,9 @@ func selectInWord64ByClearing*(x: uint64, target: int): int =
 func selectInWord64Pdep*(x: uint64, target: int): int =
   ## Selects the 1-indexed `target` set bit in `x`.
   ##
-  ## Uses BMI2 PDEP by default; define `nbvsNoSimd` to use the portable
-  ## bit-clearing implementation.
-  when not defined(nbvsNoSimd):
+  ## `nbvsSimd` がdefineされている場合はBMI2のPDEPを使用し、それ以外では
+  ## portableなbit-clearing実装を使用します。
+  when defined(nbvsSimd):
     let one = 1'u64 shl (target - 1)
     let deposited = pdepU64(one, x)
     result = countTrailingZeroBits(deposited)

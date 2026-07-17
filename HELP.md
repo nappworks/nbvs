@@ -4,8 +4,8 @@ This help file is the short English guide for `nbvs`.
 
 ## Quick start
 
-`SuccinctBitVector` uses the AVX2/BMI2 backend by default.  Build with
-`-d:nbvsNoSimd` to use the portable scalar backend.
+`SuccinctBitVector` uses the portable scalar backend by default. Build with
+`-d:nbvsSimd` to use the AVX2/BMI2 backend on a supported x86/x86_64 CPU.
 
 ```nim
 import nbvs

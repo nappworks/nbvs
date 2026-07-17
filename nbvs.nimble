@@ -14,8 +14,8 @@ requires "nim >= 2.2.10"
 task test, "Run all tests":
   exec "nim c --nimcache:tests/.nimcache_all -r tests/all.nim"
 
-task testPortable, "Run all tests with the portable scalar backend":
-  exec "nim c --nimcache:tests/.nimcache_all_portable -d:nbvsNoSimd -r tests/all.nim"
+task testSimd, "Run all tests with the AVX2/BMI2 backend":
+  exec "nim c --nimcache:tests/.nimcache_all_simd -d:nbvsSimd -r tests/all.nim"
 
 task docs, "Generate API documentation":
   exec "nim doc --project --outdir:docs/api src/nbvs.nim"
