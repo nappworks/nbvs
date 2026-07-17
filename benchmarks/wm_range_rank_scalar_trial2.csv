@@ -1,0 +1,3 @@
+n,alphabet,bits,wm_direct_ns,wm_two_prefix_ns,rwm_direct_ns,rwm_two_prefix_ns
+1048576,256,8,873.771,1530.606,904.864,1519.176
+1048576,1048576,20,2506.170,4575.117,2635.444,4385.535
