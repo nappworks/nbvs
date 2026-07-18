@@ -1,3 +1,4 @@
+import std/sequtils
 import nbvs/packed_array
 import ./test_common
 
@@ -63,6 +64,17 @@ block overwriteAndFill:
   doAssert a.toSeq[0] == 0
   doAssert a.toSeq[49] == 49
   doAssert $genPackedArray(0, 3) == "@[]"
+
+block fillAllWidthsAndTails:
+  for width in 1..64:
+    let mask = maskForWidth(width)
+    let value = 0xa5a5_a5a5_a5a5_a5a5'u64 and mask
+    for length in [1'i64, 2, 63, 64, 65, 130]:
+      var a = genPackedArray(length, width)
+      a.fill(value)
+      doAssert a.toSeq == newSeqWith(int(length), value)
+      a.fill(0)
+      doAssert a.toSeq == newSeq[uint64](int(length))
 
 block errors:
   var a = genPackedArray(3, 2)

@@ -137,6 +137,15 @@ func `[]=`*(pa: var PackedArray, i: int64, value: uint64) =
   ## Alias for `set(pa, i, value)`.
   pa.set(i, value)
 
+func gcdPositive(x, y: int): int =
+  var a = x
+  var b = y
+  while b != 0:
+    let remainder = a mod b
+    a = b
+    b = remainder
+  result = a
+
 func fill*(pa: var PackedArray, value: uint64) =
   ## Fills every element with `value`.
   ##
@@ -150,14 +159,74 @@ func fill*(pa: var PackedArray, value: uint64) =
   if (value and not mask) != 0'u64:
     raise newException(ValueError, "value exceeds bitWidth")
 
-  for i in 0'i64..<pa.len:
-    pa[i] = value
+  if pa.data.len == 0:
+    return
+
+  # 小配列では周期patternの構築コストが相対的に大きい。
+  if pa.len <= 8:
+    for i in 0'i64..<pa.len:
+      pa[i] = value
+    return
+
+  # 同じ値のbit列が64-bit境界へ戻る最小周期を、一度だけ構築する。
+  let periodElements = 64 div gcdPositive(64, pa.bitWidth)
+  let periodWords = periodElements * pa.bitWidth div 64
+  var pattern: array[64, uint64]
+  for i in 0..<periodElements:
+    let bitPos = i * pa.bitWidth
+    let wordIdx = bitPos div 64
+    let bitOff = bitPos mod 64
+    pattern[wordIdx] = pattern[wordIdx] or (value shl bitOff)
+    if bitOff + pa.bitWidth > 64:
+      pattern[wordIdx + 1] =
+        pattern[wordIdx + 1] or (value shr (64 - bitOff))
+
+  let initialWords = min(periodWords, pa.data.len)
+  for i in 0..<initialWords:
+    pa.data[i] = pattern[i]
+
+  var filledWords = initialWords
+  while filledWords < pa.data.len:
+    let copiedWords = min(filledWords, pa.data.len - filledWords)
+    # sourceとdestinationは同じ確保済みseq内の非重複範囲であり、
+    # copiedWordsは双方の残りword数を超えない。
+    copyMem(addr pa.data[filledWords], unsafeAddr pa.data[0],
+      copiedWords * sizeof(uint64))
+    filledWords += copiedWords
+
+  let tailBits = int((pa.len * int64(pa.bitWidth)) mod 64)
+  if tailBits != 0:
+    pa.data[^1] = pa.data[^1] and maskForWidth(tailBits)
 
 func toSeq*(pa: PackedArray): seq[uint64] =
   ## Converts the packed array to an unpacked `seq[uint64]`.
   result = newSeq[uint64](int(pa.len))
-  for i in 0'i64..<pa.len:
-    result[int(i)] = pa[i]
+  if pa.bitWidth == 0 or pa.len == 0:
+    return
+
+  if pa.bitWidth == 64:
+    # sourceとdestinationは別々に確保された同じ長さのseqであり、
+    # pa.len要素分の範囲が双方で有効である。
+    copyMem(addr result[0], unsafeAddr pa.data[0],
+      result.len * sizeof(uint64))
+    return
+
+  let mask = maskForWidth(pa.bitWidth)
+  var wordIdx = 0
+  var bitOff = 0
+  for i in 0..<result.len:
+    if bitOff + pa.bitWidth <= 64:
+      result[i] = (pa.data[wordIdx] shr bitOff) and mask
+    else:
+      let loBits = 64 - bitOff
+      let lo = pa.data[wordIdx] shr bitOff
+      let hi = pa.data[wordIdx + 1] shl loBits
+      result[i] = (hi or lo) and mask
+
+    bitOff += pa.bitWidth
+    if bitOff >= 64:
+      bitOff -= 64
+      inc wordIdx
 
 func `$`*(pa: PackedArray): string =
   ## Returns a Nim-like sequence literal representation.
