@@ -27,6 +27,16 @@ block allZeros:
   doAssert wm.select(0, 4) == -1
   doAssert wm.quantile(0, 4, 2) == 0
 
+block wordBoundaries:
+  for length in [63, 64, 65, 127, 128, 129]:
+    var xs = newSeq[uint64](length)
+    for i in 0..<length:
+      xs[i] = uint64((i * 37) mod 257)
+    let wm = genWaveletMatrix(xs)
+    doAssert wm.toSeq == xs
+    for i, value in xs:
+      doAssert wm.access(int64(i)) == value
+
 block publicQueries:
   let xs = @[5'u64, 1, 7, 5, 2, 9, 1, 5, 0, 7, 3, 5]
   let wm = genWaveletMatrix(xs)

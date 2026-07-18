@@ -85,6 +85,16 @@ block allZeros:
   doAssert rwm.bitWidth == 1
   doAssert rwm.valueCounts == @[(value: 0'u64, frequency: 3'i64)]
 
+block wordBoundaries:
+  for length in [63, 64, 65, 127, 128, 129]:
+    var xs = newSeq[uint64](length)
+    for i in 0..<length:
+      xs[i] = uint64((i * 37) mod 257)
+    let rwm = genReversedWaveletMatrix(xs)
+    doAssert rwm.toSeq == xs
+    for i, value in xs:
+      doAssert rwm.access(int64(i)) == value
+
 block fullWidth:
   let xs = @[uint64.high, 0'u64, 1'u64 shl 63, uint64.high - 1, 7]
   let rwm = genReversedWaveletMatrix(xs)

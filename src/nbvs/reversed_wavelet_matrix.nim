@@ -21,6 +21,21 @@ type
 func valueBitWidth(x: uint64): int {.inline.} =
   if x == 0: 1 else: 64 - countLeadingZeroBits(x)
 
+func buildLevelBits(values: openArray[uint64],
+                    shift: int): tuple[bits: SuccinctBitVector, zeros: int] =
+  result.bits = genSuccinctBitVector(int64(values.len))
+  let wordCount = (values.len + 63) shr 6
+  for wordIndex in 0..<wordCount:
+    let start = wordIndex shl 6
+    let bitCount = min(64, values.len - start)
+    var word = 0'u64
+    for bitIndex in 0..<bitCount:
+      word = word or
+        (((values[start + bitIndex] shr shift) and 1'u64) shl bitIndex)
+    result.bits.data[wordIndex] = word
+    result.zeros += bitCount - countSetBits(word)
+  result.bits.build()
+
 func genReversedWaveletMatrix*(xs: openArray[uint64]): ReversedWaveletMatrix =
   ## Constructs an LSB-first wavelet matrix.
   result.n = int64(xs.len)
@@ -41,15 +56,7 @@ func genReversedWaveletMatrix*(xs: openArray[uint64]): ReversedWaveletMatrix =
   var next = newSeq[uint64](xs.len)
 
   for level in 0..<result.bitWidth:
-    var bits = genSuccinctBitVector(result.n)
-    var zeros = 0
-    for i, x in current:
-      if ((x shr level) and 1'u64) != 0:
-        bits.data[i shr 6] = bits.data[i shr 6] or
-          (1'u64 shl (i and 63))
-      else:
-        inc zeros
-    bits.build()
+    let (bits, zeros) = buildLevelBits(current, level)
     result.levels[level] = bits
     result.zeroCounts[level] = int64(zeros)
 

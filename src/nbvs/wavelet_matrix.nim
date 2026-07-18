@@ -23,6 +23,21 @@ func valueBitWidth(x: uint64): int {.inline.} =
   else:
     64 - countLeadingZeroBits(x)
 
+func buildLevelBits(values: openArray[uint64],
+                    shift: int): tuple[bits: SuccinctBitVector, zeros: int] =
+  result.bits = genSuccinctBitVector(int64(values.len))
+  let wordCount = (values.len + 63) shr 6
+  for wordIndex in 0..<wordCount:
+    let start = wordIndex shl 6
+    let bitCount = min(64, values.len - start)
+    var word = 0'u64
+    for bitIndex in 0..<bitCount:
+      word = word or
+        (((values[start + bitIndex] shr shift) and 1'u64) shl bitIndex)
+    result.bits.data[wordIndex] = word
+    result.zeros += bitCount - countSetBits(word)
+  result.bits.build()
+
 func genWaveletMatrix*(xs: openArray[uint64]): WaveletMatrix =
   ## Constructs a wavelet matrix. Input order and duplicate values are kept.
   result.n = int64(xs.len)
@@ -45,16 +60,7 @@ func genWaveletMatrix*(xs: openArray[uint64]): WaveletMatrix =
 
   for level in 0..<result.bitWidth:
     let shift = result.bitWidth - level - 1
-    var bits = genSuccinctBitVector(result.n)
-    var zeros = 0
-
-    for i, x in current:
-      if ((x shr shift) and 1'u64) != 0:
-        bits[int64(i)] = true
-      else:
-        inc zeros
-
-    bits.build()
+    let (bits, zeros) = buildLevelBits(current, shift)
     result.levels[level] = bits
     result.zeroCounts[level] = int64(zeros)
 
@@ -84,6 +90,9 @@ func checkRange(wm: WaveletMatrix, left, right: int64) {.inline.} =
 func valueFits(wm: WaveletMatrix, value: uint64): bool {.inline.} =
   wm.bitWidth == 64 or (wm.bitWidth > 0 and (value shr wm.bitWidth) == 0)
 
+func bitAtUnchecked(bits: SuccinctBitVector, pos: int64): bool {.inline.} =
+  ((bits.data[int(pos shr 6)] shr int(pos and 63)) and 1'u64) != 0
+
 func access*(wm: WaveletMatrix, i: int64): uint64 =
   ## Returns the value at index `i`.
   wm.checkIndex(i)
@@ -91,11 +100,12 @@ func access*(wm: WaveletMatrix, i: int64): uint64 =
 
   for level in 0..<wm.bitWidth:
     let shift = wm.bitWidth - level - 1
-    if wm.levels[level].access(pos):
+    let ones = wm.levels[level].rank1(pos)
+    if wm.levels[level].bitAtUnchecked(pos):
       result = result or (1'u64 shl shift)
-      pos = wm.zeroCounts[level] + wm.levels[level].rank1(pos)
+      pos = wm.zeroCounts[level] + ones
     else:
-      pos = wm.levels[level].rank0(pos)
+      pos -= ones
 
 func `[]`*(wm: WaveletMatrix, i: int64): uint64 =
   ## Alias for `access(wm, i)`.
