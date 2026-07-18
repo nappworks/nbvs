@@ -180,6 +180,7 @@ Rank/select semantics:
 | API | Semantics |
 | --- | --- |
 | `rank1(pos)` | Number of `1` bits in `[0, pos)`. |
+| `rank1Unchecked(pos)` | Unchecked `rank1`; requires a built dictionary and `0 <= pos <= lenOfBits`. |
 | `rank0(pos)` | Number of `0` bits in `[0, pos)`. |
 | `rank1Incl(pos)` | Number of `1` bits in `[0, pos]`. |
 | `rank0Incl(pos)` | Number of `0` bits in `[0, pos]`. |
@@ -189,6 +190,9 @@ Rank/select semantics:
 | `select0Nth(nth)` | Position of the 1-based `nth` `0`, or `-1`. |
 
 After any mutation through `setBit`, `clearBit`, or `[]=`, call `build()` again before `rank` or `select`.
+The scalar backend stores an additional word-pair rank prefix, increasing
+`SuccinctBitVector` storage by about 6.25% of the raw bit data. The SIMD
+backend keeps its existing AVX2-specific prefix layout.
 
 ```nim
 sbv[10] = false
@@ -489,6 +493,7 @@ doAssert sbv.select1(3) == -1
 | API | 意味 |
 | --- | --- |
 | `rank1(pos)` | `[0, pos)` に含まれる `1` の個数。 |
+| `rank1Unchecked(pos)` | 検査なしの `rank1`。`build` 済みかつ `0 <= pos <= lenOfBits` が必要。 |
 | `rank0(pos)` | `[0, pos)` に含まれる `0` の個数。 |
 | `rank1Incl(pos)` | `[0, pos]` に含まれる `1` の個数。 |
 | `rank0Incl(pos)` | `[0, pos]` に含まれる `0` の個数。 |
@@ -498,6 +503,9 @@ doAssert sbv.select1(3) == -1
 | `select0Nth(nth)` | 1-based で `nth` 番目の `0` の位置。存在しなければ `-1`。 |
 
 更新後は再度 `build()` してください。
+scalar backendはword-pair rank prefixを追加で保持するため、
+`SuccinctBitVector`の格納量が生bit data比で約6.25%増加します。
+SIMD backendは既存のAVX2専用prefix構成を維持します。
 
 ```nim
 sbv[10] = false

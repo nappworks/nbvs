@@ -115,6 +115,10 @@ type
     # Vectors whose absolute count may not fit uint32 use the hierarchy only.
     blockPairPrefix*: seq[uint32]
 
+    # 512-bit block内で、2 wordごとのone-bit累積数をpackして保持する。
+    # rank query時のpopcountを最大1 wordへ抑えるための補助領域。
+    wordPairPrefix*: seq[uint32] ## Scalar rank用のpacked word-pair prefix。
+
     level1Len*: int
     level2Len*: int
     level3Len*: int
@@ -274,6 +278,8 @@ func genSuccinctBitVector*(maxBits: int64): SuccinctBitVector =
 
   result.dataWords = int(ceilDiv(maxBits, 64'i64))
   result.data = newSeq[uint64](int(alignUp(int64(result.dataWords), 8'i64)))
+  when not defined(nbvsSimd):
+    result.wordPairPrefix = newSeq[uint32](int(ceilDiv(maxBits, L1)))
   when defined(nbvsSimd):
     if maxBits > L5 and maxBits <= int64(uint32.high):
       result.blockPairPrefix = newSeq[uint32](int(ceilDiv(maxBits, L1 * 2)))
@@ -430,6 +436,21 @@ func popcount512At*(sbv: SuccinctBitVector, baseBit: int64): int64 =
     for j in 0..<8:
       result += int64(countSetBits(sbv.data[startWord + j]))
 
+func buildWordPairPrefix(sbv: var SuccinctBitVector,
+                         baseBit: int64): int64 =
+  let startWord = int(baseBit shr 6)
+  var counts: array[8, uint32]
+  for i in 0..<8:
+    counts[i] = uint32(countSetBits(sbv.data[startWord + i]))
+
+  let prefix2 = counts[0] + counts[1]
+  let prefix4 = prefix2 + counts[2] + counts[3]
+  let prefix6 = prefix4 + counts[4] + counts[5]
+  sbv.wordPairPrefix[int(baseBit shr 9)] =
+    prefix2 or (prefix4 shl 8) or (prefix6 shl 17)
+  for count in counts:
+    result += int64(count)
+
 func build*(sbv: var SuccinctBitVector) =
   ## Builds or rebuilds the rank/select dictionary.
   sbv.resetLevels()
@@ -515,7 +536,10 @@ func build*(sbv: var SuccinctBitVector) =
           unsafeAddr sbv.selectStorage[level1NodeWord])[p1 and 15] =
             int16(total - base2)
 
-      total += sbv.popcount512At(bitPos)
+      when defined(nbvsSimd):
+        total += sbv.popcount512At(bitPos)
+      else:
+        total += sbv.buildWordPairPrefix(bitPos)
       bitPos += L1
 
       when maxLevel >= 1:
@@ -585,22 +609,44 @@ func rankIn512Block*(sbv: SuccinctBitVector, pos: int64): int64 =
 
   let startWord = int((pos shr 9) shl 3)
   let inBlock = int(pos and (L1 - 1))
-  let fullWords = inBlock shr 6
+  let wordOffset = inBlock shr 6
   let bitOffset = inBlock and 63
-
-  for j in 0..<fullWords:
-    result += int64(countSetBits(sbv.data[startWord + j]))
+  when defined(nbvsSimd):
+    for wordIndex in 0..<wordOffset:
+      result += int64(countSetBits(sbv.data[startWord + wordIndex]))
+  else:
+    let packed = sbv.wordPairPrefix[int(pos shr 9)]
+    case wordOffset
+    of 0:
+      discard
+    of 1:
+      result = int64(countSetBits(sbv.data[startWord]))
+    of 2:
+      result = int64(packed and 0xff'u32)
+    of 3:
+      result = int64(packed and 0xff'u32) +
+        int64(countSetBits(sbv.data[startWord + 2]))
+    of 4:
+      result = int64((packed shr 8) and 0x1ff'u32)
+    of 5:
+      result = int64((packed shr 8) and 0x1ff'u32) +
+        int64(countSetBits(sbv.data[startWord + 4]))
+    of 6:
+      result = int64((packed shr 17) and 0x1ff'u32)
+    else:
+      result = int64((packed shr 17) and 0x1ff'u32) +
+        int64(countSetBits(sbv.data[startWord + 6]))
 
   if bitOffset > 0:
     let partialMask = (1'u64 shl bitOffset) - 1'u64
-    result += int64(countSetBits(sbv.data[startWord + fullWords] and partialMask))
+    result += int64(countSetBits(
+      sbv.data[startWord + wordOffset] and partialMask))
 
-func rank1*(sbv: SuccinctBitVector, pos: int64): int64 =
-  ## Returns the number of one bits in the half-open range `[0, pos)`.
-  if not sbv.isCalced:
-    raise newException(ValueError, "rank dictionary is not built")
-  if pos < 0 or pos > sbv.lenOfBits:
-    raise newException(IndexDefect, "Index out of bounds")
+func rank1Unchecked*(sbv: SuccinctBitVector, pos: int64): int64 =
+  ## 検査なしで半開区間 `[0, pos)` のone bit数を返します。
+  ##
+  ## `build` 済みであり、`0 <= pos <= lenOfBits` を満たす場合だけ
+  ## 使用できます。通常は安全な `rank1` を使用してください。
   if pos == 0:
     return 0
   if pos == sbv.lenOfBits:
@@ -650,6 +696,14 @@ func rank1*(sbv: SuccinctBitVector, pos: int64): int64 =
   of 7: rankFromSelectTree(7)
   else: rankFromSelectTree(8)
   result += sbv.rankIn512Block(pos)
+
+func rank1*(sbv: SuccinctBitVector, pos: int64): int64 {.inline.} =
+  ## Returns the number of one bits in the half-open range `[0, pos)`.
+  if not sbv.isCalced:
+    raise newException(ValueError, "rank dictionary is not built")
+  if pos < 0 or pos > sbv.lenOfBits:
+    raise newException(IndexDefect, "Index out of bounds")
+  result = sbv.rank1Unchecked(pos)
 
 func rank0*(sbv: SuccinctBitVector, pos: int64): int64 =
   ## Returns the number of zero bits in the half-open range `[0, pos)`.

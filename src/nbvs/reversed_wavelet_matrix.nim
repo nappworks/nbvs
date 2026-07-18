@@ -95,7 +95,7 @@ func access*(rwm: ReversedWaveletMatrix, i: int64): uint64 =
   rwm.checkIndex(i)
   var pos = i
   for level in 0..<rwm.bitWidth:
-    let ones = rwm.levels[level].rank1(pos)
+    let ones = rwm.levels[level].rank1Unchecked(pos)
     if rwm.levels[level].bitAtUnchecked(pos):
       result = result or (1'u64 shl level)
       pos = rwm.zeroCounts[level] + ones
@@ -115,11 +115,11 @@ func rank*(rwm: ReversedWaveletMatrix, value: uint64, pos: int64): int64 =
   var right = pos
   for level in 0..<rwm.bitWidth:
     if ((value shr level) and 1'u64) == 0:
-      left = rwm.levels[level].rank0(left)
-      right = rwm.levels[level].rank0(right)
+      left -= rwm.levels[level].rank1Unchecked(left)
+      right -= rwm.levels[level].rank1Unchecked(right)
     else:
-      left = rwm.zeroCounts[level] + rwm.levels[level].rank1(left)
-      right = rwm.zeroCounts[level] + rwm.levels[level].rank1(right)
+      left = rwm.zeroCounts[level] + rwm.levels[level].rank1Unchecked(left)
+      right = rwm.zeroCounts[level] + rwm.levels[level].rank1Unchecked(right)
   result = right - left
 
 func rank*(rwm: ReversedWaveletMatrix, value: uint64,
@@ -133,11 +133,11 @@ func rank*(rwm: ReversedWaveletMatrix, value: uint64,
   var hi = right
   for level in 0..<rwm.bitWidth:
     if ((value shr level) and 1'u64) == 0:
-      lo = rwm.levels[level].rank0(lo)
-      hi = rwm.levels[level].rank0(hi)
+      lo -= rwm.levels[level].rank1Unchecked(lo)
+      hi -= rwm.levels[level].rank1Unchecked(hi)
     else:
-      lo = rwm.zeroCounts[level] + rwm.levels[level].rank1(lo)
-      hi = rwm.zeroCounts[level] + rwm.levels[level].rank1(hi)
+      lo = rwm.zeroCounts[level] + rwm.levels[level].rank1Unchecked(lo)
+      hi = rwm.zeroCounts[level] + rwm.levels[level].rank1Unchecked(hi)
   result = hi - lo
 
 func rankIncl*(rwm: ReversedWaveletMatrix, value: uint64,
@@ -154,11 +154,11 @@ func select*(rwm: ReversedWaveletMatrix, value: uint64, k: int64): int64 =
   var right = rwm.n
   for level in 0..<rwm.bitWidth:
     if ((value shr level) and 1'u64) == 0:
-      left = rwm.levels[level].rank0(left)
-      right = rwm.levels[level].rank0(right)
+      left -= rwm.levels[level].rank1Unchecked(left)
+      right -= rwm.levels[level].rank1Unchecked(right)
     else:
-      left = rwm.zeroCounts[level] + rwm.levels[level].rank1(left)
-      right = rwm.zeroCounts[level] + rwm.levels[level].rank1(right)
+      left = rwm.zeroCounts[level] + rwm.levels[level].rank1Unchecked(left)
+      right = rwm.zeroCounts[level] + rwm.levels[level].rank1Unchecked(right)
   if k >= right - left:
     return -1
 
@@ -202,8 +202,8 @@ func countLessThanNode(rwm: ReversedWaveletMatrix, level: int,
   if level == rwm.bitWidth:
     return right - left
 
-  let leftOnes = rwm.levels[level].rank1(left)
-  let rightOnes = rwm.levels[level].rank1(right)
+  let leftOnes = rwm.levels[level].rank1Unchecked(left)
+  let rightOnes = rwm.levels[level].rank1Unchecked(right)
   let zeroLeft = left - leftOnes
   let zeroRight = right - rightOnes
   result = rwm.countLessThanNode(level + 1, zeroLeft, zeroRight,
@@ -236,8 +236,8 @@ func collectValueCounts(rwm: ReversedWaveletMatrix, level: int,
   if level == rwm.bitWidth:
     result.add (value: value, frequency: right - left)
     return
-  let leftOnes = rwm.levels[level].rank1(left)
-  let rightOnes = rwm.levels[level].rank1(right)
+  let leftOnes = rwm.levels[level].rank1Unchecked(left)
+  let rightOnes = rwm.levels[level].rank1Unchecked(right)
   let zeroLeft = left - leftOnes
   let zeroRight = right - rightOnes
   rwm.collectValueCounts(level + 1, zeroLeft, zeroRight, value, result)

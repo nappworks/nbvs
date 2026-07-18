@@ -62,6 +62,7 @@ proc makeSelectQueries(xs: openArray[uint64], alphabet: uint64,
 proc sbvStorageBytes(sbv: SuccinctBitVector): int64 =
   result = int64(sbv.data.len) * 8
   result += int64(sbv.blockPairPrefix.len) * 4
+  result += int64(sbv.wordPairPrefix.len) * 4
   result += int64(sbv.selectStorage.len) * 8
 
 proc storageBytes(wm: WaveletMatrix): int64 =

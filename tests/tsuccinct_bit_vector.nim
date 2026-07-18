@@ -33,6 +33,7 @@ proc checkAgainstNaive(n: int64, ones: openArray[int64]) =
   for p in checkpoints:
     if p >= 0 and p <= n:
       doAssert sbv.rank1(p) == naiveRank1(bits, p)
+      doAssert sbv.rank1Unchecked(p) == naiveRank1(bits, p)
       doAssert sbv.rank0(p) == p - naiveRank1(bits, p)
       if p < n:
         doAssert sbv[p] == bits[int(p)]
@@ -43,6 +44,7 @@ proc checkAgainstNaive(n: int64, ones: openArray[int64]) =
   for p in 0'i64..<n:
     if n <= 2048 or p mod 97 == 0:
       doAssert sbv.rank1(p) == naiveRank1(bits, p)
+      doAssert sbv.rank1Unchecked(p) == naiveRank1(bits, p)
       doAssert sbv.rank0(p) == p - naiveRank1(bits, p)
 
   for k in -1'i64..(sbv.totalOnes + 1):
@@ -213,7 +215,8 @@ block selectStorageMemoryBudget:
   let sbv = genSuccinctBitVector(n)
   let rawBytes = n div 8
   let auxiliaryBytes = int64(sbv.selectStorage.len * sizeof(uint64) +
-                             sbv.blockPairPrefix.len * sizeof(uint32))
-  doAssert auxiliaryBytes * 1000 <= rawBytes * 70
+                             sbv.blockPairPrefix.len * sizeof(uint32) +
+                             sbv.wordPairPrefix.len * sizeof(uint32))
+  doAssert auxiliaryBytes * 1000 <= rawBytes * 135
 
 echo "OK tsuccinct_bit_vector"

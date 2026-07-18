@@ -100,7 +100,7 @@ func access*(wm: WaveletMatrix, i: int64): uint64 =
 
   for level in 0..<wm.bitWidth:
     let shift = wm.bitWidth - level - 1
-    let ones = wm.levels[level].rank1(pos)
+    let ones = wm.levels[level].rank1Unchecked(pos)
     if wm.levels[level].bitAtUnchecked(pos):
       result = result or (1'u64 shl shift)
       pos = wm.zeroCounts[level] + ones
@@ -122,11 +122,11 @@ func rank*(wm: WaveletMatrix, value: uint64, pos: int64): int64 =
   for level in 0..<wm.bitWidth:
     let shift = wm.bitWidth - level - 1
     if ((value shr shift) and 1'u64) == 0:
-      left = wm.levels[level].rank0(left)
-      right = wm.levels[level].rank0(right)
+      left -= wm.levels[level].rank1Unchecked(left)
+      right -= wm.levels[level].rank1Unchecked(right)
     else:
-      left = wm.zeroCounts[level] + wm.levels[level].rank1(left)
-      right = wm.zeroCounts[level] + wm.levels[level].rank1(right)
+      left = wm.zeroCounts[level] + wm.levels[level].rank1Unchecked(left)
+      right = wm.zeroCounts[level] + wm.levels[level].rank1Unchecked(right)
   result = right - left
 
 func rank*(wm: WaveletMatrix, value: uint64, left, right: int64): int64 =
@@ -140,11 +140,11 @@ func rank*(wm: WaveletMatrix, value: uint64, left, right: int64): int64 =
   for level in 0..<wm.bitWidth:
     let shift = wm.bitWidth - level - 1
     if ((value shr shift) and 1'u64) == 0:
-      lo = wm.levels[level].rank0(lo)
-      hi = wm.levels[level].rank0(hi)
+      lo -= wm.levels[level].rank1Unchecked(lo)
+      hi -= wm.levels[level].rank1Unchecked(hi)
     else:
-      lo = wm.zeroCounts[level] + wm.levels[level].rank1(lo)
-      hi = wm.zeroCounts[level] + wm.levels[level].rank1(hi)
+      lo = wm.zeroCounts[level] + wm.levels[level].rank1Unchecked(lo)
+      hi = wm.zeroCounts[level] + wm.levels[level].rank1Unchecked(hi)
   result = hi - lo
 
 func rankIncl*(wm: WaveletMatrix, value: uint64, pos: int64): int64 =
@@ -162,11 +162,11 @@ func select*(wm: WaveletMatrix, value: uint64, k: int64): int64 =
   for level in 0..<wm.bitWidth:
     let shift = wm.bitWidth - level - 1
     if ((value shr shift) and 1'u64) == 0:
-      left = wm.levels[level].rank0(left)
-      right = wm.levels[level].rank0(right)
+      left -= wm.levels[level].rank1Unchecked(left)
+      right -= wm.levels[level].rank1Unchecked(right)
     else:
-      left = wm.zeroCounts[level] + wm.levels[level].rank1(left)
-      right = wm.zeroCounts[level] + wm.levels[level].rank1(right)
+      left = wm.zeroCounts[level] + wm.levels[level].rank1Unchecked(left)
+      right = wm.zeroCounts[level] + wm.levels[level].rank1Unchecked(right)
 
   if k >= right - left:
     return -1
@@ -199,8 +199,8 @@ func countLessThan*(wm: WaveletMatrix, left, right: int64,
   var hi = right
   for level in 0..<wm.bitWidth:
     let shift = wm.bitWidth - level - 1
-    let loOnes = wm.levels[level].rank1(lo)
-    let hiOnes = wm.levels[level].rank1(hi)
+    let loOnes = wm.levels[level].rank1Unchecked(lo)
+    let hiOnes = wm.levels[level].rank1Unchecked(hi)
     let loZeros = lo - loOnes
     let hiZeros = hi - hiOnes
     if ((value shr shift) and 1'u64) == 0:
@@ -237,8 +237,8 @@ func quantile*(wm: WaveletMatrix, left, right, k: int64): uint64 =
   var rest = k
   for level in 0..<wm.bitWidth:
     let shift = wm.bitWidth - level - 1
-    let loOnes = wm.levels[level].rank1(lo)
-    let hiOnes = wm.levels[level].rank1(hi)
+    let loOnes = wm.levels[level].rank1Unchecked(lo)
+    let hiOnes = wm.levels[level].rank1Unchecked(hi)
     let loZeros = lo - loOnes
     let hiZeros = hi - hiOnes
     let zeros = hiZeros - loZeros
@@ -289,8 +289,8 @@ func collectValueCounts(wm: WaveletMatrix, level: int, left, right: int64,
     return
 
   let shift = wm.bitWidth - level - 1
-  let leftOnes = wm.levels[level].rank1(left)
-  let rightOnes = wm.levels[level].rank1(right)
+  let leftOnes = wm.levels[level].rank1Unchecked(left)
+  let rightOnes = wm.levels[level].rank1Unchecked(right)
   let zeroLeft = left - leftOnes
   let zeroRight = right - rightOnes
   wm.collectValueCounts(level + 1, zeroLeft, zeroRight, value, result)
