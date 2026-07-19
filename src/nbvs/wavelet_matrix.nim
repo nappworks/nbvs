@@ -217,6 +217,19 @@ func rankLessThan*(wm: WaveletMatrix, value: uint64, pos: int64): int64 =
   ## Runs in `O(bitWidth)` time.
   result = wm.countLessThan(0, pos, value)
 
+func occPosition*(wm: WaveletMatrix, value: uint64, pos: int64): int64 =
+  ## 安定な全体昇順列で、`[0, pos)` に由来する `value` の終端位置を返します。
+  ##
+  ## 単純な出現回数ではなく、列全体にある `value` 未満の要素数と、
+  ## 半開区間 `[0, pos)` にある `value` の出現回数の和です。
+  ## FM-indexにおける `C[value] + Occ(value, pos)` に相当します。
+  wm.checkPosition(pos)
+  if wm.n == 0:
+    return 0
+  if not wm.valueFits(value):
+    return wm.n
+  result = wm.rankLessThan(value, wm.n) + wm.rank(value, pos)
+
 func rangeFreq*(wm: WaveletMatrix, left, right: int64,
                 lower, upper: uint64): int64 =
   ## Counts values in `[lower, upper)` within positions `[left, right)`.

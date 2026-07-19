@@ -1,5 +1,6 @@
-import std/algorithm
+import std/[algorithm, random]
 import nbvs/wavelet_matrix
+import nbvs/reversed_wavelet_matrix
 import ./test_common
 
 block empty:
@@ -8,6 +9,7 @@ block empty:
   doAssert wm.bitWidth == 0
   doAssert wm.toSeq == newSeq[uint64]()
   doAssert wm.rank(1, 0) == 0
+  doAssert wm.occPosition(0, 0) == 0
   doAssert wm.select(1, 0) == -1
   doAssert wm.countLessThan(0, 0, 10) == 0
   doAssert wm.rangeFreq(0, 0, 0, 10) == 0
@@ -26,6 +28,45 @@ block allZeros:
   doAssert wm.select(0, 3) == 3
   doAssert wm.select(0, 4) == -1
   doAssert wm.quantile(0, 4, 2) == 0
+
+block occPosition:
+  let cases = [
+    @[3'u64, 1, 4, 1, 5, 9, 2, 6, 5],
+    @[2'u64, 2, 2, 2],
+    @[0'u64, 2, 0, 1, 0],
+    @[0'u64, 1, 2, 3, 4, 5],
+    @[5'u64, 4, 3, 2, 1, 0],
+    @[1'u64, 3, 5, 7]]
+  for xs in cases:
+    let wm = genWaveletMatrix(xs)
+    let rwm = genReversedWaveletMatrix(xs)
+    for value in 0'u64..10'u64:
+      for pos in 0..xs.len:
+        let expected = naiveOccPosition(xs, value, pos)
+        doAssert wm.occPosition(value, int64(pos)) == expected
+        doAssert rwm.occPosition(value, int64(pos)) == expected
+        doAssert wm.occPosition(value, int64(pos)) ==
+          rwm.occPosition(value, int64(pos))
+
+  let narrow = genWaveletMatrix(@[1'u64, 2, 3])
+  doAssert narrow.occPosition(100, 0) == 3
+  doAssert narrow.occPosition(100, narrow.n) == 3
+
+block randomOccPosition:
+  var rng = initRand(0x4f4343)
+  for trial in 0..<120:
+    let length = rng.rand(200)
+    var xs = newSeq[uint64](length)
+    for value in xs.mitems:
+      value = uint64(rng.rand(255))
+    let wm = genWaveletMatrix(xs)
+    let rwm = genReversedWaveletMatrix(xs)
+    for sample in 0..<32:
+      let value = uint64(rng.rand(300))
+      let pos = rng.rand(length)
+      let expected = naiveOccPosition(xs, value, pos)
+      doAssert wm.occPosition(value, int64(pos)) == expected
+      doAssert rwm.occPosition(value, int64(pos)) == expected
 
 block wordBoundaries:
   for length in [63, 64, 65, 127, 128, 129]:
@@ -161,6 +202,10 @@ block fullWidth:
   doAssert wm.countLessThan(0, wm.n, uint64.high) == 4
   doAssert wm.rankLessThan(uint64.high, wm.n) == 4
   doAssert wm.successor(0, wm.n, uint64.high) == uint64.high
+  for value in xs:
+    for pos in 0..xs.len:
+      doAssert wm.occPosition(value, int64(pos)) ==
+        naiveOccPosition(xs, value, pos)
 
 block invalidBounds:
   let wm = genWaveletMatrix(@[1'u64, 2, 3])
@@ -171,6 +216,8 @@ block invalidBounds:
   expectRaises(IndexDefect): discard wm.rankIncl(1, -1)
   expectRaises(IndexDefect): discard wm.rankIncl(1, 3)
   expectRaises(IndexDefect): discard wm.rankLessThan(1, 4)
+  expectRaises(IndexDefect): discard wm.occPosition(1, -1)
+  expectRaises(IndexDefect): discard wm.occPosition(1, wm.n + 1)
   expectRaises(IndexDefect): discard wm.rank(1, 2, 1)
   expectRaises(IndexDefect): discard wm.countLessThan(-1, 2, 1)
   expectRaises(IndexDefect): discard wm.rangeFreq(0, 4, 0, 4)

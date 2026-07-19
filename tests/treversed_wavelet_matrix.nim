@@ -1,3 +1,4 @@
+import std/random
 import nbvs/reversed_wavelet_matrix
 import nbvs/succinct_bit_vector
 import ./test_common
@@ -17,6 +18,7 @@ block empty:
   doAssert rwm.bitWidth == 0
   doAssert rwm.toSeq.len == 0
   doAssert rwm.rank(1, 0) == 0
+  doAssert rwm.occPosition(0, 0) == 0
   doAssert rwm.select(1, 0) == -1
   doAssert rwm.valueCounts.len == 0
   expectRaises(IndexDefect): discard rwm[0]
@@ -85,6 +87,39 @@ block allZeros:
   doAssert rwm.bitWidth == 1
   doAssert rwm.valueCounts == @[(value: 0'u64, frequency: 3'i64)]
 
+block occPosition:
+  let cases = [
+    @[3'u64, 1, 4, 1, 5, 9, 2, 6, 5],
+    @[2'u64, 2, 2, 2],
+    @[0'u64, 2, 0, 1, 0],
+    @[0'u64, 1, 2, 3, 4, 5],
+    @[5'u64, 4, 3, 2, 1, 0],
+    @[1'u64, 3, 5, 7]]
+  for xs in cases:
+    let rwm = genReversedWaveletMatrix(xs)
+    for value in 0'u64..10'u64:
+      for pos in 0..xs.len:
+        doAssert rwm.occPosition(value, int64(pos)) ==
+          naiveOccPosition(xs, value, pos)
+
+  let narrow = genReversedWaveletMatrix(@[1'u64, 2, 3])
+  doAssert narrow.occPosition(100, 0) == 3
+  doAssert narrow.occPosition(100, narrow.n) == 3
+
+block randomOccPosition:
+  var rng = initRand(0x52574d)
+  for trial in 0..<120:
+    let length = rng.rand(200)
+    var xs = newSeq[uint64](length)
+    for value in xs.mitems:
+      value = uint64(rng.rand(255))
+    let rwm = genReversedWaveletMatrix(xs)
+    for sample in 0..<32:
+      let value = uint64(rng.rand(300))
+      let pos = rng.rand(length)
+      doAssert rwm.occPosition(value, int64(pos)) ==
+        naiveOccPosition(xs, value, pos)
+
 block wordBoundaries:
   for length in [63, 64, 65, 127, 128, 129]:
     var xs = newSeq[uint64](length)
@@ -110,6 +145,10 @@ block fullWidth:
     (value: 1'u64 shl 63, frequency: 1'i64),
     (value: uint64.high - 1, frequency: 1'i64),
     (value: uint64.high, frequency: 1'i64)]
+  for value in xs:
+    for pos in 0..xs.len:
+      doAssert rwm.occPosition(value, int64(pos)) ==
+        naiveOccPosition(xs, value, pos)
 
 block invalidBounds:
   let rwm = genReversedWaveletMatrix(@[1'u64, 2, 3])
@@ -120,6 +159,8 @@ block invalidBounds:
   expectRaises(IndexDefect): discard rwm.rankIncl(1, -1)
   expectRaises(IndexDefect): discard rwm.rankIncl(1, 3)
   expectRaises(IndexDefect): discard rwm.rankLessThan(1, 4)
+  expectRaises(IndexDefect): discard rwm.occPosition(1, -1)
+  expectRaises(IndexDefect): discard rwm.occPosition(1, rwm.n + 1)
   expectRaises(IndexDefect): discard rwm.rank(1, 2, 1)
   expectRaises(IndexDefect): discard rwm.valueCounts(-1, 2)
 

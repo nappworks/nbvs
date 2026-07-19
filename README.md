@@ -247,6 +247,7 @@ doAssert wm[2] == 7
 doAssert wm.rank(5, 7) == 2
 doAssert wm.rankIncl(5, 3) == 2
 doAssert wm.rankLessThan(5, 7) == 3
+doAssert wm.occPosition(5, 4) == 5
 doAssert wm.select(1, 1) == 6
 doAssert wm.selectNth(1, 2) == 6
 doAssert wm.quantile(1, 6, 2) == 5
@@ -261,6 +262,7 @@ doAssert wm.rangeFreq(0, 7, 2, 8) == 4
 | `rank(value, left, right)` | Counts `value` in `[left, right)`. |
 | `rankIncl(value, pos)` | Counts `value` in `[0, pos]`. |
 | `rankLessThan(value, pos)` | Counts values `< value` in `[0, pos)` in `O(bitWidth)`. |
+| `occPosition(value, pos)` | Returns all values `< value` in the complete sequence plus occurrences of `value` in `[0, pos)`; equivalent to `C[value] + Occ(value, pos)` in an FM-index. |
 | `select(value, k)` | Position of the 0-based `k`-th occurrence, or `-1`. |
 | `selectNth(value, nth)` | Position of the 1-based `nth` occurrence, or `-1`. |
 | `quantile(left, right, k)` | 0-based `k`-th smallest value in the position range. |
@@ -284,6 +286,7 @@ doAssert rwm[2] == 7
 doAssert rwm.rank(1, 6) == 2
 doAssert rwm.rankIncl(5, 3) == 2
 doAssert rwm.rankLessThan(5, 6) == 3
+doAssert rwm.occPosition(5, 4) == 5
 doAssert rwm.select(5, 1) == 3
 doAssert rwm.selectNth(5, 2) == 3
 doAssert rwm.valueCounts == @[
@@ -293,7 +296,10 @@ doAssert rwm.valueCounts == @[
   (value: 7'u64, frequency: 1'i64)]
 ```
 
-It provides `access`, `rank`, `rankLessThan`, `select`, `items`, `toSeq`, and `valueCounts`.
+It provides `access`, `rank`, `rankLessThan`, `occPosition`, `select`, `items`, `toSeq`, and `valueCounts`.
+`occPosition(value, pos)` returns all values smaller than `value` in the
+complete sequence plus occurrences of `value` in `[0, pos)`. This is
+`C[value] + Occ(value, pos)` in FM-index terminology.
 Numeric-order queries such as `quantile` and `rangeFreq` remain APIs of the
 MSB-first `WaveletMatrix`.
 
@@ -560,6 +566,7 @@ doAssert wm[2] == 7
 doAssert wm.rank(5, 7) == 2
 doAssert wm.rankIncl(5, 3) == 2
 doAssert wm.rankLessThan(5, 7) == 3
+doAssert wm.occPosition(5, 4) == 5
 doAssert wm.select(1, 1) == 6
 doAssert wm.selectNth(1, 2) == 6
 doAssert wm.quantile(1, 6, 2) == 5
@@ -574,6 +581,7 @@ doAssert wm.rangeFreq(0, 7, 2, 8) == 4
 | `rank(value, left, right)` | `[left, right)` にある `value` の個数。 |
 | `rankIncl(value, pos)` | `[0, pos]` にある `value` の個数。 |
 | `rankLessThan(value, pos)` | `[0, pos)` にある `value` 未満の個数。WMでは `O(bitWidth)`。 |
+| `occPosition(value, pos)` | 列全体の `value` 未満の個数と `[0, pos)` にある `value` の個数の和。FM-indexの `C[value] + Occ(value, pos)` に相当します。 |
 | `select(value, k)` | 0-based で `k` 番目の出現位置。なければ `-1`。 |
 | `selectNth(value, nth)` | 1-based で `nth` 番目の出現位置。なければ `-1`。 |
 | `quantile(left, right, k)` | 位置範囲内で `k` 番目に小さい値。 |
@@ -597,6 +605,7 @@ doAssert rwm[2] == 7
 doAssert rwm.rank(1, 6) == 2
 doAssert rwm.rankIncl(5, 3) == 2
 doAssert rwm.rankLessThan(5, 6) == 3
+doAssert rwm.occPosition(5, 4) == 5
 doAssert rwm.select(5, 1) == 3
 doAssert rwm.selectNth(5, 2) == 3
 doAssert rwm.valueCounts == @[
@@ -606,7 +615,9 @@ doAssert rwm.valueCounts == @[
   (value: 7'u64, frequency: 1'i64)]
 ```
 
-`access`、`rank`、`rankLessThan`、`select`、`items`、`toSeq`、`valueCounts` を提供します。
+`access`、`rank`、`rankLessThan`、`occPosition`、`select`、`items`、`toSeq`、`valueCounts` を提供します。
+`occPosition(value, pos)` は列全体の `value` 未満の個数と、`[0, pos)` にある
+`value` の出現数の和を返します。FM-indexの `C[value] + Occ(value, pos)` に相当します。
 数値順に依存する `quantile` と `rangeFreq` は MSB-first の
 `WaveletMatrix` で利用できます。
 

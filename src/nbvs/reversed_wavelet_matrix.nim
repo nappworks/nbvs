@@ -122,6 +122,30 @@ func rank*(rwm: ReversedWaveletMatrix, value: uint64, pos: int64): int64 =
       right = rwm.zeroCounts[level] + rwm.levels[level].rank1Unchecked(right)
   result = right - left
 
+func occPosition*(rwm: ReversedWaveletMatrix, value: uint64,
+                  pos: int64): int64 =
+  ## 安定な全体昇順列で、`[0, pos)` に由来する `value` の終端位置を返します。
+  ##
+  ## 単純な出現回数ではなく、列全体にある `value` 未満の要素数と、
+  ## 半開区間 `[0, pos)` にある `value` の出現回数の和です。
+  ## FM-indexにおける `C[value] + Occ(value, pos)` に相当します。
+  rwm.checkPosition(pos)
+  if rwm.n == 0:
+    return 0
+  if not rwm.valueFits(value):
+    return rwm.n
+
+  # LSBからの安定分割を完了すると数値昇順になるため、右境界の
+  # 最終写像位置が直接 `C[value] + Occ(value, pos)` になる。
+  var right = pos
+  for level in 0..<rwm.bitWidth:
+    let ones = rwm.levels[level].rank1Unchecked(right)
+    if ((value shr level) and 1'u64) == 0:
+      right -= ones
+    else:
+      right = rwm.zeroCounts[level] + ones
+  result = right
+
 func rank*(rwm: ReversedWaveletMatrix, value: uint64,
            left, right: int64): int64 =
   ## Counts occurrences of `value` in `[left, right)`.
