@@ -4,10 +4,60 @@
 
 現在の実装について、デフォルトのportable scalar backendと
 `-d:nbvsSimd` で有効化するAVX2/BMI2 backendを比較した結果です。
-過去の実装や古い計測値は含みません。
+2026-07-17の安定測定を基準表として保持し、2026-08-02のbuild最適化比較と
+今後の改善方針を併記しています。
 
-各表は、ウォームアップを1回実行した後の3試行の中央値です。
+以下の2026-07-17既存性能表は、ウォームアップを1回実行した後の3試行の中央値です。
 生の計測結果は `benchmarks/*_trial[1-3].csv` に保存しています。
+
+## 現在地
+
+この文書の既存性能表は、2026-07-17に取得したbackend比較の基準値です。
+その後、2026-08-02に実行経路最適化を検証し、`SuccinctBitVector.build()` の
+select tree初期化を全領域から末尾paddingだけへ限定する変更を採用しました。
+
+現時点の要点は次のとおりです。
+
+- Scalar/SIMD固有のrank補助構造とselect treeの論理形式は維持しています。
+- 保持メモリ、object metadata、seq数、公開API、query経路は変わりません。
+- 直接SBV benchmarkでは、build時間がScalarで約15.8%〜45.2%、
+  SIMDで約30.4%〜53.8%短縮しました。
+- Rank pair、access-rank融合、強制inlineは主要queryの非劣化条件を満たさず、
+  製品コードから撤回済みです。
+- `-march=native` は一部で有効でしたが、portable性を失うため標準設定にはしません。
+- Scalar/SIMDの全テスト、WM、RWM、Elias–Fanoの回帰テスト、APIドキュメント生成、
+  保持メモリ測定は成功しています。
+
+### 最新のbuild比較
+
+同じNim、GCC、WSL2セッションでbaselineとpadding限定初期化を比較した値です。
+`build()` は各ケース20回実行し、表の値は1回あたりの時間です。
+checksumはScalar/SIMDともに `41678230` で一致しています。
+
+#### Scalar (`-d:release --mm:arc`)
+
+| bits | density | baseline_ms | current_ms | 短縮率 | 速度倍率 |
+|---:|---:|---:|---:|---:|---:|
+| 1,048,576 | 50% | 0.221772 | 0.121524 | 45.2% | 1.82x |
+| 16,777,216 | 50% | 2.810420 | 1.647173 | 41.4% | 1.71x |
+| 67,108,864 | 50% | 11.624118 | 7.124438 | 38.7% | 1.63x |
+| 16,777,216 | 1% | 2.340292 | 1.655633 | 29.3% | 1.41x |
+| 16,777,216 | 99% | 2.412990 | 2.032030 | 15.8% | 1.19x |
+
+#### AVX2/BMI2 (`-d:release --mm:arc -d:nbvsSimd`)
+
+| bits | density | baseline_ms | current_ms | 短縮率 | 速度倍率 |
+|---:|---:|---:|---:|---:|---:|
+| 1,048,576 | 50% | 0.059132 | 0.041135 | 30.4% | 1.44x |
+| 16,777,216 | 50% | 1.279299 | 0.790995 | 38.2% | 1.62x |
+| 67,108,864 | 50% | 7.429617 | 3.431058 | 53.8% | 2.17x |
+| 16,777,216 | 1% | 1.192165 | 0.776830 | 34.8% | 1.53x |
+| 16,777,216 | 99% | 1.282649 | 0.858196 | 33.1% | 1.49x |
+
+この最新比較は最適化候補の採否判断用の単一セッション測定です。下記の既存性能表のような
+ウォームアップ後3試行中央値へまだ統合していないため、queryの新しい基準値としては扱いません。
+詳細な生値と判断理由は `benchmarks/results/build_fusion_*.json` および
+`benchmarks/results/execution_path_comparison.md` に保存しています。
 
 ## 実行環境
 
@@ -113,6 +163,24 @@ SIMD backendでは、大きな `SuccinctBitVector` にrank用の補助prefixを�
 `build()` は各ケース10回、access・rank・selectは各1,000,000回、
 `valueCounts()` は各5回実行しています。値はウォームアップ後3試行の中央値です。
 
+この既存表の `value_counts_ms` は、昇順結果を返す `valueCounts()` 全体の時間です。
+現在の `wm_perf.nim` は、sortしない `collect_value_counts_ms` と、収集後に昇順sortする
+`sorted_value_counts_ms` を別々に出力します。次回baseline更新時に下表も2列へ更新します。
+
+分離後の単一セッション測定では、1,048,576要素・alphabet 1,048,576の純粋な頻度収集が
+次の結果になりました。
+
+| backend | WM collect_ms | RWM collect_ms | WM sorted_ms | RWM sorted_ms |
+|:---|---:|---:|---:|---:|
+| Scalar | 81.105975 | 81.551693 | 92.751824 | 250.326293 |
+| AVX2/BMI2 | 67.727966 | 67.854915 | 81.353847 | 236.718841 |
+
+純粋な収集時間のWM/RWM差は1%未満であり、MSB-first/LSB-firstの走査方向だけでは
+大きな性能差が出ないという想定と一致します。従来の差は、RWMの走査結果を数値昇順へ
+並べ替える比較sortが主因です。全ケースは
+`benchmarks/results/value_counts_split_scalar.csv` と
+`benchmarks/results/value_counts_split_simd.csv` に保存しています。
+
 ### Scalar
 
 | kind | n | alphabet | bits | storage_mib | build_ms | access_ns | rank_ns | select_ns | value_counts_ms |
@@ -192,3 +260,87 @@ SIMD backendでは、大きな `SuccinctBitVector` にrank用の補助prefixを�
 - `wm_range_rank_scalar_trial[1-3].csv`
 - `wm_range_rank_simd_trial[1-3].csv`
 - `packed_array_trial[1-3].csv`
+
+## 検証済み候補と判断
+
+| 候補 | 判断 | 主な結果 |
+|:---|:---|:---|
+| select treeのpadding限定初期化 | 適用 | SBV buildをScalar 15.8%〜45.2%、SIMD 30.4%〜53.8%短縮 |
+| `rank1PairUnchecked` | 見送り | Scalarの一部だけ改善し、8-bit WM、RWM、SIMDで悪化 |
+| accessとrankのtuple融合 | 見送り | rank内部のword loadを共有できず、追加境界の固定費を回収できない |
+| rank prefix/helperの強制inline | 見送り | compile timeが約2.5倍になり、代表range rankも悪化 |
+| storage field統合 | 見送り | hot pathのindex計算増加が見込まれ、現行構造維持の利点がない |
+| GCC `-march=native` | benchmark限定 | 一部改善するが、生成binaryのCPU互換性を失う |
+| GCC LTO | 見送り | 代表ケースで一貫した改善がなく、selectは悪化 |
+| ORCへの切替 | 見送り | 代表ケースではARCより一貫して高速にならなかった |
+
+Rank pairの試作値、inline比較、compiler option比較はそれぞれ
+`benchmarks/results/query_fusion_rank_pair_*.json`、
+`benchmarks/results/inline_comparison.json`、
+`benchmarks/results/compiler_comparison.json` を参照してください。
+
+## 今後の改善方針
+
+### 優先度1: 現行baselineの更新と測定安定化
+
+今回採用したbuild最適化を含むcommitを基準として、既存の全suiteを再測定します。
+
+- warm-upを最低3回、本測定を最低10回実行する
+- baselineとcandidateを同一セッションで交互に測定する
+- 中央値に加えて平均、最小、最大、標準偏差を保存する
+- 可能ならCPU affinityを固定し、WSL2のホスト負荷を記録する
+- Scalar/SIMD、ARC/ORCでchecksumを比較する
+
+これにより、この文書の2026-07-17表を現在の実装へ更新し、単発測定と長期baselineを
+混同しない状態にします。
+
+### 優先度2: Wavelet Matrix buildのprofile取得
+
+SBV単体buildは改善しましたが、WM/RWM build全体には値のstable partitionやlevelごとの
+一時buffer走査も含まれます。次は推測で融合せず、以下を分離計測します。
+
+- level bit生成
+- `SuccinctBitVector.build()`
+- zero/one stable partition
+- `current` / `next` bufferの初期化とswap
+- Scalar/SIMDごとのpopcount時間
+
+保持構造やquery性能を変えず、走査・書込み・一時allocationを減らせる場合だけ採用します。
+
+### 優先度3: query hot pathの生成コード調査
+
+単純なRank Pairと強制inlineは見送りました。再度query融合を試す場合は、先に生成Cまたは
+assemblyでraw word load、prefix load、関数境界が実際に残っている箇所を確認します。
+
+- `countLessThan`、`quantile`、range rankを個別にprofileする
+- 同一512-bit blockの比率を入力分布別に記録する
+- helper単体ではなくWM/RWM全体で3%以上改善する場合だけ採用する
+- Scalar/SIMDのいずれかで1%以上悪化する変更は原則として撤回する
+
+### 優先度4: benchmark専用compiler設定
+
+`-march=native` はローカル測定用として継続評価できます。library既定値はportableな
+GCC release + ARCを維持します。Clangは現在の環境に未導入のため、導入可能な環境で
+GCCとの同条件比較を追加します。
+
+### 継続して確認する回帰項目
+
+- WM/RWMのbuild、access、rank、select、collectValueCounts、valueCounts
+- Elias–Fanoのbuild、access、lowerBound、upperBound、predecessor
+- Scalar/SIMDの保持メモリとchecksum
+- binary size、compile time、peak RSS
+- 空、全0、全1、疎、密、512-bit境界、再build
+
+## 当面再検討しない領域
+
+過去の測定でbackend間の性能を同時に維持できなかったため、明確な新しい根拠がない限り
+以下は優先しません。
+
+- Scalar/SIMDのprefix形式完全統一
+- prefix間隔やpacked prefix形式の再設計
+- query専用sampling indexや恒常的cacheの追加
+- Select treeの全面置換
+- storage field統合だけを目的としたデータ配置変更
+
+現時点では、保持メモリを増やさず、上位build処理の測定可能な走査削減を進めることが
+最もリスクと効果の釣り合う方向です。

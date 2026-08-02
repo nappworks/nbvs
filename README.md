@@ -271,6 +271,7 @@ doAssert wm.rangeFreq(0, 7, 2, 8) == 4
 | `predecessor(left, right, upper)` | Greatest value `< upper`, or `ValueError`. |
 | `successor(left, right, lower)` | Smallest value `>= lower`, or `ValueError`. |
 | `items` / `toSeq()` | Decodes values in original order. |
+| `collectValueCounts(left, right)` | Collects distinct `(value, frequency)` pairs in traversal order without sorting. |
 | `valueCounts(left, right)` | Distinct `(value, frequency)` pairs, sorted by value. |
 
 ### ReversedWaveletMatrix
@@ -296,7 +297,9 @@ doAssert rwm.valueCounts == @[
   (value: 7'u64, frequency: 1'i64)]
 ```
 
-It provides `access`, `rank`, `rankLessThan`, `occPosition`, `select`, `items`, `toSeq`, and `valueCounts`.
+It provides `access`, `rank`, `rankLessThan`, `occPosition`, `select`, `items`, `toSeq`,
+`collectValueCounts`, and `valueCounts`. `collectValueCounts` avoids sorting and does not
+guarantee result order; `valueCounts` adds an ascending-value sort.
 `occPosition(value, pos)` returns all values smaller than `value` in the
 complete sequence plus occurrences of `value` in `[0, pos)`. This is
 `C[value] + Occ(value, pos)` in FM-index terminology.
@@ -590,6 +593,7 @@ doAssert wm.rangeFreq(0, 7, 2, 8) == 4
 | `predecessor(left, right, upper)` | `upper` 未満の最大値。なければ `ValueError`。 |
 | `successor(left, right, lower)` | `lower` 以上の最小値。なければ `ValueError`。 |
 | `items` / `toSeq()` | 元の順序で値を decode します。 |
+| `collectValueCounts(left, right)` | sortせず走査順で `(value, frequency)` を収集します。 |
 | `valueCounts(left, right)` | 値で昇順の `(value, frequency)` 一覧。 |
 
 ### ReversedWaveletMatrix
@@ -615,7 +619,9 @@ doAssert rwm.valueCounts == @[
   (value: 7'u64, frequency: 1'i64)]
 ```
 
-`access`、`rank`、`rankLessThan`、`occPosition`、`select`、`items`、`toSeq`、`valueCounts` を提供します。
+`access`、`rank`、`rankLessThan`、`occPosition`、`select`、`items`、`toSeq`、
+`collectValueCounts`、`valueCounts` を提供します。`collectValueCounts` はsortせず、
+結果順を保証しません。`valueCounts` は値の昇順sortを追加します。
 `occPosition(value, pos)` は列全体の `value` 未満の個数と、`[0, pos)` にある
 `value` の出現数の和を返します。FM-indexの `C[value] + Occ(value, pos)` に相当します。
 数値順に依存する `quantile` と `rangeFreq` は MSB-first の

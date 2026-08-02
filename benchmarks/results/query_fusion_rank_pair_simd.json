@@ -1,0 +1,3 @@
+{"backend":"simd","candidate":"rank1PairUnchecked","flags":"-d:release --mm:arc -d:nbvsSimd","cases":[
+{"n":1048576,"alphabet":256,"baselineRangeRankNs":463.266,"candidateRangeRankNs":581.766},
+{"n":1048576,"alphabet":1048576,"baselineRangeRankNs":1510.737,"candidateRangeRankNs":1804.003}],"decision":"rejected","reason":"both representative WM range-rank cases regressed"}

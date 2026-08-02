@@ -139,6 +139,24 @@ block denseAndSparse:
     sparse.add int64(i)
   checkAgainstNaive(32768, sparse)
 
+block rebuildAfterMutation:
+  var sbv = genSuccinctBitVector(9000)
+  for pos in countup(0'i64, 8999'i64, 17'i64):
+    sbv[pos] = true
+  sbv.build()
+
+  for pos in countup(0'i64, 8999'i64, 17'i64):
+    sbv[pos] = false
+  for pos in [0'i64, 511, 512, 8191, 8192, 8999]:
+    sbv[pos] = true
+  sbv.build()
+
+  doAssert sbv.totalOnes == 6
+  for i, pos in [0'i64, 511, 512, 8191, 8192, 8999]:
+    doAssert sbv.select1(int64(i)) == pos
+  doAssert sbv.select0(0) == 1
+  doAssert sbv.rank1(9000) == 6
+
 block directRankAndSelectInternals:
   var sbv = genSuccinctBitVector(1024)
   for i in [0'i64, 1, 63, 64, 127, 255, 511, 512, 700, 1023]:

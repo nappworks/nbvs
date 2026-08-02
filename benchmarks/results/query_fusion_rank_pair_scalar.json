@@ -1,0 +1,3 @@
+{"backend":"scalar","candidate":"rank1PairUnchecked","flags":"-d:release --mm:arc","cases":[
+{"n":1048576,"alphabet":256,"baselineRangeRankNs":607.345,"candidateRangeRankNs":617.741},
+{"n":1048576,"alphabet":1048576,"baselineRangeRankNs":2115.068,"candidateRangeRankNs":1833.779}],"decision":"rejected","reason":"results were inconsistent and RWM regressed"}

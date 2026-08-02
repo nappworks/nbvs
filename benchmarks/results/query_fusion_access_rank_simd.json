@@ -1,0 +1,1 @@
+{"backend":"simd","candidate":"accessRank1Unchecked","decision":"rejected","reason":"the generated path retained the rank call and added a tuple boundary; the combined WM experiment did not meet the non-regression requirement"}

@@ -1,0 +1,1 @@
+{"candidate":"inline rank prefix and query fusion helpers","baselineCompileSeconds":{"scalar":3.097,"simd":3.252},"inlineCompileSeconds":{"scalar":7.890,"simd":8.755},"representativeRangeRankNs":{"scalarBaseline":607.345,"scalarInline":1541.082,"simdBaseline":463.266,"simdInline":963.006},"binaryBytes":{"scalarInline":130896,"simdInline":131064},"decision":"rejected"}

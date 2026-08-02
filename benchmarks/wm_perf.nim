@@ -74,14 +74,16 @@ proc storageBytes(rwm: ReversedWaveletMatrix): int64 =
     result += sbvStorageBytes(level)
 
 proc emit(kind: string, c: BenchCase, bitWidth: int, storage: int64,
-          buildNs, accessNs, rankNs, selectNs, countsNs: int64) =
+          buildNs, accessNs, rankNs, selectNs, collectCountsNs,
+          sortedCountsNs: int64) =
   echo &"{kind},{c.n},{c.alphabet},{bitWidth}," &
     &"{float(storage) / 1024.0 / 1024.0:.3f}," &
     &"{float(buildNs) / float(buildIters) / 1_000_000.0:.6f}," &
     &"{float(accessNs) / float(queryIters):.3f}," &
     &"{float(rankNs) / float(queryIters):.3f}," &
     &"{float(selectNs) / float(queryIters):.3f}," &
-    &"{float(countsNs) / float(valueCountsIters) / 1_000_000.0:.6f}"
+    &"{float(collectCountsNs) / float(valueCountsIters) / 1_000_000.0:.6f}," &
+    &"{float(sortedCountsNs) / float(valueCountsIters) / 1_000_000.0:.6f}"
 
 proc runWm(c: BenchCase, xs: seq[uint64], positions: seq[int64],
            rankValues, selectValues: seq[uint64], selectKs: seq[int64]) =
@@ -109,11 +111,17 @@ proc runWm(c: BenchCase, xs: seq[uint64], positions: seq[int64],
 
   started = getMonoTime()
   for _ in 0..<valueCountsIters:
+    let counts = wm.collectValueCounts()
+    sink = sink xor uint64(counts.len)
+  let collectCountsNs = elapsedNs(started)
+
+  started = getMonoTime()
+  for _ in 0..<valueCountsIters:
     let counts = wm.valueCounts()
     sink = sink xor uint64(counts.len)
-  let countsNs = elapsedNs(started)
+  let sortedCountsNs = elapsedNs(started)
   emit("WM", c, wm.bitWidth, storageBytes(wm), buildNs, accessNs, rankNs,
-    selectNs, countsNs)
+    selectNs, collectCountsNs, sortedCountsNs)
 
 proc runRwm(c: BenchCase, xs: seq[uint64], positions: seq[int64],
             rankValues, selectValues: seq[uint64], selectKs: seq[int64]) =
@@ -141,11 +149,17 @@ proc runRwm(c: BenchCase, xs: seq[uint64], positions: seq[int64],
 
   started = getMonoTime()
   for _ in 0..<valueCountsIters:
+    let counts = rwm.collectValueCounts()
+    sink = sink xor uint64(counts.len)
+  let collectCountsNs = elapsedNs(started)
+
+  started = getMonoTime()
+  for _ in 0..<valueCountsIters:
     let counts = rwm.valueCounts()
     sink = sink xor uint64(counts.len)
-  let countsNs = elapsedNs(started)
+  let sortedCountsNs = elapsedNs(started)
   emit("RWM", c, rwm.bitWidth, storageBytes(rwm), buildNs, accessNs, rankNs,
-    selectNs, countsNs)
+    selectNs, collectCountsNs, sortedCountsNs)
 
 proc runCase(c: BenchCase) =
   let xs = makeValues(c)
@@ -156,7 +170,8 @@ proc runCase(c: BenchCase) =
   runRwm(c, xs, positions, rankValues, selectQueries.values, selectQueries.ks)
 
 when isMainModule:
-  echo "kind,n,alphabet,bit_width,storage_mib,build_ms,access_ns,rank_ns,select_ns,value_counts_ms"
+  echo "kind,n,alphabet,bit_width,storage_mib,build_ms,access_ns,rank_ns," &
+    "select_ns,collect_value_counts_ms,sorted_value_counts_ms"
   for c in cases:
     runCase(c)
   stderr.writeLine("sink=", sink)

@@ -13,6 +13,8 @@ block empty:
   doAssert wm.select(1, 0) == -1
   doAssert wm.countLessThan(0, 0, 10) == 0
   doAssert wm.rangeFreq(0, 0, 0, 10) == 0
+  doAssert wm.collectValueCounts.len == 0
+  doAssert wm.valueCounts.len == 0
   expectRaises(IndexDefect): discard wm[0]
   expectRaises(IndexDefect): discard wm.quantile(0, 0, 0)
   expectRaises(ValueError): discard wm.predecessor(0, 0, 1)
@@ -98,6 +100,8 @@ block publicQueries:
     (value: 7'u64, frequency: 1'i64),
     (value: 9'u64, frequency: 1'i64)]
   doAssert wm.valueCounts(3, 3).len == 0
+  doAssert wm.collectValueCounts == wm.valueCounts
+  doAssert wm.collectValueCounts(2, 8) == wm.valueCounts(2, 8)
 
   var iterated: seq[uint64] = @[]
   for x in wm.items:

@@ -1,0 +1,11 @@
+{"backend":"simd","candidate":"padding-only-reset","commit":"f1c3aa2","flags":"-d:release --mm:arc -d:nbvsSimd","queryCount":2000000,"buildIterations":20,"baseline":[
+{"bits":1048576,"density":50,"buildMs":0.059132},
+{"bits":16777216,"density":50,"buildMs":1.279299},
+{"bits":67108864,"density":50,"buildMs":7.429617},
+{"bits":16777216,"density":1,"buildMs":1.192165},
+{"bits":16777216,"density":99,"buildMs":1.282649}],"candidateResults":[
+{"bits":1048576,"density":50,"buildMs":0.041135},
+{"bits":16777216,"density":50,"buildMs":0.790995},
+{"bits":67108864,"density":50,"buildMs":3.431058},
+{"bits":16777216,"density":1,"buildMs":0.776830},
+{"bits":16777216,"density":99,"buildMs":0.858196}],"checksum":41678230}

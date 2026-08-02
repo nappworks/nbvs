@@ -1,0 +1,10 @@
+date=2026-08-02
+nim=Nim 2.2.10
+c_compiler=GCC 15.2.0
+os=Linux 5.15.146.1-microsoft-standard-WSL2 x86_64
+cpu=Intel Core i5-8365U CPU @ 1.60GHz
+logical_cpus=8
+memory=7.6 GiB
+git_commit=f1c3aa2ca63c5742f0c6f9f6820f8ca451a045a5
+default_flags=-d:release --mm:arc
+simd_flags=-d:release --mm:arc -d:nbvsSimd

@@ -238,13 +238,18 @@ func calcLevel*(maxBits: int64): int8 =
   else:
     -1
 
-func resetLevels(sbv: var SuccinctBitVector) =
+func resetLevelPadding(sbv: var SuccinctBitVector) =
+  # 論理entryはbuildで必ず上書きされるため、select走査が読む末尾paddingだけを
+  # sentinelへ戻し、再build時の全tree初期化を避ける。
   if sbv.level >= 1:
     let paddedLen = int(alignUp(int64(sbv.level1Len), 16'i64))
-    for i in countup(0, paddedLen - 1, 16):
+    if sbv.level1Len < paddedLen:
+      let i = sbv.level1Len
       let nodeWord = sbv.selectNodeWordOffset(1, i)
-      for j in 0..<SelectNodeWords:
-        sbv.selectStorage[nodeWord + j] = 0x7fff7fff7fff7fff'u64
+      let values = cast[ptr UncheckedArray[int16]](
+        unsafeAddr sbv.selectStorage[nodeWord])
+      for j in (i and 15)..<16:
+        values[j] = int16.high
   if sbv.level >= 2:
     for level in 2..min(int(sbv.level), 7):
       let logicalLen = case level
@@ -254,10 +259,11 @@ func resetLevels(sbv: var SuccinctBitVector) =
         of 5: sbv.level5Len
         of 6: sbv.level6Len
         else: sbv.level7Len
-      for i in 0..<int(alignUp(int64(logicalLen), 8'i64)):
+      let paddedLen = int(alignUp(int64(logicalLen), 8'i64))
+      for i in logicalLen..<paddedLen:
         sbv.setLevelI32(level, i, int32.high)
   if sbv.level >= 8:
-    for i in 0..<4:
+    for i in sbv.level8Len..<4:
       sbv.setLevel8(i, int64.high)
 
 func genSuccinctBitVector*(maxBits: int64): SuccinctBitVector =
@@ -304,7 +310,7 @@ func genSuccinctBitVector*(maxBits: int64): SuccinctBitVector =
     if lv >= 8: inc nodeCount
     result.selectStorage = newSeq[uint64](nodeCount * SelectNodeWords)
 
-  result.resetLevels()
+  result.resetLevelPadding()
 
 func checkPos(sbv: SuccinctBitVector, pos: int64) =
   if pos < 0 or pos >= sbv.lenOfBits:
@@ -453,7 +459,7 @@ func buildWordPairPrefix(sbv: var SuccinctBitVector,
 
 func build*(sbv: var SuccinctBitVector) =
   ## Builds or rebuilds the rank/select dictionary.
-  sbv.resetLevels()
+  sbv.resetLevelPadding()
 
   template buildForLevel(maxLevel: static[int]) =
     var total = 0'i64

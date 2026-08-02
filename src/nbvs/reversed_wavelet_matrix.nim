@@ -252,9 +252,9 @@ func rankLessThan*(rwm: ReversedWaveletMatrix, value: uint64,
     return pos
   result = rwm.countLessThanNode(0, 0, pos, 0, value)
 
-func collectValueCounts(rwm: ReversedWaveletMatrix, level: int,
-                        left, right: int64, value: uint64,
-                        result: var seq[ValueCount]) =
+func collectValueCountsNode(rwm: ReversedWaveletMatrix, level: int,
+                            left, right: int64, value: uint64,
+                            result: var seq[ValueCount]) =
   if left >= right:
     return
   if level == rwm.bitWidth:
@@ -264,21 +264,33 @@ func collectValueCounts(rwm: ReversedWaveletMatrix, level: int,
   let rightOnes = rwm.levels[level].rank1Unchecked(right)
   let zeroLeft = left - leftOnes
   let zeroRight = right - rightOnes
-  rwm.collectValueCounts(level + 1, zeroLeft, zeroRight, value, result)
+  rwm.collectValueCountsNode(level + 1, zeroLeft, zeroRight, value, result)
   let oneLeft = rwm.zeroCounts[level] + leftOnes
   let oneRight = rwm.zeroCounts[level] + rightOnes
-  rwm.collectValueCounts(level + 1, oneLeft, oneRight,
+  rwm.collectValueCountsNode(level + 1, oneLeft, oneRight,
     value or (1'u64 shl level), result)
+
+func collectValueCounts*(rwm: ReversedWaveletMatrix,
+                         left, right: int64): seq[ValueCount] =
+  ## `[left, right)` の異なる値と頻度を走査順で収集します。
+  ##
+  ## 結果の順序をAPI仕様として保証しません。昇順が必要な場合は
+  ## `valueCounts` を使用してください。
+  rwm.checkRange(left, right)
+  rwm.collectValueCountsNode(0, left, right, 0, result)
+
+func collectValueCounts*(rwm: ReversedWaveletMatrix): seq[ValueCount] =
+  ## 列全体の異なる値と頻度を走査順で収集します。
+  rwm.collectValueCounts(0, rwm.n)
 
 func valueCounts*(rwm: ReversedWaveletMatrix,
                   left, right: int64): seq[ValueCount] =
-  ## Returns distinct values and frequencies in `[left, right)`, sorted by value.
-  rwm.checkRange(left, right)
-  rwm.collectValueCounts(0, left, right, 0, result)
+  ## `[left, right)` の異なる値と頻度を値の昇順で返します。
+  result = rwm.collectValueCounts(left, right)
   result.sort(proc(a, b: ValueCount): int = cmp(a.value, b.value))
 
 func valueCounts*(rwm: ReversedWaveletMatrix): seq[ValueCount] =
-  ## Returns distinct values and frequencies for the complete sequence.
+  ## 列全体の異なる値と頻度を値の昇順で返します。
   rwm.valueCounts(0, rwm.n)
 
 iterator items*(rwm: ReversedWaveletMatrix): uint64 =

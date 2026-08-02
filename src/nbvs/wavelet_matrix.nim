@@ -3,7 +3,7 @@
 ## Positions are 0-based and all ranges use half-open `[left, right)`
 ## semantics. The structure is immutable after construction.
 
-import std/bitops
+import std/[algorithm, bitops]
 import succinct_bit_vector
 
 type
@@ -293,8 +293,8 @@ func toSeq*(wm: WaveletMatrix): seq[uint64] =
   for i in 0'i64..<wm.n:
     result[int(i)] = wm.access(i)
 
-func collectValueCounts(wm: WaveletMatrix, level: int, left, right: int64,
-                        value: uint64, result: var seq[ValueCount]) =
+func collectValueCountsNode(wm: WaveletMatrix, level: int, left, right: int64,
+                            value: uint64, result: var seq[ValueCount]) =
   if left >= right:
     return
   if level == wm.bitWidth:
@@ -306,18 +306,31 @@ func collectValueCounts(wm: WaveletMatrix, level: int, left, right: int64,
   let rightOnes = wm.levels[level].rank1Unchecked(right)
   let zeroLeft = left - leftOnes
   let zeroRight = right - rightOnes
-  wm.collectValueCounts(level + 1, zeroLeft, zeroRight, value, result)
+  wm.collectValueCountsNode(level + 1, zeroLeft, zeroRight, value, result)
 
   let oneLeft = wm.zeroCounts[level] + leftOnes
   let oneRight = wm.zeroCounts[level] + rightOnes
-  wm.collectValueCounts(level + 1, oneLeft, oneRight,
+  wm.collectValueCountsNode(level + 1, oneLeft, oneRight,
     value or (1'u64 shl shift), result)
 
-func valueCounts*(wm: WaveletMatrix, left, right: int64): seq[ValueCount] =
-  ## Returns distinct values and frequencies in `[left, right)`, sorted by value.
+func collectValueCounts*(wm: WaveletMatrix,
+                         left, right: int64): seq[ValueCount] =
+  ## `[left, right)` の異なる値と頻度を走査順で収集します。
+  ##
+  ## 結果の順序をAPI仕様として保証しません。昇順が必要な場合は
+  ## `valueCounts` を使用してください。
   wm.checkRange(left, right)
-  wm.collectValueCounts(0, left, right, 0, result)
+  wm.collectValueCountsNode(0, left, right, 0, result)
+
+func collectValueCounts*(wm: WaveletMatrix): seq[ValueCount] =
+  ## 列全体の異なる値と頻度を走査順で収集します。
+  wm.collectValueCounts(0, wm.n)
+
+func valueCounts*(wm: WaveletMatrix, left, right: int64): seq[ValueCount] =
+  ## `[left, right)` の異なる値と頻度を値の昇順で返します。
+  result = wm.collectValueCounts(left, right)
+  result.sort(proc(a, b: ValueCount): int = cmp(a.value, b.value))
 
 func valueCounts*(wm: WaveletMatrix): seq[ValueCount] =
-  ## Returns distinct values and frequencies for the complete sequence.
+  ## 列全体の異なる値と頻度を値の昇順で返します。
   wm.valueCounts(0, wm.n)

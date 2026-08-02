@@ -1,0 +1,5 @@
+{"benchmark":"bench_succinct_bit_vector","backend":"scalar","compiler":"GCC 15.2.0","representative":{"bits":16777216,"density":50},"modes":[
+{"name":"gcc-release-arc","buildMs":1.647173,"rank1Ns":45.746,"select1Ns":158.875,"select0Ns":233.700},
+{"name":"gcc-release-orc","buildMs":2.079326,"rank1Ns":53.082,"select1Ns":169.236,"select0Ns":281.716},
+{"name":"gcc-release-arc-native","buildMs":1.296836,"rank1Ns":45.039,"select1Ns":154.432,"select0Ns":265.140},
+{"name":"gcc-release-arc-lto","buildMs":1.923140,"rank1Ns":47.761,"select1Ns":254.348,"select0Ns":336.249}],"clang":"not installed","decision":"keep portable GCC release ARC default; document native as benchmark-only"}

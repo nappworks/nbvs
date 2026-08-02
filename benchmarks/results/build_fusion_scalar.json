@@ -1,0 +1,11 @@
+{"backend":"scalar","candidate":"padding-only-reset","commit":"f1c3aa2","flags":"-d:release --mm:arc","queryCount":2000000,"buildIterations":20,"baseline":[
+{"bits":1048576,"density":50,"buildMs":0.221772},
+{"bits":16777216,"density":50,"buildMs":2.810420},
+{"bits":67108864,"density":50,"buildMs":11.624118},
+{"bits":16777216,"density":1,"buildMs":2.340292},
+{"bits":16777216,"density":99,"buildMs":2.412990}],"candidateResults":[
+{"bits":1048576,"density":50,"buildMs":0.121524},
+{"bits":16777216,"density":50,"buildMs":1.647173},
+{"bits":67108864,"density":50,"buildMs":7.124438},
+{"bits":16777216,"density":1,"buildMs":1.655633},
+{"bits":16777216,"density":99,"buildMs":2.032030}],"checksum":41678230}

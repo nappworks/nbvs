@@ -1,4 +1,4 @@
-import std/random
+import std/[algorithm, random]
 import nbvs/reversed_wavelet_matrix
 import nbvs/succinct_bit_vector
 import ./test_common
@@ -20,6 +20,7 @@ block empty:
   doAssert rwm.rank(1, 0) == 0
   doAssert rwm.occPosition(0, 0) == 0
   doAssert rwm.select(1, 0) == -1
+  doAssert rwm.collectValueCounts.len == 0
   doAssert rwm.valueCounts.len == 0
   expectRaises(IndexDefect): discard rwm[0]
 
@@ -73,6 +74,9 @@ block publicQueries:
 
   for left in 0..xs.len:
     for right in left..xs.len:
+      var collected = rwm.collectValueCounts(int64(left), int64(right))
+      collected.sort(proc(a, b: ValueCount): int = cmp(a.value, b.value))
+      doAssert collected == naiveCounts(xs, left, right)
       doAssert rwm.valueCounts(int64(left), int64(right)) ==
         naiveCounts(xs, left, right)
       for value in 0'u64..15'u64:
@@ -162,6 +166,7 @@ block invalidBounds:
   expectRaises(IndexDefect): discard rwm.occPosition(1, -1)
   expectRaises(IndexDefect): discard rwm.occPosition(1, rwm.n + 1)
   expectRaises(IndexDefect): discard rwm.rank(1, 2, 1)
+  expectRaises(IndexDefect): discard rwm.collectValueCounts(-1, 2)
   expectRaises(IndexDefect): discard rwm.valueCounts(-1, 2)
 
 echo "OK treversed_wavelet_matrix"
