@@ -1,0 +1,6 @@
+{"prefixBits":4096,"backend":"simd","queryCount":2000000,"buildIterations":20,"cases":[
+{"bits":1048576,"density":50,"buildMs":0.018914,"rank1Ns":62.303,"select1Ns":138.393,"select0Ns":175.241},
+{"bits":16777216,"density":50,"buildMs":0.618742,"rank1Ns":82.134,"select1Ns":209.540,"select0Ns":254.424},
+{"bits":67108864,"density":50,"buildMs":1.512175,"rank1Ns":159.254,"select1Ns":330.005,"select0Ns":343.765},
+{"bits":16777216,"density":1,"buildMs":0.387139,"rank1Ns":78.882,"select1Ns":248.884,"select0Ns":247.142},
+{"bits":16777216,"density":99,"buildMs":0.378058,"rank1Ns":90.106,"select1Ns":206.227,"select0Ns":232.127}],"checksum":41678230}

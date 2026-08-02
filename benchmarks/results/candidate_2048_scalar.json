@@ -1,0 +1,1 @@
+{"prefixBits":2048,"backend":"scalar","queryCount":2000000,"buildIterations":20,"cases":[{"bits":16777216,"density":50,"buildMs":1.467974,"rank1Ns":124.135,"select1Ns":337.776,"select0Ns":318.070}],"checksum":41678230}

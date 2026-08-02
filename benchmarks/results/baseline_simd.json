@@ -1,0 +1,6 @@
+{"backend":"simd","commit":"93f7898","queryCount":2000000,"buildIterations":20,"cases":[
+{"bits":1048576,"density":50,"buildMs":0.051242,"rank1Ns":34.078,"select1Ns":80.459,"select0Ns":104.672},
+{"bits":16777216,"density":50,"buildMs":0.921784,"rank1Ns":58.133,"select1Ns":176.562,"select0Ns":182.003},
+{"bits":67108864,"density":50,"buildMs":4.092639,"rank1Ns":132.217,"select1Ns":304.519,"select0Ns":321.220},
+{"bits":16777216,"density":1,"buildMs":0.863262,"rank1Ns":51.750,"select1Ns":163.949,"select0Ns":185.917},
+{"bits":16777216,"density":99,"buildMs":0.986722,"rank1Ns":70.353,"select1Ns":168.628,"select0Ns":200.963}],"checksum":41678230}

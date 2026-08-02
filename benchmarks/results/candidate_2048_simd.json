@@ -1,0 +1,1 @@
+{"prefixBits":2048,"backend":"simd","queryCount":2000000,"buildIterations":20,"cases":[{"bits":16777216,"density":50,"buildMs":0.258622,"rank1Ns":57.337,"select1Ns":165.020,"select0Ns":199.782}],"checksum":41678230}

@@ -1,0 +1,6 @@
+{"prefixBits":4096,"backend":"scalar","queryCount":2000000,"buildIterations":20,"cases":[
+{"bits":1048576,"density":50,"buildMs":0.078272,"rank1Ns":170.606,"select1Ns":310.684,"select0Ns":314.022},
+{"bits":16777216,"density":50,"buildMs":1.578404,"rank1Ns":212.300,"select1Ns":435.603,"select0Ns":390.235},
+{"bits":67108864,"density":50,"buildMs":5.005779,"rank1Ns":287.055,"select1Ns":486.409,"select0Ns":475.978},
+{"bits":16777216,"density":1,"buildMs":1.169658,"rank1Ns":183.235,"select1Ns":293.316,"select0Ns":323.101},
+{"bits":16777216,"density":99,"buildMs":1.050491,"rank1Ns":180.504,"select1Ns":341.499,"select0Ns":303.964}],"checksum":41678230}

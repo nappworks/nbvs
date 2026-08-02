@@ -1,0 +1,9 @@
+Nim version: 2.2.10
+C compiler: GCC 15.2.0
+OS: Linux 5.15.146.1-microsoft-standard-WSL2 x86_64
+CPU: Intel Core i5-8365U (4 cores / 8 threads)
+CPU frequency policy: 未固定（WSL2仮想環境）
+Memory: 7.6 GiB
+Baseline commit: 93f7898
+Build flags: --path:src -d:release --mm:arc; SIMD additionally -d:nbvsSimd
+Date: 2026-08-02 UTC

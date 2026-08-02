@@ -1,0 +1,1 @@
+{"backend":"simd","runs":2,"queryCount":2000000,"case":{"bits":16777216,"density":50,"buildMs":[0.325479,0.538194],"rank1Ns":[56.225,55.301],"select1Ns":[287.894,257.385],"select0Ns":[306.268,282.876]},"checksum":41678230}

@@ -19,3 +19,12 @@ task testSimd, "Run all tests with the AVX2/BMI2 backend":
 
 task docs, "Generate API documentation":
   exec "nim doc --project --outdir:docs/api src/nbvs.nim"
+
+task benchScalar, "Run scalar SuccinctBitVector benchmarks":
+  exec "nim c --path:src -d:release --mm:arc -r benchmarks/bench_succinct_bit_vector.nim"
+
+task benchSimd, "Run SIMD SuccinctBitVector benchmarks":
+  exec "nim c --path:src -d:release --mm:arc -d:nbvsSimd -r benchmarks/bench_succinct_bit_vector.nim"
+
+task benchMemory, "Report SuccinctBitVector logical memory":
+  exec "nim c --path:src -d:release --mm:arc -r benchmarks/bench_memory.nim"

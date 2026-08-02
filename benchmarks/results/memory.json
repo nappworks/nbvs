@@ -1,0 +1,1 @@
+{"bits":16777216,"rawBytes":2097152,"baseline":{"scalarAuxBytes":205984,"scalarRatio":0.098221,"simdAuxBytes":140448,"simdRatio":0.066971},"candidate":{"scalarAuxBytes":32776,"simdAuxBytes":32776,"ratio":0.015629},"notes":"seq payload only; candidate includes terminal prefix"}

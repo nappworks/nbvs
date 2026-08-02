@@ -1,0 +1,1 @@
+{"bits":16777216,"rawBytes":2097152,"current":{"scalarAuxBytes":205984,"simdAuxBytes":140448},"candidate":{"entryCount":4096,"entryBytes":16,"auxBytes":65536,"ratio":0.03125,"scalarSimdIdentical":true},"scalarReduction":0.681836,"simdReduction":0.533380}

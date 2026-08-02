@@ -1,0 +1,6 @@
+{"backend":"scalar","commit":"93f7898","queryCount":2000000,"buildIterations":20,"cases":[
+{"bits":1048576,"density":50,"buildMs":0.043787,"rank1Ns":35.793,"select1Ns":71.034,"select0Ns":115.718},
+{"bits":16777216,"density":50,"buildMs":0.842096,"rank1Ns":45.015,"select1Ns":172.592,"select0Ns":198.314},
+{"bits":67108864,"density":50,"buildMs":3.813102,"rank1Ns":115.073,"select1Ns":323.954,"select0Ns":339.870},
+{"bits":16777216,"density":1,"buildMs":0.983517,"rank1Ns":47.805,"select1Ns":166.301,"select0Ns":190.432},
+{"bits":16777216,"density":99,"buildMs":0.845386,"rank1Ns":41.537,"select1Ns":174.582,"select0Ns":203.011}],"checksum":41678230}

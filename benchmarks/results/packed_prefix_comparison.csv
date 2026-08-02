@@ -1,0 +1,9 @@
+operation,backend,baseline,candidate,speed_ratio,minimum
+build,scalar,2.266643,1.325717,1.7097,0.75
+rank1_random,scalar,64.5645,71.829,0.8989,0.70
+select1_random,scalar,201.1265,296.4455,0.6785,0.60
+select0_random,scalar,303.361,336.398,0.9018,0.60
+build,simd,1.023187,0.431837,2.3694,0.90
+rank1_random,simd,44.852,55.763,0.8043,0.90
+select1_random,simd,180.8215,272.6395,0.6632,0.80
+select0_random,simd,246.6855,294.572,0.8374,0.80

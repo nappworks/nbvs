@@ -1,0 +1,1 @@
+{"backend":"scalar","runs":2,"queryCount":2000000,"case":{"bits":16777216,"density":50,"buildMs":[1.350149,1.301285],"rank1Ns":[68.831,74.827],"select1Ns":[289.327,303.564],"select0Ns":[330.321,342.475]},"checksum":41678230}
