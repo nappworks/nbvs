@@ -344,3 +344,23 @@ GCCとの同条件比較を追加します。
 
 現時点では、保持メモリを増やさず、上位build処理の測定可能な走査削減を進めることが
 最もリスクと効果の釣り合う方向です。
+
+## Select実行経路最適化（2026-08-03）
+
+16,777,216 bits、50%密度、2,000,000 random queryを、baseline/candidateの実行順を
+交互にして10回測定しました。最終変更はSIMD `select0` だけに作用します。
+
+| backend | API | baseline中央値 | candidate中央値 | 結果 |
+|:---|:---|---:|---:|:---|
+| Scalar | select1 | 136.339 ns | 同一経路 | 変更なし |
+| Scalar | select0 | 213.793 ns | 同一経路 | 変更なし |
+| AVX2/BMI2 | select1 | 109.848 ns | 110.662 ns | 0.7%差 |
+| AVX2/BMI2 | select0 | 154.234 ns | 111.704 ns | 27.6%改善 |
+
+採用した変更は、各levelのvalid child計算を整数除算からfull-node fast pathとshiftへ変更すること、
+zero offset vectorをlevelごとにstatic選択すること、valid lane mask helperだけをinline化することです。
+保持メモリと公開APIは変わりません。
+
+AVX2 leaf popcountはScalar POPCNTより遅く、Scalar early breakもbranch predictionにより悪化したため
+見送りました。PDEPとTZCNTは既に各1命令へ展開されています。詳細は
+`benchmarks/results/select_optimization_comparison.md` を参照してください。

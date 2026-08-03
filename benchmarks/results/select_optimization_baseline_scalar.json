@@ -1,0 +1,1 @@
+{"backend":"scalar","bits":16777216,"density":50,"queries":2000000,"runs":10,"select1Ns":{"median":136.339,"mean":134.673,"min":122.901,"max":143.300,"stddev":6.485},"select0Ns":{"median":213.793,"mean":212.629,"min":197.309,"max":222.766,"stddev":7.687},"binaryBytes":130696,"compileSeconds":2.925,"checksum":41678230}

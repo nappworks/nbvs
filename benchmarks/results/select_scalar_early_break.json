@@ -1,0 +1,1 @@
+{"backend":"scalar","candidate":"monotonic-prefix early break","before":{"select1Ns":129.823,"select0Ns":173.558},"after":{"select1Ns":153.566,"select0Ns":203.970},"decision":"rejected","reason":"uniform leaf offsets made branch prediction more expensive than a fixed scan"}

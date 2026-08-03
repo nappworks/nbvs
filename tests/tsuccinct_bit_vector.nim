@@ -183,6 +183,50 @@ block directRankAndSelectInternals:
   doAssert sbv.selectIn512ZerosAvx2(0, 1) == 2
   doAssert sbv.selectIn512ZerosTail(512, 1) == 513
 
+block selectLeafWordBoundaries:
+  var ones = genSuccinctBitVector(512)
+  var onePositions: seq[int64] = @[]
+  for wordOffset in 0..<8:
+    let pos = int64(wordOffset * 64 + 3)
+    ones[pos] = true
+    onePositions.add pos
+  ones.build()
+  for k, pos in onePositions:
+    doAssert ones.select1(int64(k)) == pos
+  doAssert ones.select1(int64(onePositions.len)) == -1
+
+  var zeros = genSuccinctBitVector(513)
+  for pos in 0'i64..<zeros.lenOfBits:
+    zeros[pos] = true
+  var zeroPositions: seq[int64] = @[]
+  for wordOffset in 0..<8:
+    let pos = int64(wordOffset * 64 + 5)
+    zeros[pos] = false
+    zeroPositions.add pos
+  zeros[512] = false
+  zeroPositions.add 512
+  zeros.build()
+  for k, pos in zeroPositions:
+    doAssert zeros.select0(int64(k)) == pos
+  doAssert zeros.select0(int64(zeroPositions.len)) == -1
+
+block selectStructureBoundaries:
+  for length in [1'i64, 63, 64, 65, 511, 512, 513, 8191, 8192, 8193,
+                 65535, 65536, 65537, 1_048_576]:
+    var sbv = genSuccinctBitVector(length)
+    var onePositions: seq[int64] = @[]
+    for pos in countup(0'i64, length - 1, 127'i64):
+      sbv[pos] = true
+      onePositions.add pos
+    sbv.build()
+    doAssert sbv.select1(0) == 0
+    doAssert sbv.select1(int64(onePositions.high)) == onePositions[^1]
+    doAssert sbv.select1(int64(onePositions.len)) == -1
+    if sbv.totalZeros > 0:
+      doAssert sbv.select0(0) >= 0
+      doAssert sbv.select0(sbv.totalZeros - 1) < length
+      doAssert sbv.select0(sbv.totalZeros) == -1
+
 block childSelectionHelpers:
   var p16 = [0'i16, 3, 8, 20, 25, 30, 31, 40, 60, 70, 80, 90, 100, 120, 150, 170]
   doAssert selectChildOnesL1x16(addr p16[0], 1) == 0

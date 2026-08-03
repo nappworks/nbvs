@@ -1,0 +1,1 @@
+{"backend":"simd","candidate":"static level offset selection","runtimeSwitchObserved":true,"validOnlySelect0Ns":126.020,"withStaticOffsetSelect0Ns":120.014,"improvementPercent":4.77,"binaryBytesBefore":127008,"binaryBytesAfter":126848,"decision":"accepted"}

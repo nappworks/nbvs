@@ -1,0 +1,1 @@
+{"backend":"scalar","candidate":"AVX2 leaf popcount","decision":"not-applicable","reason":"scalar backend remains the comparison path"}

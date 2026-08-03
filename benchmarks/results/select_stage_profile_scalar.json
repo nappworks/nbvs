@@ -1,0 +1,1 @@
+{"backend":"scalar","bits":16777217,"queries":100000,"treeDepth":5,"select1Ns":123.447,"select0Ns":186.333,"select1Offsets":[12957,12381,12204,12253,12790,12764,12652,11999],"select0Offsets":[11923,12763,12712,12772,12406,12367,12129,12928],"select1TailQueries":1,"select0TailQueries":0}

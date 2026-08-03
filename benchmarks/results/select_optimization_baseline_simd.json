@@ -1,0 +1,1 @@
+{"backend":"simd","bits":16777216,"density":50,"queries":2000000,"runs":10,"select1Ns":{"median":109.848,"mean":110.780,"min":102.883,"max":121.988,"stddev":5.044},"select0Ns":{"median":154.234,"mean":156.203,"min":145.897,"max":186.135,"stddev":10.696},"binaryBytes":127008,"compileSeconds":3.512,"checksum":41678230}

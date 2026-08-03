@@ -1,0 +1,1 @@
+{"backend":"simd","candidate":"power-of-two valid child calculation","singleRun":{"baselineSelect0Ns":147.563,"candidateSelect0Ns":126.020},"decision":"accepted"}

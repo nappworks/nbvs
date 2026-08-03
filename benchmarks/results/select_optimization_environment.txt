@@ -1,0 +1,11 @@
+date=2026-08-03
+git_commit=3cbf881049387094eef1d834021e8e27477827a9
+nim=Nim 2.2.10
+c_compiler=GCC 15.2.0
+os=Linux 5.15.146.1-microsoft-standard-WSL2 x86_64
+cpu=Intel Core i5-8365U CPU @ 1.60GHz
+logical_cpus=8
+memory=7.6 GiB
+scalar_flags=-d:release --mm:arc
+simd_flags=-d:release --mm:arc -d:nbvsSimd
+cpu_affinity=not fixed

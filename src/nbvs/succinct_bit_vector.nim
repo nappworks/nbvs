@@ -730,7 +730,7 @@ when defined(nbvsSimd):
     let m = uint32(mask)
     result = 31 - countLeadingZeroBits(m)
 
-  func validMaskI16Lanes(validCount: int): int32 =
+  func validMaskI16Lanes(validCount: int): int32 {.inline.} =
     if validCount >= 16:
       return 0x55555555'i32
     var m = 0'i32
@@ -738,7 +738,7 @@ when defined(nbvsSimd):
       m = m or (1'i32 shl (i * 2))
     result = m
 
-  func validMaskI32Lanes(validCount: int): int32 =
+  func validMaskI32Lanes(validCount: int): int32 {.inline.} =
     if validCount >= 8:
       return 0xff'i32
     result = (1'i32 shl validCount) - 1'i32
@@ -845,6 +845,33 @@ func selectChildZerosI32x8*(p: ptr int32, target: int32, childSize: int32, valid
       let zerosBeforeChild = int32(i) * childSize - vals[i]
       if zerosBeforeChild < target:
         result = i
+
+when defined(nbvsSimd):
+  # levelをコンパイル時に固定し、zero offset選択の実行時分岐をホットパスから除く。
+  # 各配列は8個のint32を持つため、unalignedな256-bit loadでも範囲内に収まる。
+  template selectChildZerosForLevel(levelNum: static[int], p: ptr int32,
+                                    target: int32, validCount: int): int =
+    block:
+      let oneVals = mm256_loadu_si256(cast[ptr M256i](p))
+      let offsets =
+        when levelNum == 2:
+          mm256_loadu_si256(cast[ptr M256i](unsafeAddr L2ZeroOffsetsI32[0]))
+        elif levelNum == 3:
+          mm256_loadu_si256(cast[ptr M256i](unsafeAddr L3ZeroOffsetsI32[0]))
+        elif levelNum == 4:
+          mm256_loadu_si256(cast[ptr M256i](unsafeAddr L4ZeroOffsetsI32[0]))
+        elif levelNum == 5:
+          mm256_loadu_si256(cast[ptr M256i](unsafeAddr L5ZeroOffsetsI32[0]))
+        elif levelNum == 6:
+          mm256_loadu_si256(cast[ptr M256i](unsafeAddr L6ZeroOffsetsI32[0]))
+        else:
+          mm256_loadu_si256(cast[ptr M256i](unsafeAddr L7ZeroOffsetsI32[0]))
+      let zeroVals = mm256_sub_epi32(offsets, oneVals)
+      let targets = mm256_set1_epi32(target)
+      let compared = mm256_cmpgt_epi32(targets, zeroVals)
+      let mask = (mm256_movemask_ps(mm256_castsi256_ps(compared)) and 0xff) and
+                 validMaskI32Lanes(validCount)
+      highestSetBitIndex32(mask)
 
 func selectChildZerosL7x8*(p: ptr int32, target: int64, validCount = 8): int =
   ## Level-7 variant of child selection for zero-bit targets.
@@ -964,6 +991,14 @@ func selectIn512ZerosAvx2*(sbv: SuccinctBitVector, baseBit: int64, target: int):
   let bit = selectInWord64Pdep(zeroWord, selected.rest)
   result = int64(wordIdx) * 64 + int64(bit)
 
+template validChildren(remaining: int64, blockSize: static[int64],
+                       shift, fanout: static[int]): int =
+  # blockSizeは2の累乗に限定されており、除算を同値なshiftへ置換できる。
+  if remaining >= blockSize * int64(fanout):
+    fanout
+  else:
+    int((remaining + blockSize - 1) shr shift)
+
 func select1*(sbv: SuccinctBitVector, k: int64): int64 =
   ## Returns the position of the 0-based `k`-th one bit, or `-1` when out of range.
   if not sbv.isCalced:
@@ -1038,32 +1073,56 @@ func select0*(sbv: SuccinctBitVector, k: int64): int64 =
 
   if sbv.level >= 7:
     let vals = cast[ptr UncheckedArray[int32]](unsafeAddr sbv.selectStorage[nodeWord])
-    let valid = int(min(8'i64, ceilDiv(sbv.lenOfBits - baseBit, L7)))
-    let local = selectChildZerosL7x8(addr vals[0], target, valid)
+    let valid =
+      when defined(nbvsSimd):
+        validChildren(sbv.lenOfBits - baseBit, L7, 28, 8)
+      else:
+        int(min(8'i64, ceilDiv(sbv.lenOfBits - baseBit, L7)))
+    let local =
+      when defined(nbvsSimd):
+        if target > int64(int32.high):
+          valid - 1
+        else:
+          selectChildZerosForLevel(7, addr vals[0], int32(target), valid)
+      else:
+        selectChildZerosL7x8(addr vals[0], target, valid)
     let prevZeros = int64(local) * L7 - int64(vals[local])
     target -= prevZeros
     baseBit += int64(local) * L7
     nodeWord += SelectNodeWords + local * SelectFullSubtreeWords[6]
 
-  template descendZeros(levelNum: static[int], blockSize: int64) =
+  template descendZeros(levelNum: static[int], blockSize: static[int64],
+                        shift: static[int]) =
     if sbv.level >= levelNum:
       let vals = cast[ptr UncheckedArray[int32]](unsafeAddr sbv.selectStorage[nodeWord])
-      let valid = int(min(8'i64, ceilDiv(sbv.lenOfBits - baseBit, blockSize)))
-      let local = selectChildZerosI32x8(addr vals[0], int32(target), int32(blockSize), valid)
+      let valid =
+        when defined(nbvsSimd):
+          validChildren(sbv.lenOfBits - baseBit, blockSize, shift, 8)
+        else:
+          int(min(8'i64, ceilDiv(sbv.lenOfBits - baseBit, blockSize)))
+      let local =
+        when defined(nbvsSimd):
+          selectChildZerosForLevel(levelNum, addr vals[0], int32(target), valid)
+        else:
+          selectChildZerosI32x8(addr vals[0], int32(target), int32(blockSize), valid)
       let prevZeros = int64(local) * blockSize - int64(vals[local])
       target -= prevZeros
       baseBit += int64(local) * blockSize
       nodeWord += SelectNodeWords + local * SelectFullSubtreeWords[levelNum - 1]
 
-  descendZeros(6, L6)
-  descendZeros(5, L5)
-  descendZeros(4, L4)
-  descendZeros(3, L3)
-  descendZeros(2, L2)
+  descendZeros(6, L6, 25)
+  descendZeros(5, L5, 22)
+  descendZeros(4, L4, 19)
+  descendZeros(3, L3, 16)
+  descendZeros(2, L2, 13)
 
   if sbv.level >= 1:
     let vals = cast[ptr UncheckedArray[int16]](unsafeAddr sbv.selectStorage[nodeWord])
-    let valid = int(min(16'i64, ceilDiv(sbv.lenOfBits - baseBit, L1)))
+    let valid =
+      when defined(nbvsSimd):
+        validChildren(sbv.lenOfBits - baseBit, L1, 9, 16)
+      else:
+        int(min(16'i64, ceilDiv(sbv.lenOfBits - baseBit, L1)))
     let local = selectChildZerosL1x16(addr vals[0], int16(target), valid)
     let prevZeros = int64(local) * L1 - int64(vals[local])
     target -= prevZeros

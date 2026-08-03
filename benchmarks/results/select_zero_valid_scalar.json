@@ -1,0 +1,1 @@
+{"backend":"scalar","candidate":"power-of-two valid child calculation","baselineSelect0Ns":213.793,"candidateSelect0Ns":176.016,"select1Ratio":0.974,"decision":"rejected","reason":"select1 non-regression threshold was not met; scalar path was restored exactly"}

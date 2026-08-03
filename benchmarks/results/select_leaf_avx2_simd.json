@@ -1,0 +1,1 @@
+{"backend":"simd","candidate":"AVX2 nibble-popcount plus stack store","baseline":{"select1Ns":107.744,"select0Ns":147.563},"candidateResult":{"select1Ns":119.017,"select0Ns":171.950},"binaryBytes":127008,"decision":"rejected","reason":"scalar POPCNT scan was faster; exported inline debug instantiation also lacked target flags"}

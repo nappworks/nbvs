@@ -1,0 +1,1 @@
+{"candidate":"level-specialized complete select traversal","generatedCodeFinding":"level checks are predictable for an immutable vector level; full specialization duplicates levels 0 through 8","decision":"rejected-before-product-change","reason":"code-size risk was not justified after the hot select0 divisions and offset switch were removed"}

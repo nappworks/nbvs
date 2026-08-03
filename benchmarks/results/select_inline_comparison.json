@@ -1,0 +1,1 @@
+{"backend":"simd","candidate":"inline valid lane mask helpers only","before":{"select0Ns":120.014,"binaryBytes":126848,"compileSeconds":3.168},"after":{"select0Ns":109.449,"binaryBytes":126680,"compileSeconds":3.119},"improvementPercent":8.80,"decision":"accepted"}
