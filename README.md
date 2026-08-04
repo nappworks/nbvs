@@ -273,6 +273,22 @@ doAssert wm.rangeFreq(0, 7, 2, 8) == 4
 | `items` / `toSeq()` | Decodes values in original order. |
 | `collectValueCounts(left, right)` | Collects distinct `(value, frequency)` pairs in traversal order without sorting. |
 | `valueCounts(left, right)` | Distinct `(value, frequency)` pairs, sorted by value. |
+| `collectDistinctValues(left, right)` | Collects distinct values directly from occupied nodes in traversal order without computing frequencies. |
+| `distinctValues(left, right)` | Distinct values sorted in ascending order. |
+| `collectValueCountsItems` / `valueCountsItems` | Iterators for traversal-order or ascending `(value, frequency)` pairs. |
+| `collectDistinctValuesItems` / `distinctValuesItems` | Iterators for traversal-order or ascending distinct values. |
+
+The four enumeration APIs also have whole-sequence overloads without
+`left, right`. All ranges are half-open. The `collect` variants do not guarantee
+an order, while the variants without `collect` guarantee ascending value order.
+
+```nim
+let values = genWaveletMatrix(@[1'u64, 3, 4, 1])
+doAssert values.distinctValues == @[1'u64, 3, 4]
+
+for item in values.valueCountsItems:
+  echo item.value, ": ", item.frequency
+```
 
 ### ReversedWaveletMatrix
 
@@ -297,9 +313,10 @@ doAssert rwm.valueCounts == @[
   (value: 7'u64, frequency: 1'i64)]
 ```
 
-It provides `access`, `rank`, `rankLessThan`, `occPosition`, `select`, `items`, `toSeq`,
-`collectValueCounts`, and `valueCounts`. `collectValueCounts` avoids sorting and does not
-guarantee result order; `valueCounts` adds an ascending-value sort.
+It provides the same value/count enumeration functions and iterators shown for
+`WaveletMatrix`, including `collectDistinctValues`, `distinctValues`, and their
+`Items` variants. The `collect` APIs avoid sorting and do not guarantee result
+order. The other APIs sort the LSB-first traversal results by value.
 `occPosition(value, pos)` returns all values smaller than `value` in the
 complete sequence plus occurrences of `value` in `[0, pos)`. This is
 `C[value] + Occ(value, pos)` in FM-index terminology.
@@ -595,6 +612,22 @@ doAssert wm.rangeFreq(0, 7, 2, 8) == 4
 | `items` / `toSeq()` | 元の順序で値を decode します。 |
 | `collectValueCounts(left, right)` | sortせず走査順で `(value, frequency)` を収集します。 |
 | `valueCounts(left, right)` | 値で昇順の `(value, frequency)` 一覧。 |
+| `collectDistinctValues(left, right)` | 頻度を計算せず、存在するnodeから異なる値を走査順で直接収集します。 |
+| `distinctValues(left, right)` | 異なる値を昇順で返します。 |
+| `collectValueCountsItems` / `valueCountsItems` | 走査順または昇順の `(value, frequency)` を逐次返すiterator。 |
+| `collectDistinctValuesItems` / `distinctValuesItems` | 走査順または昇順の異なる値を逐次返すiterator。 |
+
+4種類の列挙APIには、`left, right` を省略して列全体を対象にするoverloadも
+あります。すべての範囲は半開区間です。`collect` 系は順序を保証せず、
+非 `collect` 系は値の昇順を保証します。
+
+```nim
+let values = genWaveletMatrix(@[1'u64, 3, 4, 1])
+doAssert values.distinctValues == @[1'u64, 3, 4]
+
+for item in values.valueCountsItems:
+  echo item.value, ": ", item.frequency
+```
 
 ### ReversedWaveletMatrix
 
@@ -619,9 +652,10 @@ doAssert rwm.valueCounts == @[
   (value: 7'u64, frequency: 1'i64)]
 ```
 
-`access`、`rank`、`rankLessThan`、`occPosition`、`select`、`items`、`toSeq`、
-`collectValueCounts`、`valueCounts` を提供します。`collectValueCounts` はsortせず、
-結果順を保証しません。`valueCounts` は値の昇順sortを追加します。
+`WaveletMatrix` と同じ値・頻度列挙関数とiteratorを提供し、
+`collectDistinctValues`、`distinctValues`、各 `Items` 版も利用できます。
+`collect` 系APIはsortせず結果順を保証しません。非 `collect` 系APIは
+LSB-firstの探索結果を値でsortします。
 `occPosition(value, pos)` は列全体の `value` 未満の個数と、`[0, pos)` にある
 `value` の出現数の和を返します。FM-indexの `C[value] + Occ(value, pos)` に相当します。
 数値順に依存する `quantile` と `rangeFreq` は MSB-first の

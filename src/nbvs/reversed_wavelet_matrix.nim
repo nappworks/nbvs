@@ -11,6 +11,8 @@ import wavelet_matrix
 export ValueCount
 
 type
+  TraversalNode = tuple[level: int, left, right: int64, value: uint64]
+
   ReversedWaveletMatrix* = object
     ## Immutable LSB-first wavelet matrix.
     n*: int64
@@ -252,23 +254,35 @@ func rankLessThan*(rwm: ReversedWaveletMatrix, value: uint64,
     return pos
   result = rwm.countLessThanNode(0, 0, pos, 0, value)
 
-func collectValueCountsNode(rwm: ReversedWaveletMatrix, level: int,
-                            left, right: int64, value: uint64,
-                            result: var seq[ValueCount]) =
-  if left >= right:
-    return
-  if level == rwm.bitWidth:
-    result.add (value: value, frequency: right - left)
-    return
-  let leftOnes = rwm.levels[level].rank1Unchecked(left)
-  let rightOnes = rwm.levels[level].rank1Unchecked(right)
-  let zeroLeft = left - leftOnes
-  let zeroRight = right - rightOnes
-  rwm.collectValueCountsNode(level + 1, zeroLeft, zeroRight, value, result)
-  let oneLeft = rwm.zeroCounts[level] + leftOnes
-  let oneRight = rwm.zeroCounts[level] + rightOnes
-  rwm.collectValueCountsNode(level + 1, oneLeft, oneRight,
-    value or (1'u64 shl level), result)
+iterator collectValueCountsItems*(rwm: ReversedWaveletMatrix,
+                                  left, right: int64): ValueCount =
+  ## `[left, right)` の異なる値と頻度を内部探索順で逐次返します。
+  ##
+  ## 頻度は葉の区間長から求め、追加の走査は行いません。
+  rwm.checkRange(left, right)
+  var stack: seq[TraversalNode] =
+    @[(level: 0, left: left, right: right, value: 0'u64)]
+  while stack.len > 0:
+    let node = stack.pop()
+    if node.left >= node.right:
+      continue
+    if node.level == rwm.bitWidth:
+      yield (value: node.value, frequency: node.right - node.left)
+      continue
+
+    let leftOnes = rwm.levels[node.level].rank1Unchecked(node.left)
+    let rightOnes = rwm.levels[node.level].rank1Unchecked(node.right)
+    let oneLeft = rwm.zeroCounts[node.level] + leftOnes
+    let oneRight = rwm.zeroCounts[node.level] + rightOnes
+    stack.add (level: node.level + 1, left: oneLeft, right: oneRight,
+      value: node.value or (1'u64 shl node.level))
+    stack.add (level: node.level + 1, left: node.left - leftOnes,
+      right: node.right - rightOnes, value: node.value)
+
+iterator collectValueCountsItems*(rwm: ReversedWaveletMatrix): ValueCount =
+  ## 列全体の異なる値と頻度を内部探索順で逐次返します。
+  for item in rwm.collectValueCountsItems(0, rwm.n):
+    yield item
 
 func collectValueCounts*(rwm: ReversedWaveletMatrix,
                          left, right: int64): seq[ValueCount] =
@@ -276,22 +290,102 @@ func collectValueCounts*(rwm: ReversedWaveletMatrix,
   ##
   ## 結果の順序をAPI仕様として保証しません。昇順が必要な場合は
   ## `valueCounts` を使用してください。
-  rwm.checkRange(left, right)
-  rwm.collectValueCountsNode(0, left, right, 0, result)
+  for item in rwm.collectValueCountsItems(left, right):
+    result.add item
 
 func collectValueCounts*(rwm: ReversedWaveletMatrix): seq[ValueCount] =
   ## 列全体の異なる値と頻度を走査順で収集します。
   rwm.collectValueCounts(0, rwm.n)
 
+iterator valueCountsItems*(rwm: ReversedWaveletMatrix,
+                           left, right: int64): ValueCount =
+  ## `[left, right)` の異なる値と頻度を値の昇順で逐次返します。
+  ##
+  ## LSB-firstの探索順は数値順ではないため、全結果を保持してソートします。
+  var values = rwm.collectValueCounts(left, right)
+  values.sort(proc(a, b: ValueCount): int = cmp(a.value, b.value))
+  for item in values:
+    yield item
+
+iterator valueCountsItems*(rwm: ReversedWaveletMatrix): ValueCount =
+  ## 列全体の異なる値と頻度を値の昇順で逐次返します。
+  for item in rwm.valueCountsItems(0, rwm.n):
+    yield item
+
 func valueCounts*(rwm: ReversedWaveletMatrix,
                   left, right: int64): seq[ValueCount] =
   ## `[left, right)` の異なる値と頻度を値の昇順で返します。
-  result = rwm.collectValueCounts(left, right)
-  result.sort(proc(a, b: ValueCount): int = cmp(a.value, b.value))
+  for item in rwm.valueCountsItems(left, right):
+    result.add item
 
 func valueCounts*(rwm: ReversedWaveletMatrix): seq[ValueCount] =
   ## 列全体の異なる値と頻度を値の昇順で返します。
   rwm.valueCounts(0, rwm.n)
+
+iterator collectDistinctValuesItems*(rwm: ReversedWaveletMatrix,
+                                     left, right: int64): uint64 =
+  ## `[left, right)` の異なる値を内部探索順で逐次返します。
+  ##
+  ## 頻度を計算せず、存在するノードだけを直接探索します。
+  rwm.checkRange(left, right)
+  var stack: seq[TraversalNode] =
+    @[(level: 0, left: left, right: right, value: 0'u64)]
+  while stack.len > 0:
+    let node = stack.pop()
+    if node.left >= node.right:
+      continue
+    if node.level == rwm.bitWidth:
+      yield node.value
+      continue
+
+    let leftOnes = rwm.levels[node.level].rank1Unchecked(node.left)
+    let rightOnes = rwm.levels[node.level].rank1Unchecked(node.right)
+    let oneLeft = rwm.zeroCounts[node.level] + leftOnes
+    let oneRight = rwm.zeroCounts[node.level] + rightOnes
+    stack.add (level: node.level + 1, left: oneLeft, right: oneRight,
+      value: node.value or (1'u64 shl node.level))
+    stack.add (level: node.level + 1, left: node.left - leftOnes,
+      right: node.right - rightOnes, value: node.value)
+
+iterator collectDistinctValuesItems*(rwm: ReversedWaveletMatrix): uint64 =
+  ## 列全体の異なる値を内部探索順で逐次返します。
+  for value in rwm.collectDistinctValuesItems(0, rwm.n):
+    yield value
+
+func collectDistinctValues*(rwm: ReversedWaveletMatrix,
+                            left, right: int64): seq[uint64] =
+  ## `[left, right)` の異なる値を内部探索順で収集します。
+  for value in rwm.collectDistinctValuesItems(left, right):
+    result.add value
+
+func collectDistinctValues*(rwm: ReversedWaveletMatrix): seq[uint64] =
+  ## 列全体の異なる値を内部探索順で収集します。
+  rwm.collectDistinctValues(0, rwm.n)
+
+iterator distinctValuesItems*(rwm: ReversedWaveletMatrix,
+                              left, right: int64): uint64 =
+  ## `[left, right)` の異なる値を昇順で逐次返します。
+  ##
+  ## LSB-firstの探索順は数値順ではないため、全結果を保持してソートします。
+  var values = rwm.collectDistinctValues(left, right)
+  values.sort()
+  for value in values:
+    yield value
+
+iterator distinctValuesItems*(rwm: ReversedWaveletMatrix): uint64 =
+  ## 列全体の異なる値を昇順で逐次返します。
+  for value in rwm.distinctValuesItems(0, rwm.n):
+    yield value
+
+func distinctValues*(rwm: ReversedWaveletMatrix,
+                     left, right: int64): seq[uint64] =
+  ## `[left, right)` の異なる値を昇順で返します。
+  for value in rwm.distinctValuesItems(left, right):
+    result.add value
+
+func distinctValues*(rwm: ReversedWaveletMatrix): seq[uint64] =
+  ## 列全体の異なる値を昇順で返します。
+  rwm.distinctValues(0, rwm.n)
 
 iterator items*(rwm: ReversedWaveletMatrix): uint64 =
   ## Iterates over values in original order.

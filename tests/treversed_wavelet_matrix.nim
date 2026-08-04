@@ -22,6 +22,8 @@ block empty:
   doAssert rwm.select(1, 0) == -1
   doAssert rwm.collectValueCounts.len == 0
   doAssert rwm.valueCounts.len == 0
+  doAssert rwm.collectDistinctValues.len == 0
+  doAssert rwm.distinctValues.len == 0
   expectRaises(IndexDefect): discard rwm[0]
 
 block publicQueries:
@@ -154,6 +156,39 @@ block fullWidth:
       doAssert rwm.occPosition(value, int64(pos)) ==
         naiveOccPosition(xs, value, pos)
 
+block valueEnumerations:
+  let cases = [
+    @[1'u64, 3, 4, 1],
+    newSeq[uint64](),
+    @[7'u64],
+    @[5'u64, 5, 5, 5],
+    @[8'u64, 1, 6, 3],
+    @[0'u64, 1, 0, 8],
+    @[0'u64, uint64.high, 1, uint64.high]]
+  for xs in cases:
+    let rwm = genReversedWaveletMatrix(xs)
+    assertEnumerations(rwm, xs)
+
+    var values: seq[uint64]
+    for value in rwm.distinctValuesItems:
+      values.add value
+    doAssert values == rwm.distinctValues
+
+    var counts: seq[ValueCount]
+    for item in rwm.valueCountsItems:
+      counts.add item
+    doAssert counts == rwm.valueCounts
+
+    values.setLen(0)
+    for value in rwm.collectDistinctValuesItems:
+      values.add value
+    doAssert values == rwm.collectDistinctValues
+
+    counts.setLen(0)
+    for item in rwm.collectValueCountsItems:
+      counts.add item
+    doAssert counts == rwm.collectValueCounts
+
 block invalidBounds:
   let rwm = genReversedWaveletMatrix(@[1'u64, 2, 3])
   expectRaises(IndexDefect): discard rwm[-1]
@@ -168,5 +203,13 @@ block invalidBounds:
   expectRaises(IndexDefect): discard rwm.rank(1, 2, 1)
   expectRaises(IndexDefect): discard rwm.collectValueCounts(-1, 2)
   expectRaises(IndexDefect): discard rwm.valueCounts(-1, 2)
+  expectRaises(IndexDefect): discard rwm.collectDistinctValues(-1, 2)
+  expectRaises(IndexDefect): discard rwm.distinctValues(0, 4)
+  expectRaises(IndexDefect):
+    for value in rwm.collectDistinctValuesItems(2, 1):
+      discard value
+  expectRaises(IndexDefect):
+    for item in rwm.valueCountsItems(-1, 2):
+      discard item
 
 echo "OK treversed_wavelet_matrix"

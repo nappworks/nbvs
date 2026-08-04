@@ -15,6 +15,8 @@ block empty:
   doAssert wm.rangeFreq(0, 0, 0, 10) == 0
   doAssert wm.collectValueCounts.len == 0
   doAssert wm.valueCounts.len == 0
+  doAssert wm.collectDistinctValues.len == 0
+  doAssert wm.distinctValues.len == 0
   expectRaises(IndexDefect): discard wm[0]
   expectRaises(IndexDefect): discard wm.quantile(0, 0, 0)
   expectRaises(ValueError): discard wm.predecessor(0, 0, 1)
@@ -102,6 +104,8 @@ block publicQueries:
   doAssert wm.valueCounts(3, 3).len == 0
   doAssert wm.collectValueCounts == wm.valueCounts
   doAssert wm.collectValueCounts(2, 8) == wm.valueCounts(2, 8)
+  doAssert wm.distinctValues == @[0'u64, 1, 2, 3, 5, 7, 9]
+  doAssert wm.distinctValues(2, 8) == @[1'u64, 2, 5, 7, 9]
 
   var iterated: seq[uint64] = @[]
   for x in wm.items:
@@ -211,6 +215,39 @@ block fullWidth:
       doAssert wm.occPosition(value, int64(pos)) ==
         naiveOccPosition(xs, value, pos)
 
+block valueEnumerations:
+  let cases = [
+    @[1'u64, 3, 4, 1],
+    newSeq[uint64](),
+    @[7'u64],
+    @[5'u64, 5, 5, 5],
+    @[8'u64, 1, 6, 3],
+    @[0'u64, 1, 0, 8],
+    @[0'u64, uint64.high, 1, uint64.high]]
+  for xs in cases:
+    let wm = genWaveletMatrix(xs)
+    assertEnumerations(wm, xs)
+
+    var values: seq[uint64]
+    for value in wm.distinctValuesItems:
+      values.add value
+    doAssert values == wm.distinctValues
+
+    var counts: seq[ValueCount]
+    for item in wm.valueCountsItems:
+      counts.add item
+    doAssert counts == wm.valueCounts
+
+    values.setLen(0)
+    for value in wm.collectDistinctValuesItems:
+      values.add value
+    doAssert values == wm.collectDistinctValues
+
+    counts.setLen(0)
+    for item in wm.collectValueCountsItems:
+      counts.add item
+    doAssert counts == wm.collectValueCounts
+
 block invalidBounds:
   let wm = genWaveletMatrix(@[1'u64, 2, 3])
   expectRaises(IndexDefect): discard wm[-1]
@@ -227,5 +264,13 @@ block invalidBounds:
   expectRaises(IndexDefect): discard wm.rangeFreq(0, 4, 0, 4)
   expectRaises(IndexDefect): discard wm.quantile(0, 3, -1)
   expectRaises(IndexDefect): discard wm.quantile(0, 3, 3)
+  expectRaises(IndexDefect): discard wm.collectDistinctValues(-1, 2)
+  expectRaises(IndexDefect): discard wm.distinctValues(0, 4)
+  expectRaises(IndexDefect):
+    for value in wm.collectDistinctValuesItems(2, 1):
+      discard value
+  expectRaises(IndexDefect):
+    for item in wm.valueCountsItems(-1, 2):
+      discard item
 
 echo "OK twavelet_matrix"

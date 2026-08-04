@@ -3,17 +3,19 @@
 ## Positions are 0-based and all ranges use half-open `[left, right)`
 ## semantics. The structure is immutable after construction.
 
-import std/[algorithm, bitops]
+import std/bitops
 import succinct_bit_vector
 
 type
   ValueCount* = tuple[value: uint64, frequency: int64]
     ## A distinct value and its number of occurrences.
 
+  TraversalNode = tuple[level: int, left, right: int64, value: uint64]
+
   WaveletMatrix* = object
     ## Rank/select-capable representation of a `uint64` sequence.
-    n*: int64 ## Number of values.
-    bitWidth*: int ## Number of significant bit levels (0 for an empty input).
+    n*: int64               ## Number of values.
+    bitWidth*: int          ## Number of significant bit levels (0 for an empty input).
     levels*: seq[SuccinctBitVector] ## Bit vectors, from most to least significant.
     zeroCounts*: seq[int64] ## Number of zero bits at each level.
 
@@ -293,25 +295,37 @@ func toSeq*(wm: WaveletMatrix): seq[uint64] =
   for i in 0'i64..<wm.n:
     result[int(i)] = wm.access(i)
 
-func collectValueCountsNode(wm: WaveletMatrix, level: int, left, right: int64,
-                            value: uint64, result: var seq[ValueCount]) =
-  if left >= right:
-    return
-  if level == wm.bitWidth:
-    result.add (value: value, frequency: right - left)
-    return
+iterator collectValueCountsItems*(wm: WaveletMatrix,
+                                  left, right: int64): ValueCount =
+  ## `[left, right)` の異なる値と頻度を内部探索順で逐次返します。
+  ##
+  ## 探索時間は概ね `O(σ * bitWidth)`、明示スタックの追加領域は
+  ## 探索中のノード数に依存します。`σ` は異なる値の数です。
+  wm.checkRange(left, right)
+  var stack: seq[TraversalNode] =
+    @[(level: 0, left: left, right: right, value: 0'u64)]
+  while stack.len > 0:
+    let node = stack.pop()
+    if node.left >= node.right:
+      continue
+    if node.level == wm.bitWidth:
+      yield (value: node.value, frequency: node.right - node.left)
+      continue
 
-  let shift = wm.bitWidth - level - 1
-  let leftOnes = wm.levels[level].rank1Unchecked(left)
-  let rightOnes = wm.levels[level].rank1Unchecked(right)
-  let zeroLeft = left - leftOnes
-  let zeroRight = right - rightOnes
-  wm.collectValueCountsNode(level + 1, zeroLeft, zeroRight, value, result)
+    let shift = wm.bitWidth - node.level - 1
+    let leftOnes = wm.levels[node.level].rank1Unchecked(node.left)
+    let rightOnes = wm.levels[node.level].rank1Unchecked(node.right)
+    let oneLeft = wm.zeroCounts[node.level] + leftOnes
+    let oneRight = wm.zeroCounts[node.level] + rightOnes
+    stack.add (level: node.level + 1, left: oneLeft, right: oneRight,
+      value: node.value or (1'u64 shl shift))
+    stack.add (level: node.level + 1, left: node.left - leftOnes,
+      right: node.right - rightOnes, value: node.value)
 
-  let oneLeft = wm.zeroCounts[level] + leftOnes
-  let oneRight = wm.zeroCounts[level] + rightOnes
-  wm.collectValueCountsNode(level + 1, oneLeft, oneRight,
-    value or (1'u64 shl shift), result)
+iterator collectValueCountsItems*(wm: WaveletMatrix): ValueCount =
+  ## 列全体の異なる値と頻度を内部探索順で逐次返します。
+  for item in wm.collectValueCountsItems(0, wm.n):
+    yield item
 
 func collectValueCounts*(wm: WaveletMatrix,
                          left, right: int64): seq[ValueCount] =
@@ -319,18 +333,95 @@ func collectValueCounts*(wm: WaveletMatrix,
   ##
   ## 結果の順序をAPI仕様として保証しません。昇順が必要な場合は
   ## `valueCounts` を使用してください。
-  wm.checkRange(left, right)
-  wm.collectValueCountsNode(0, left, right, 0, result)
+  for item in wm.collectValueCountsItems(left, right):
+    result.add item
 
 func collectValueCounts*(wm: WaveletMatrix): seq[ValueCount] =
   ## 列全体の異なる値と頻度を走査順で収集します。
   wm.collectValueCounts(0, wm.n)
 
+iterator valueCountsItems*(wm: WaveletMatrix,
+                           left, right: int64): ValueCount =
+  ## `[left, right)` の異なる値と頻度を値の昇順で逐次返します。
+  ##
+  ## MSB-firstで0側を先に探索するため、葉は数値の昇順になります。
+  for item in wm.collectValueCountsItems(left, right):
+    yield item
+
+iterator valueCountsItems*(wm: WaveletMatrix): ValueCount =
+  ## 列全体の異なる値と頻度を値の昇順で逐次返します。
+  for item in wm.valueCountsItems(0, wm.n):
+    yield item
+
 func valueCounts*(wm: WaveletMatrix, left, right: int64): seq[ValueCount] =
   ## `[left, right)` の異なる値と頻度を値の昇順で返します。
-  result = wm.collectValueCounts(left, right)
-  result.sort(proc(a, b: ValueCount): int = cmp(a.value, b.value))
+  for item in wm.valueCountsItems(left, right):
+    result.add item
 
 func valueCounts*(wm: WaveletMatrix): seq[ValueCount] =
   ## 列全体の異なる値と頻度を値の昇順で返します。
   wm.valueCounts(0, wm.n)
+
+iterator collectDistinctValuesItems*(wm: WaveletMatrix,
+                                     left, right: int64): uint64 =
+  ## `[left, right)` の異なる値を内部探索順で逐次返します。
+  ##
+  ## 頻度を計算せず、存在するノードだけを直接探索します。
+  wm.checkRange(left, right)
+  var stack: seq[TraversalNode] =
+    @[(level: 0, left: left, right: right, value: 0'u64)]
+  while stack.len > 0:
+    let node = stack.pop()
+    if node.left >= node.right:
+      continue
+    if node.level == wm.bitWidth:
+      yield node.value
+      continue
+
+    let shift = wm.bitWidth - node.level - 1
+    let leftOnes = wm.levels[node.level].rank1Unchecked(node.left)
+    let rightOnes = wm.levels[node.level].rank1Unchecked(node.right)
+    let oneLeft = wm.zeroCounts[node.level] + leftOnes
+    let oneRight = wm.zeroCounts[node.level] + rightOnes
+    stack.add (level: node.level + 1, left: oneLeft, right: oneRight,
+      value: node.value or (1'u64 shl shift))
+    stack.add (level: node.level + 1, left: node.left - leftOnes,
+      right: node.right - rightOnes, value: node.value)
+
+iterator collectDistinctValuesItems*(wm: WaveletMatrix): uint64 =
+  ## 列全体の異なる値を内部探索順で逐次返します。
+  for value in wm.collectDistinctValuesItems(0, wm.n):
+    yield value
+
+func collectDistinctValues*(wm: WaveletMatrix,
+                            left, right: int64): seq[uint64] =
+  ## `[left, right)` の異なる値を内部探索順で収集します。
+  for value in wm.collectDistinctValuesItems(left, right):
+    result.add value
+
+func collectDistinctValues*(wm: WaveletMatrix): seq[uint64] =
+  ## 列全体の異なる値を内部探索順で収集します。
+  wm.collectDistinctValues(0, wm.n)
+
+iterator distinctValuesItems*(wm: WaveletMatrix,
+                              left, right: int64): uint64 =
+  ## `[left, right)` の異なる値を昇順で逐次返します。
+  ##
+  ## MSB-firstで0側を先に探索するため、追加のソートは不要です。
+  for value in wm.collectDistinctValuesItems(left, right):
+    yield value
+
+iterator distinctValuesItems*(wm: WaveletMatrix): uint64 =
+  ## 列全体の異なる値を昇順で逐次返します。
+  for value in wm.distinctValuesItems(0, wm.n):
+    yield value
+
+func distinctValues*(wm: WaveletMatrix,
+                     left, right: int64): seq[uint64] =
+  ## `[left, right)` の異なる値を昇順で返します。
+  for value in wm.distinctValuesItems(left, right):
+    result.add value
+
+func distinctValues*(wm: WaveletMatrix): seq[uint64] =
+  ## 列全体の異なる値を昇順で返します。
+  wm.distinctValues(0, wm.n)
