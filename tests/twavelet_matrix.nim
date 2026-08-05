@@ -47,6 +47,24 @@ block fixedBitWidthAndAccessRank:
   expectRaises(ValueError): discard genWaveletMatrix(@[0'u64], -1)
   expectRaises(ValueError): discard genWaveletMatrix(@[0'u64], 65)
 
+block genericFixedBitWidth:
+  let expected = @[0'u64, 1, 3, 7, 3, 1]
+  let matrices = [
+    genWaveletMatrix(@[0'u8, 1, 3, 7, 3, 1], 3),
+    genWaveletMatrix(@[0'u16, 1, 3, 7, 3, 1], 3),
+    genWaveletMatrix(@[0'u32, 1, 3, 7, 3, 1], 3),
+    genWaveletMatrix(expected, 3)]
+  for wm in matrices:
+    doAssert wm.toSeq == expected
+    for left in 0..expected.len:
+      for right in left..expected.len:
+        for value in 0'u64..8'u64:
+          let ranks = wm.rankPair(value, int64(left), int64(right))
+          doAssert ranks.leftRank == wm.rank(value, int64(left))
+          doAssert ranks.rightRank == wm.rank(value, int64(right))
+  expectRaises(ValueError):
+    discard genWaveletMatrix(@[8'u16], 3)
+
 block occPosition:
   let cases = [
     @[3'u64, 1, 4, 1, 5, 9, 2, 6, 5],
@@ -274,6 +292,7 @@ block invalidBounds:
   expectRaises(IndexDefect): discard wm.occPosition(1, -1)
   expectRaises(IndexDefect): discard wm.occPosition(1, wm.n + 1)
   expectRaises(IndexDefect): discard wm.rank(1, 2, 1)
+  expectRaises(IndexDefect): discard wm.rankPair(1, 2, 1)
   expectRaises(IndexDefect): discard wm.countLessThan(-1, 2, 1)
   expectRaises(IndexDefect): discard wm.rangeFreq(0, 4, 0, 4)
   expectRaises(IndexDefect): discard wm.quantile(0, 3, -1)

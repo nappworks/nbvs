@@ -76,6 +76,9 @@ block basic:
   doAssert dict.contains("banana")
   doAssert not dict.contains("ban")
   doAssert dict.findPrefix("app") == @[0'u32, 1'u32]
+  var prefixOutput = @[99'u32, 100'u32]
+  dict.findPrefixInto("app", prefixOutput)
+  doAssert prefixOutput == @[0'u32, 1'u32]
   doAssert dict.findPrefix("") == @[0'u32, 1, 2, 3]
   doAssert dict.findSuffix("ana") == @[2'u32, 3'u32]
   doAssert dict.findSuffix("") == @[0'u32, 1, 2, 3]
@@ -85,6 +88,9 @@ block basic:
     (id: 3'u32, occurrences: 1'u32)]
   for id, value in values:
     doAssert dict.getString(DictionaryId(id)) == value
+    var output = "existing capacity"
+    dict.getStringInto(DictionaryId(id), output)
+    doAssert output == value
   var decoded: seq[string]
   for value in dict.items:
     decoded.add value
@@ -113,6 +119,41 @@ block emptyString:
 
 block duplicate:
   expectRaises(ValueError): discard genFmDictionary(@["a", "a"])
+  let unchecked = genFmDictionary(@["a", "a"],
+    FmDictionaryBuildOptions(validateDistinct: false))
+  doAssert unchecked.len == 2
+  doAssert unchecked.getString(0) == "a"
+  doAssert unchecked.getString(1) == "a"
+
+block anchoredPrefix:
+  let dict = genFmDictionary(@["baaa", "aaab", "caaa", "a"])
+  doAssert dict.findExact("a") == 3
+  doAssert dict.findPrefix("a") == @[1'u32, 3'u32]
+
+block reusableWorkspace:
+  let dict = genFmDictionary(@["banana", "hana", "aaaaa", "missing"])
+  var workspace = initFmQueryWorkspace(dict)
+  doAssert dict.findSubstring("ana", workspace) == @[0'u32, 1'u32]
+  doAssert dict.findSubstring("aa", workspace) == @[2'u32]
+  doAssert dict.findSubstring("missing", workspace) == @[3'u32]
+  doAssert dict.findSubstring("none", workspace).len == 0
+  var substringOutput = @[99'u32]
+  dict.findSubstringInto("ana", workspace, substringOutput)
+  doAssert substringOutput == @[0'u32, 1'u32]
+  dict.findSubstringInto("aa", workspace, substringOutput)
+  doAssert substringOutput == @[2'u32]
+  doAssert dict.findSubstringOccurrences("ana", workspace) == @[
+    (id: 0'u32, occurrences: 2'u32),
+    (id: 1'u32, occurrences: 1'u32)]
+  doAssert dict.findSubstringOccurrences("aa", workspace) == @[
+    (id: 2'u32, occurrences: 4'u32)]
+
+block frequentSubstring:
+  let dict = genFmDictionary(@[repeat('a', 1_000), repeat('a', 500) & "b"])
+  var workspace = initFmQueryWorkspace(dict)
+  doAssert dict.findSubstringOccurrences("aaa", workspace) == @[
+    (id: 0'u32, occurrences: 998'u32),
+    (id: 1'u32, occurrences: 498'u32)]
 
 block utf8:
   let dict = genFmDictionary(@["東京", "東京都", "京都", "大阪"])

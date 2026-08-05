@@ -114,18 +114,25 @@ proc run(count, averageLength: int, japanese: bool) =
   let binaryNs = elapsedNs(started)
 
   started = getMonoTime()
+  var prefixOutput: seq[DictionaryId]
   for id in ids:
-    sink = sink xor uint64(dict.findPrefix(values[id]).len)
+    dict.findPrefixInto(values[id], prefixOutput)
+    sink = sink xor uint64(prefixOutput.len)
   let prefixNs = elapsedNs(started)
 
+  var workspace = initFmQueryWorkspace(dict)
+  var substringOutput: seq[DictionaryId]
   started = getMonoTime()
   for id in ids:
-    sink = sink xor uint64(dict.findSubstring(values[id]).len)
+    dict.findSubstringInto(values[id], workspace, substringOutput)
+    sink = sink xor uint64(substringOutput.len)
   let substringNs = elapsedNs(started)
 
+  var restored: string
   started = getMonoTime()
   for id in ids:
-    sink = sink xor uint64(dict.getString(DictionaryId(id)).len)
+    dict.getStringInto(DictionaryId(id), restored)
+    sink = sink xor uint64(restored.len)
   let restoreNs = elapsedNs(started)
 
   started = getMonoTime()
@@ -140,6 +147,24 @@ proc run(count, averageLength: int, japanese: bool) =
     let item = dict.bwt.accessRank(int64(id mod int(dict.bwt.n)))
     sink = sink xor item.value xor uint64(item.rankBefore)
   let fusedNs = elapsedNs(started)
+
+  started = getMonoTime()
+  for id in ids:
+    let left = int64(id mod int(dict.bwt.n))
+    let right = min(dict.bwt.n, left + 17)
+    let value = uint64(id mod AlphabetSize)
+    sink = sink xor uint64(dict.bwt.rank(value, left)) xor
+      uint64(dict.bwt.rank(value, right))
+  let rankTwiceNs = elapsedNs(started)
+
+  started = getMonoTime()
+  for id in ids:
+    let left = int64(id mod int(dict.bwt.n))
+    let right = min(dict.bwt.n, left + 17)
+    let value = uint64(id mod AlphabetSize)
+    let ranks = dict.bwt.rankPair(value, left, right)
+    sink = sink xor uint64(ranks.leftRank) xor uint64(ranks.rightRank)
+  let rankPairNs = elapsedNs(started)
 
   started = getMonoTime()
   for id in ids:
@@ -162,6 +187,8 @@ proc run(count, averageLength: int, japanese: bool) =
     &"{float(restoreNs) / queryIterations.float:.1f}," &
     &"{float(separateNs) / queryIterations.float:.1f}," &
     &"{float(fusedNs) / queryIterations.float:.1f}," &
+    &"{float(rankTwiceNs) / queryIterations.float:.1f}," &
+    &"{float(rankPairNs) / queryIterations.float:.1f}," &
     &"{float(checkedPackedNs) / queryIterations.float:.1f}," &
     &"{float(uncheckedPackedNs) / queryIterations.float:.1f}," &
     &"{float(storage) / 1024.0 / 1024.0:.3f}," &
@@ -181,7 +208,8 @@ when isMainModule:
     raise newException(ValueError, "count and averageLength must be positive")
   echo "count,avg_bytes,japanese,symbols,sa_ms,bwt_ms,wm_ms,fm_build_ms," &
     "fm_exact_ns,sorted_binary_exact_ns,prefix_ns,substring_ns,restore_ns," &
-    "access_plus_rank_ns,access_rank_ns,packed_checked_ns,packed_unchecked_ns," &
+    "access_plus_rank_ns,access_rank_ns,rank_twice_ns,rank_pair_ns," &
+    "packed_checked_ns,packed_unchecked_ns," &
     "storage_mib,bytes_per_character"
   run(count, averageLength, japanese)
   stderr.writeLine("sink=", sink)
