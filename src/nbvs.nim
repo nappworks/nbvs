@@ -12,7 +12,7 @@
 ## Import this module when you want the complete `nbvs` API.
 
 import nbvs/[bit_vector, packed_array, succinct_bit_vector, elias_fano,
-  wavelet_matrix, reversed_wavelet_matrix]
+  wavelet_matrix, reversed_wavelet_matrix, fm_dictionary]
 
 export bit_vector
 export packed_array
@@ -20,3 +20,4 @@ export succinct_bit_vector
 export elias_fano
 export wavelet_matrix
 export reversed_wavelet_matrix
+export fm_dictionary

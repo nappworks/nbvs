@@ -33,6 +33,20 @@ block allZeros:
   doAssert wm.select(0, 4) == -1
   doAssert wm.quantile(0, 4, 2) == 0
 
+block fixedBitWidthAndAccessRank:
+  let values = @[0'u64, 257, 3, 257, 1, 3]
+  let wm = genWaveletMatrix(values, 9)
+  doAssert wm.bitWidth == 9
+  doAssert wm.toSeq == values
+  for index, value in values:
+    let item = wm.accessRank(int64(index))
+    doAssert item.value == value
+    doAssert item.rankBefore == wm.rank(value, int64(index))
+  doAssert genWaveletMatrix(newSeq[uint64](), 9).bitWidth == 9
+  expectRaises(ValueError): discard genWaveletMatrix(@[512'u64], 9)
+  expectRaises(ValueError): discard genWaveletMatrix(@[0'u64], -1)
+  expectRaises(ValueError): discard genWaveletMatrix(@[0'u64], 65)
+
 block occPosition:
   let cases = [
     @[3'u64, 1, 4, 1, 5, 9, 2, 6, 5],

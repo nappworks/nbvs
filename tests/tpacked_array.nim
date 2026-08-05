@@ -1,5 +1,12 @@
 import std/sequtils
 import nbvs/packed_array
+
+block uncheckedAccess:
+  var values = genPackedArray(97, 9)
+  for index in 0..<97:
+    values[index] = uint64((index * 37) mod 512)
+  for index in 0..<97:
+    doAssert values.getUnchecked(index) == values[index]
 import ./test_common
 
 block helpers:
