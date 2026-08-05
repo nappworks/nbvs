@@ -29,6 +29,7 @@ including rank/select queries, Elias-Fano encoding, and wavelet matrices.
 - `EliasFano`: Elias-Fano encoding for nondecreasing `uint64` sequences.
 - `WaveletMatrix`: rank/select, quantile, and range-frequency index for `uint64` sequences.
 - `ReversedWaveletMatrix`: LSB-first wavelet matrix with access, rank, and select.
+- `FmDictionary`: self-indexed string dictionary with exact, prefix, suffix, and substring search.
 
 ### Requirements
 
@@ -90,6 +91,7 @@ import nbvs/succinct_bit_vector
 import nbvs/elias_fano
 import nbvs/wavelet_matrix
 import nbvs/reversed_wavelet_matrix
+import nbvs/fm_dictionary
 ```
 
 ### BitVector
@@ -290,6 +292,35 @@ for item in values.valueCountsItems:
   echo item.value, ": ", item.frequency
 ```
 
+### FmDictionary
+
+`FmDictionary` is a self-indexed string dictionary backed by a BWT and a
+fixed 9-bit `WaveletMatrix`. It supports exact, prefix, suffix, and substring
+search as well as restoration by Dictionary ID without retaining the original
+string pool. UTF-8 strings are searched byte by byte; Unicode normalization is
+the caller's responsibility. Input strings must be distinct.
+
+```nim
+import nbvs/fm_dictionary
+
+let dict = genFmDictionary(@[
+  "apple",
+  "application",
+  "banana",
+  "hana"
+])
+
+doAssert dict.findExact("banana") == 2
+doAssert dict.findPrefix("app") == @[0'u32, 1'u32]
+doAssert dict.findSubstring("ana") == @[2'u32, 3'u32]
+doAssert dict.getString(3) == "hana"
+```
+
+Construction uses SA-IS with `O(n)` time and `O(n)` temporary storage. L/S
+types and LMS positions are stored in two `BitVector` instances at one bit per
+flag. The finished dictionary is immutable. See
+[benchmarks.md](benchmarks.md) for measured performance.
+
 ### ReversedWaveletMatrix
 
 `ReversedWaveletMatrix` uses the same compact bit-vector representation but
@@ -368,6 +399,7 @@ compact bit vector と succinct data structure を Nim 向けに提供します�
 - `EliasFano`: 非減少 `uint64` 列の Elias-Fano 符号化。
 - `WaveletMatrix`: `uint64` 列の rank/select、quantile、値域頻度 index。
 - `ReversedWaveletMatrix`: access、rank、select 対応の LSB-first Wavelet Matrix。
+- `FmDictionary`: exact、prefix、suffix、substring検索に対応するself-index型文字列Dictionary。
 
 ### 必要環境
 
@@ -429,6 +461,7 @@ import nbvs/succinct_bit_vector
 import nbvs/elias_fano
 import nbvs/wavelet_matrix
 import nbvs/reversed_wavelet_matrix
+import nbvs/fm_dictionary
 ```
 
 ### BitVector
@@ -628,6 +661,33 @@ doAssert values.distinctValues == @[1'u64, 3, 4]
 for item in values.valueCountsItems:
   echo item.value, ": ", item.frequency
 ```
+
+### FmDictionary
+
+`FmDictionary` は、BWTと固定9-bit `WaveletMatrix`を用いたself-index型文字列
+Dictionaryです。元文字列poolを保持せず、exact、prefix、suffix、substring検索と
+Dictionary IDからの復元を提供します。UTF-8文字列はbyte単位で検索し、Unicode正規化は
+呼び出し側の責務です。入力文字列はdistinctである必要があります。
+
+```nim
+import nbvs/fm_dictionary
+
+let dict = genFmDictionary(@[
+  "apple",
+  "application",
+  "banana",
+  "hana"
+])
+
+doAssert dict.findExact("banana") == 2
+doAssert dict.findPrefix("app") == @[0'u32, 1'u32]
+doAssert dict.findSubstring("ana") == @[2'u32, 3'u32]
+doAssert dict.getString(3) == "hana"
+```
+
+構築処理は時間計算量`O(n)`、追加領域`O(n)`のSA-ISを使用します。L/S型とLMS位置は、
+各flagを1 bitで保持する2つの`BitVector`へ格納します。構築後のDictionaryは
+immutableです。実測値は [benchmarks.md](benchmarks.md) を参照してください。
 
 ### ReversedWaveletMatrix
 

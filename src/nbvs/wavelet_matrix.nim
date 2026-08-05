@@ -77,6 +77,48 @@ func genWaveletMatrix*(xs: openArray[uint64]): WaveletMatrix =
         inc onePos
     swap(current, next)
 
+func genWaveletMatrix*(values: openArray[uint64],
+    bitWidth: int): WaveletMatrix =
+  ## 指定した固定bit幅でWavelet Matrixを構築します。
+  ##
+  ## `bitWidth` は `0..64` で、すべての値がその幅に収まる必要があります。
+  if bitWidth < 0 or bitWidth > 64:
+    raise newException(ValueError, "bitWidth must be in 0..64")
+  for value in values:
+    if bitWidth == 0:
+      if value != 0:
+        raise newException(ValueError, "value exceeds bitWidth")
+    elif bitWidth < 64 and (value shr bitWidth) != 0:
+      raise newException(ValueError, "value exceeds bitWidth")
+
+  result.n = int64(values.len)
+  result.bitWidth = bitWidth
+  result.levels = newSeq[SuccinctBitVector](bitWidth)
+  result.zeroCounts = newSeq[int64](bitWidth)
+  if values.len == 0 or bitWidth == 0:
+    return
+
+  var current = newSeq[uint64](values.len)
+  for index, value in values:
+    current[index] = value
+  var next = newSeq[uint64](values.len)
+
+  for level in 0..<bitWidth:
+    let shift = bitWidth - level - 1
+    let (bits, zeros) = buildLevelBits(current, shift)
+    result.levels[level] = bits
+    result.zeroCounts[level] = int64(zeros)
+    var zeroPos = 0
+    var onePos = zeros
+    for value in current:
+      if ((value shr shift) and 1'u64) == 0:
+        next[zeroPos] = value
+        inc zeroPos
+      else:
+        next[onePos] = value
+        inc onePos
+    swap(current, next)
+
 func checkIndex(wm: WaveletMatrix, i: int64) {.inline.} =
   if i < 0 or i >= wm.n:
     raise newException(IndexDefect, "index out of bounds")
@@ -108,6 +150,27 @@ func access*(wm: WaveletMatrix, i: int64): uint64 =
       pos = wm.zeroCounts[level] + ones
     else:
       pos -= ones
+
+func accessRank*(wm: WaveletMatrix,
+                 pos: int64): tuple[value: uint64, rankBefore: int64] =
+  ## `pos` の値と、同じ値の `[0, pos)` における出現回数を返します。
+  ##
+  ## accessとrankに共通する経路を融合し、`O(bitWidth)` 時間で処理します。
+  wm.checkIndex(pos)
+  var current = pos
+  var intervalLeft = 0'i64
+  for level in 0..<wm.bitWidth:
+    let shift = wm.bitWidth - level - 1
+    let currentOnes = wm.levels[level].rank1Unchecked(current)
+    let leftOnes = wm.levels[level].rank1Unchecked(intervalLeft)
+    if wm.levels[level].bitAtUnchecked(current):
+      result.value = result.value or (1'u64 shl shift)
+      current = wm.zeroCounts[level] + currentOnes
+      intervalLeft = wm.zeroCounts[level] + leftOnes
+    else:
+      current -= currentOnes
+      intervalLeft -= leftOnes
+  result.rankBefore = current - intervalLeft
 
 func `[]`*(wm: WaveletMatrix, i: int64): uint64 =
   ## Alias for `access(wm, i)`.

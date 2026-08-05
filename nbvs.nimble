@@ -28,3 +28,6 @@ task benchSimd, "Run SIMD SuccinctBitVector benchmarks":
 
 task benchMemory, "Report SuccinctBitVector logical memory":
   exec "nim c --path:src -d:release --mm:arc -r benchmarks/bench_memory.nim"
+
+task benchFmDictionary, "Run FmDictionary benchmarks":
+  exec "nim c --path:src -d:release --mm:arc -r benchmarks/fm_dictionary_bench.nim"

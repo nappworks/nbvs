@@ -9,8 +9,8 @@
 type
   PackedArray* = object
     ## Fixed-width packed array of unsigned 64-bit values.
-    len*: int64 ## Number of elements.
-    bitWidth*: int ## Number of bits used per element. Valid range is `0 .. 64`.
+    len*: int64        ## Number of elements.
+    bitWidth*: int     ## Number of bits used per element. Valid range is `0 .. 64`.
     data*: seq[uint64] ## Raw packed storage. Exposed for diagnostics and tests.
 
 func ceilDiv*[T: SomeInteger](x, y: T): T =
@@ -88,6 +88,25 @@ func get*(pa: PackedArray, i: int64): uint64 =
 
     result = ((hi shl loBits) or lo) and mask
 
+func getUnchecked*(pa: PackedArray, index: int): uint64 {.inline.} =
+  ## 境界検査を行わず、`index` の値を返します。
+  ##
+  ## 呼び出し側は `index in 0 ..< pa.len` を保証する必要があります。
+  if pa.bitWidth == 0:
+    return 0'u64
+
+  let bitPos = int64(index) * int64(pa.bitWidth)
+  let wordIdx = int(bitPos shr 6)
+  let bitOff = int(bitPos and 63)
+  if pa.bitWidth == 64:
+    return pa.data[wordIdx]
+
+  let mask = maskForWidth(pa.bitWidth)
+  result = pa.data[wordIdx] shr bitOff
+  if bitOff + pa.bitWidth > 64:
+    result = result or (pa.data[wordIdx + 1] shl (64 - bitOff))
+  result = result and mask
+
 func `[]`*(pa: PackedArray, i: int64): uint64 =
   ## Alias for `get(pa, i)`.
   result = pa.get(i)
@@ -117,7 +136,8 @@ func set*(pa: var PackedArray, i: int64, value: uint64) =
 
   if bitOff + pa.bitWidth <= 64:
     let clearMask = not (mask shl bitOff)
-    pa.data[wordIdx] = (pa.data[wordIdx] and clearMask) or ((value and mask) shl bitOff)
+    pa.data[wordIdx] = (pa.data[wordIdx] and clearMask) or ((value and
+        mask) shl bitOff)
   else:
     let loBits = 64 - bitOff
     let hiBits = pa.bitWidth - loBits
