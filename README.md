@@ -316,6 +316,22 @@ doAssert dict.findSubstring("ana") == @[2'u32, 3'u32]
 doAssert dict.getString(3) == "hana"
 ```
 
+For repeated substring queries, reuse an `FmQueryWorkspace`. The `Into` APIs
+also reuse caller-owned output capacity.
+
+```nim
+var workspace = initFmQueryWorkspace(dict)
+var ids: seq[DictionaryId]
+dict.findSubstringInto("ana", workspace, ids)
+
+var restored: string
+dict.getStringInto(3, restored)
+```
+
+`FmDictionaryBuildOptions(validateDistinct: false)` skips the temporary
+duplicate-checking hash set when the caller already guarantees distinct input.
+The default remains `true`.
+
 Construction uses SA-IS with `O(n)` time and `O(n)` temporary storage. L/S
 types and LMS positions are stored in two `BitVector` instances at one bit per
 flag. The finished dictionary is immutable. See
@@ -684,6 +700,22 @@ doAssert dict.findPrefix("app") == @[0'u32, 1'u32]
 doAssert dict.findSubstring("ana") == @[2'u32, 3'u32]
 doAssert dict.getString(3) == "hana"
 ```
+
+substring検索を繰り返す場合は`FmQueryWorkspace`を再利用できます。`Into` APIでは、
+呼び出し側が所有する出力bufferのcapacityも再利用します。
+
+```nim
+var workspace = initFmQueryWorkspace(dict)
+var ids: seq[DictionaryId]
+dict.findSubstringInto("ana", workspace, ids)
+
+var restored: string
+dict.getStringInto(3, restored)
+```
+
+呼び出し側で入力がdistinctと保証される場合は、
+`FmDictionaryBuildOptions(validateDistinct: false)`により一時的な重複検査HashSetを
+省略できます。既定値は後方互換のため`true`です。
 
 構築処理は時間計算量`O(n)`、追加領域`O(n)`のSA-ISを使用します。L/S型とLMS位置は、
 各flagを1 bitで保持する2つの`BitVector`へ格納します。構築後のDictionaryは

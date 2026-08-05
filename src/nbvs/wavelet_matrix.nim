@@ -25,7 +25,7 @@ func valueBitWidth(x: uint64): int {.inline.} =
   else:
     64 - countLeadingZeroBits(x)
 
-func buildLevelBits(values: openArray[uint64],
+func buildLevelBits[Value: SomeUnsignedInt](values: openArray[Value],
                     shift: int): tuple[bits: SuccinctBitVector, zeros: int] =
   result.bits = genSuccinctBitVector(int64(values.len))
   let wordCount = (values.len + 63) shr 6
@@ -35,7 +35,7 @@ func buildLevelBits(values: openArray[uint64],
     var word = 0'u64
     for bitIndex in 0..<bitCount:
       word = word or
-        (((values[start + bitIndex] shr shift) and 1'u64) shl bitIndex)
+        (((uint64(values[start + bitIndex]) shr shift) and 1'u64) shl bitIndex)
     result.bits.data[wordIndex] = word
     result.zeros += bitCount - countSetBits(word)
   result.bits.build()
@@ -77,7 +77,7 @@ func genWaveletMatrix*(xs: openArray[uint64]): WaveletMatrix =
         inc onePos
     swap(current, next)
 
-func genWaveletMatrix*(values: openArray[uint64],
+func genWaveletMatrix*[Value: SomeUnsignedInt](values: openArray[Value],
     bitWidth: int): WaveletMatrix =
   ## 指定した固定bit幅でWavelet Matrixを構築します。
   ##
@@ -98,10 +98,10 @@ func genWaveletMatrix*(values: openArray[uint64],
   if values.len == 0 or bitWidth == 0:
     return
 
-  var current = newSeq[uint64](values.len)
+  var current = newSeq[Value](values.len)
   for index, value in values:
     current[index] = value
-  var next = newSeq[uint64](values.len)
+  var next = newSeq[Value](values.len)
 
   for level in 0..<bitWidth:
     let shift = bitWidth - level - 1
@@ -111,7 +111,7 @@ func genWaveletMatrix*(values: openArray[uint64],
     var zeroPos = 0
     var onePos = zeros
     for value in current:
-      if ((value shr shift) and 1'u64) == 0:
+      if ((uint64(value) shr shift) and 1'u64) == 0:
         next[zeroPos] = value
         inc zeroPos
       else:
@@ -211,6 +211,34 @@ func rank*(wm: WaveletMatrix, value: uint64, left, right: int64): int64 =
       lo = wm.zeroCounts[level] + wm.levels[level].rank1Unchecked(lo)
       hi = wm.zeroCounts[level] + wm.levels[level].rank1Unchecked(hi)
   result = hi - lo
+
+func rankPair*(wm: WaveletMatrix, value: uint64, left,
+               right: int64): tuple[leftRank, rightRank: int64] =
+  ## `value`の`[0, left)`と`[0, right)`におけるrankを同時に返します。
+  ##
+  ## `left <= right`の半開区間を検証し、`O(bitWidth)`時間で処理します。
+  wm.checkRange(left, right)
+  if wm.n == 0 or not wm.valueFits(value):
+    return
+
+  var start = 0'i64
+  var leftPos = left
+  var rightPos = right
+  for level in 0..<wm.bitWidth:
+    let shift = wm.bitWidth - level - 1
+    let startOnes = wm.levels[level].rank1Unchecked(start)
+    let leftPosOnes = wm.levels[level].rank1Unchecked(leftPos)
+    let rightPosOnes = wm.levels[level].rank1Unchecked(rightPos)
+    if ((value shr shift) and 1'u64) == 0:
+      start -= startOnes
+      leftPos -= leftPosOnes
+      rightPos -= rightPosOnes
+    else:
+      start = wm.zeroCounts[level] + startOnes
+      leftPos = wm.zeroCounts[level] + leftPosOnes
+      rightPos = wm.zeroCounts[level] + rightPosOnes
+  result.leftRank = leftPos - start
+  result.rightRank = rightPos - start
 
 func rankIncl*(wm: WaveletMatrix, value: uint64, pos: int64): int64 =
   ## Counts occurrences of `value` in `[0, pos]`.

@@ -10,10 +10,73 @@
 以下の2026-07-17既存性能表は、ウォームアップを1回実行した後の3試行の中央値です。
 生の計測結果は `benchmarks/*_trial[1-3].csv` に保存しています。
 
+## FmDictionary query／構築メモリ改善（2026-08-05）
+
+`nbvs_fmDirectory_add2.md`と`nbvs_fmDirectory_add3.md`に基づき、次を採用しました。
+
+- LF traversalを`accessRank` 1回の`lfStep`へ融合
+- exact／prefixを開始separatorを含むanchored searchへ変更
+- patternの`seq[FmSymbol]` allocationを除去
+- `rankPair`でbackward stepの左右rankを融合
+- `FmQueryWorkspace`でsubstringのsort対象をoccurrence数からunique ID数へ削減
+- `findPrefixInto`、`findSubstringInto`、`getStringInto`で出力bufferを再利用
+- `startsAt`／`endsAt`をseparator位置`SuccinctBitVector`へ置換
+- `uint64` BWT展開を廃止し、`uint16` BWTからWavelet Matrixを直接構築
+- SA-ISのbucketを`uint32`化し、初回／最終induced sortでSA bufferを再利用
+
+query値は10,000回のwarm queryです。candidateのprefix、substring、restoreは
+workspace／出力bufferを再利用する`Into` APIを測定しています。CPU affinityを固定して
+いないため、特に小規模ケースの絶対値には実行時の揺れがあります。
+
+### 100万件・平均16 byteの更新前後比較
+
+同一のrelease/ARCバイナリを同じセッションで実行し、`/proc/<pid>/status`の`VmRSS`を
+10ms間隔で取得しました。query用入力も含むプロセス全体のpeak RSSです。
+
+| metric | baseline | candidate | 変化 |
+|:---|---:|---:|---:|
+| peak RSS | 1,383,020 KiB | 683,656 KiB | -50.6% |
+| 完成後storage | 24.801 MiB | 24.801 MiB | 変更なし |
+| FM build | 5,546.307 ms | 5,679.604 ms | +2.4% |
+| exact | 45,247.6 ns | 34,804.5 ns | -23.1% |
+| prefix | 44,830.3 ns | 35,561.7 ns | -20.7% |
+| substring | 41,838.2 ns | 34,126.8 ns | -18.4% |
+| restore | 39,759.6 ns | 34,989.4 ns | -12.0% |
+
+ピークRSSは目標の30%削減を上回り、構築時間の増加は3%未満でした。完成後の
+保持形式は変更していません。`validateDistinct: false`の効果は入力保証がある用途向けで、
+上表は後方互換な既定値`true`で測定しています。
+
+### Candidate query latency
+
+| strings | avg bytes | exact ns | prefix into ns | substring into ns | restore into ns |
+|---:|---:|---:|---:|---:|---:|
+| 10,000 | 8 | 7,264.1 | 6,866.9 | 6,898.2 | 8,816.3 |
+| 10,000 | 16 | 17,920.0 | 17,049.3 | 15,870.3 | 15,007.4 |
+| 10,000 | 32 | 30,978.0 | 31,019.0 | 38,406.1 | 25,317.2 |
+| 10,000 | 16（日本語） | 20,500.7 | 17,416.3 | 17,717.1 | 18,020.3 |
+| 100,000 | 16 | 22,213.1 | 20,274.9 | 19,757.5 | 20,170.1 |
+| 1,000,000 | 16 | 31,729.4 | 29,634.0 | 28,816.5 | 29,637.2 |
+
+最終行は全ケース連続測定時の値です。上のbaseline比較表はpeak RSS測定セッションの値を
+使用しているため、CPU schedulerの影響で絶対値が異なります。
+
+### Fused primitive比較
+
+| strings | rank × 2 ns | rankPair ns | rankPair速度倍率 |
+|---:|---:|---:|---:|
+| 10,000（16 byte） | 857.8 | 755.2 | 1.14x |
+| 1,000,000（16 byte） | 1,090.0 | 694.8 | 1.57x |
+
+`rankPair`は両規模で改善を確認できたため、FmDictionaryの`backwardStep`へ採用しました。
+PackedArray BWTは、`uint16`直接入力だけで50%以上のpeak RSS削減を達成し、packed展開の
+構築時間リスクを追加する必要がないため採用していません。LF samplingも完成後storageを
+増やすため、今回の「完成後メモリを維持する」範囲では採用していません。
+
 ## FmDictionary（2026-08-05）
 
-`benchmarks/fm_dictionary_bench.nim`で、固定seedから生成したdistinct文字列を
-release/ARC構成で測定しました。queryは10,000回で、prefixとsubstringには
+以下は改善前の基準値です。`benchmarks/fm_dictionary_bench.nim`で、固定seedから
+生成したdistinct文字列をrelease/ARC構成で測定しました。queryは10,000回で、prefixとsubstringには
 選択性を一定にするため登録文字列全体をpatternとして使用しています。結果件数の多い
 検索は、SA interval幅と返却ID数に比例する追加コストが発生します。
 

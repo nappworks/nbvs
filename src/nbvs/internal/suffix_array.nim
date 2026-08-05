@@ -20,30 +20,31 @@ proc classifyTypes[Symbol: SomeUnsignedInt](symbols: openArray[Symbol]): tuple[
       result.isLms.setBit(index)
 
 proc bucketSizes[Symbol: SomeUnsignedInt](symbols: openArray[Symbol],
-    alphabetSize: int): seq[int] =
-  result = newSeq[int](alphabetSize)
+    alphabetSize: int): seq[uint32] =
+  result = newSeq[uint32](alphabetSize)
   for symbol in symbols:
     inc result[int(symbol)]
 
-proc bucketHeads(sizes: openArray[int]): seq[int] =
-  result = newSeq[int](sizes.len)
-  var position = 0
+proc bucketHeads(sizes: openArray[uint32]): seq[uint32] =
+  result = newSeq[uint32](sizes.len)
+  var position = 0'u32
   for symbol, size in sizes:
     result[symbol] = position
     position += size
 
-proc bucketTails(sizes: openArray[int]): seq[int] =
-  result = newSeq[int](sizes.len)
-  var position = 0
+proc bucketTails(sizes: openArray[uint32]): seq[uint32] =
+  result = newSeq[uint32](sizes.len)
+  var position = 0'u32
   for symbol, size in sizes:
     position += size
     result[symbol] = position
 
-proc induce[Symbol: SomeUnsignedInt](symbols: openArray[Symbol], alphabetSize: int,
-            isSType: BitVector, orderedLms: openArray[uint32]): seq[uint32] =
+proc induceInto[Symbol: SomeUnsignedInt](symbols: openArray[Symbol],
+    alphabetSize: int, isSType: BitVector, orderedLms: openArray[uint32],
+    output: var seq[uint32]) =
   let sizes = bucketSizes(symbols, alphabetSize)
-  result = newSeq[uint32](symbols.len)
-  for value in result.mitems:
+  output.setLen(symbols.len)
+  for value in output.mitems:
     value = InvalidSaIndex
 
   var tails = bucketTails(sizes)
@@ -51,29 +52,30 @@ proc induce[Symbol: SomeUnsignedInt](symbols: openArray[Symbol], alphabetSize: i
     let suffix = orderedLms[index]
     let symbol = int(symbols[int(suffix)])
     dec tails[symbol]
-    result[tails[symbol]] = suffix
+    output[int(tails[symbol])] = suffix
 
   var heads = bucketHeads(sizes)
-  for index in 0..<result.len:
-    let suffix = result[index]
+  for index in 0..<output.len:
+    let suffix = output[index]
     if suffix == InvalidSaIndex or suffix == 0:
       continue
     let previous = int(suffix) - 1
     if not isSType[previous]:
       let symbol = int(symbols[previous])
-      result[heads[symbol]] = uint32(previous)
+      output[int(heads[symbol])] = uint32(previous)
       inc heads[symbol]
 
+  heads = @[]
   tails = bucketTails(sizes)
-  for index in countdown(result.high, 0):
-    let suffix = result[index]
+  for index in countdown(output.high, 0):
+    let suffix = output[index]
     if suffix == InvalidSaIndex or suffix == 0:
       continue
     let previous = int(suffix) - 1
     if isSType[previous]:
       let symbol = int(symbols[previous])
       dec tails[symbol]
-      result[tails[symbol]] = uint32(previous)
+      output[int(tails[symbol])] = uint32(previous)
 
 func lmsSubstringsEqual[Symbol: SomeUnsignedInt](symbols: openArray[Symbol],
                         isSType, isLms: BitVector,
@@ -108,7 +110,8 @@ proc sais[Symbol: SomeUnsignedInt](symbols: openArray[Symbol],
     if types.isLms[index]:
       lmsPositions.add uint32(index)
 
-  var suffixArray = induce(symbols, alphabetSize, types.isSType, lmsPositions)
+  var suffixArray: seq[uint32]
+  induceInto(symbols, alphabetSize, types.isSType, lmsPositions, suffixArray)
   var sortedLms = newSeqOfCap[uint32](lmsPositions.len)
   for suffix in suffixArray:
     if suffix != InvalidSaIndex and types.isLms[int(suffix)]:
@@ -139,10 +142,12 @@ proc sais[Symbol: SomeUnsignedInt](symbols: openArray[Symbol],
   else:
     reducedSuffixArray = sais(reduced, nameCount)
 
-  var orderedLms = newSeq[uint32](lmsPositions.len)
+  var orderedLms = move(sortedLms)
+  orderedLms.setLen(lmsPositions.len)
   for index, reducedIndex in reducedSuffixArray:
     orderedLms[index] = lmsPositions[int(reducedIndex)]
-  result = induce(symbols, alphabetSize, types.isSType, orderedLms)
+  induceInto(symbols, alphabetSize, types.isSType, orderedLms, suffixArray)
+  result = move(suffixArray)
 
 proc buildSuffixArray*(symbols: openArray[FmSymbol]): seq[uint32] =
   ## 一意な最小終端symbolを含むsymbol列をSA-ISで整列します。
