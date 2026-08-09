@@ -312,6 +312,42 @@ func genSuccinctBitVector*(maxBits: int64): SuccinctBitVector =
 
   result.resetLevelPadding()
 
+func estimateSuccinctBitVectorBytes*(bitLength: int64): int64 =
+  ## 指定bit長の`SuccinctBitVector`が保持する配列容量をbyte単位で推定します。
+  ##
+  ## 現在のscalar/SIMD backendが`genSuccinctBitVector`で確保するraw data、
+  ## rank補助配列、select treeを同じpadding規則で計算します。
+  if bitLength < 0:
+    raise newException(ValueError, "bitLength must be non-negative")
+  let level = calcLevel(bitLength)
+  if level < 0:
+    raise newException(ValueError, "bitLength exceeds supported range")
+  let dataWords = alignUp(ceilDiv(bitLength, 64'i64), 8'i64)
+  result = dataWords * int64(sizeof(uint64))
+  when not defined(nbvsSimd):
+    result += ceilDiv(bitLength, L1) * int64(sizeof(uint32))
+  when defined(nbvsSimd):
+    if bitLength > L5 and bitLength <= int64(uint32.high):
+      result += ceilDiv(bitLength, L1 * 2) * int64(sizeof(uint32))
+
+  if level >= 1:
+    let level1Len = ceilDiv(bitLength, L1)
+    let level2Len = ceilDiv(bitLength, L2)
+    let level3Len = ceilDiv(bitLength, L3)
+    let level4Len = ceilDiv(bitLength, L4)
+    let level5Len = ceilDiv(bitLength, L5)
+    let level6Len = ceilDiv(bitLength, L6)
+    let level7Len = ceilDiv(bitLength, L7)
+    var nodeCount = ceilDiv(level1Len, 16)
+    if level >= 2: nodeCount += ceilDiv(level2Len, 8)
+    if level >= 3: nodeCount += ceilDiv(level3Len, 8)
+    if level >= 4: nodeCount += ceilDiv(level4Len, 8)
+    if level >= 5: nodeCount += ceilDiv(level5Len, 8)
+    if level >= 6: nodeCount += ceilDiv(level6Len, 8)
+    if level >= 7: nodeCount += ceilDiv(level7Len, 8)
+    if level >= 8: inc nodeCount
+    result += nodeCount * SelectNodeWords.int64 * int64(sizeof(uint64))
+
 func checkPos(sbv: SuccinctBitVector, pos: int64) =
   if pos < 0 or pos >= sbv.lenOfBits:
     raise newException(IndexDefect, "Index out of bounds")

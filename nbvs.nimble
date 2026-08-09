@@ -44,8 +44,14 @@ task benchRadixCompaction, "Compare Radix Trie metadata compaction":
 task benchFmRev3, "Run the rev3 FM backend and corpus matrix":
   exec "nim c --path:src -d:release --mm:arc -r benchmarks/fm_dictionary_rev3.nim"
 
+task benchFmRev4, "Run the rev4 FM backend and corpus matrix":
+  exec "nim c --path:src -d:release --mm:arc -r benchmarks/fm_dictionary_rev3.nim"
+
 task benchRadixChildren, "Compare degree-specialized child searches":
   exec "nim c --path:src -d:release --mm:arc -r benchmarks/experimental/radix_child_search_bench.nim"
 
 task benchRadixBuildMemory, "Measure Radix Trie build peak RSS":
   exec "nim c --path:src -d:release --mm:arc -r benchmarks/experimental/radix_build_memory_bench.nim"
+
+task benchRunLengthBwt, "Benchmark RunLengthBwt primitives":
+  exec "nim c --path:src -d:release --mm:arc -r benchmarks/run_length_bwt_bench.nim"

@@ -20,6 +20,9 @@ proc verifyBackends(values: seq[string], patterns: seq[string]) =
     validateDistinct: true, fmBackend: fbpRunLength))
   doAssert wavelet.backendKind == fbWavelet
   doAssert runLength.backendKind == fbRunLength
+  doAssert wavelet.stats.actualWaveletBytes > 0
+  doAssert abs(wavelet.stats.waveletEstimateErrorRatio - 1.0) < 0.000001
+  doAssert abs(runLength.stats.rleEstimateErrorRatio - 1.0) < 0.000001
   for pattern in patterns:
     doAssert wavelet.findExactFm(pattern) == runLength.findExactFm(pattern)
     doAssert wavelet.findPrefix(pattern) == runLength.findPrefix(pattern)
@@ -44,6 +47,8 @@ block forcedBackends:
   doAssert backendStats.fmBackendKind == fbRunLength
   doAssert backendStats.runCount > 0
   doAssert backendStats.maximumRunLength > 0
+  doAssert backendStats.actualRleBytes > 0
+  doAssert abs(backendStats.rleEstimateErrorRatio - 1.0) < 0.000001
   doAssert usage.fmBackendKind == fbRunLength
   doAssert usage.totalBytes == usage.radixTrieBytes + usage.fmTotalBytes
 

@@ -68,6 +68,42 @@ FM容量71,508,894 byte、build 12,638.868 msでした。
 `benchmarks/fm_dictionary_rev3.nim count averageLength corpusOrdinal preferenceOrdinal`
 で行えます。
 
+## FmDictionary rev4 RLE改善（2026-08-09）
+
+`RunLengthBwt`の完成payloadから4 byte/runの`runLengths`を削除し、`rankPair`を
+run解決とrun-symbol Wavelet Matrix traversalを共有する専用実装へ変更しました。
+小規模BWTはalphabet 3、長さ0〜8の全組合せについて全区間を検証しています。
+
+1M-symbol synthetic BWT（release／ARC、各100万query）のrev3比は以下です。
+
+| run比率 | 分布 | memory削減 | rankPair改善 | accessRank変化 |
+|:---:|:---|---:|---:|---:|
+| 0.02 | uniform / skewed | 21.9% | 20.4% / 23.6% | -0.7% / -2.3% |
+| 0.05 | uniform / skewed | 28.5% | 16.1% / 22.8% | 8.5% / 6.5% |
+| 0.08 | uniform / skewed | 30.8% | 15.6% / 17.7% | 6.8% / 2.0% |
+| 0.10 | uniform / skewed | 31.6% | 15.3% / 18.5% | 0.4% / -12.2% |
+| 0.20 | uniform / skewed | 33.5% | 11.6% / 17.4% | 7.2% / 0.1% |
+| 0.50 | uniform / skewed | 34.7% | 16.6% / 14.6% | 6.0% / 4.1% |
+| 0.80 | uniform / skewed | 35.1% | 27.4% / 21.7% | 10.2% / 14.1% |
+
+SBV同一word predecessorとPacked direct run-startも比較しました。Packed lookup単体は
+SBV selectより速い一方、`accessRank`全体では一貫せず、追加容量も必要でした。
+同一word predecessorもrun分布によって最大12%悪化したため、両案とも完成payloadには
+採用せず既存SBV selectを維持しました。
+
+容量推定はraw bitsだけでなくSBV補助配列、run-symbol Wavelet Matrix、zero counts、
+symbol offsets/prefixesを含める実構造式へ変更しました。強制backendで推定値／実容量比
+1.000000を確認しています。
+
+Autoの10 corpus × 10k/100k/1M × 8/16/32/64 byte、計120条件を再測定し、32条件で
+RLEを選択しました。選択時のRLE/Wavelet推定容量比は0.486〜0.848、平均0.674です。
+候補閾値を比較した結果、0.90は15%削減目標を満たさない条件を追加するため、容量比0.85と
+run比0.20を維持しました。10k/100kの選択対象22条件ではRLE/Wavelet latency比がsuffix
+平均0.916・最大1.159、substring平均1.003・最大1.473でした。100万件の選択対象10条件も
+suffix最大0.945、substring最大1.055で、いずれも2倍以内です。
+
+再測定は`nimble benchRunLengthBwt`と`nimble benchFmRev4`を使用します。
+
 ### 100万件のmetadata候補比較
 
 `radix_compaction_bench.nim 1000000 16`による100万回のmicrobenchmarkです。

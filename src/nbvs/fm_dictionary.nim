@@ -39,6 +39,8 @@ type
     runRatio*, averageRunLength*: float
     maximumRunLength*: int64
     estimatedWaveletBytes*, estimatedRleBytes*: int64
+    actualWaveletBytes*, actualRleBytes*: int64
+    waveletEstimateErrorRatio*, rleEstimateErrorRatio*: float
 
   FmDictionaryMemoryUsage* = object
     ## FmDictionaryの論理的な格納容量内訳をbyte単位で表します。
@@ -81,6 +83,12 @@ const DefaultFmDictionaryBuildOptions* =
 
 func requiredBitWidth(maximum: uint64): int {.inline.} =
   if maximum == 0: 0 else: 64 - countLeadingZeroBits(maximum)
+
+func estimateWaveletMatrixBytes(length: int64): int64 =
+  int64(SymbolBitWidth) * estimateSuccinctBitVectorBytes(length) +
+    int64(SymbolBitWidth * sizeof(int64))
+
+func succinctBytes(bits: SuccinctBitVector): int64
 
 func bwtLength(dict: FmDictionary): int64 {.inline.} =
   if dict.backendKind == fbRunLength: dict.runLengthBwt.n else: dict.bwt.n
@@ -216,13 +224,10 @@ proc genFmDictionary*(strings: openArray[string],
   # 推定値だけで選択し、完成後に両表現を保持しない。
   let n = uint64(symbolCount)
   let runs = uint64(result.bwtRunCount)
-  result.estimatedWaveletBytes = (n * SymbolBitWidth.uint64 + 7) div 8
-  let runLengthWidth = uint64(requiredBitWidth(
-    uint64(result.maximumBwtRunLength)))
-  result.estimatedRunLengthBytes =
-    (n + 7) div 8 + runs * 2 + (runs * runLengthWidth + 7) div 8 +
-    (runs * SymbolBitWidth.uint64 + 7) div 8 + runs * 4 +
-    uint64((AlphabetSize + 1) * sizeof(uint32))
+  result.estimatedWaveletBytes = uint64(estimateWaveletMatrixBytes(
+    int64(n)))
+  result.estimatedRunLengthBytes = uint64(estimatedMemoryUsage(
+    int64(n), int64(runs)))
   let useRunLength = case options.fmBackend
     of fbpWavelet: false
     of fbpRunLength: true
@@ -252,6 +257,18 @@ func stats*(dict: FmDictionary): FmDictionaryStats =
   result.maximumRunLength = int64(dict.maximumBwtRunLength)
   result.estimatedWaveletBytes = int64(dict.estimatedWaveletBytes)
   result.estimatedRleBytes = int64(dict.estimatedRunLengthBytes)
+  if dict.backendKind == fbWavelet:
+    for level in dict.bwt.levels:
+      result.actualWaveletBytes += succinctBytes(level)
+    result.actualWaveletBytes += int64(dict.bwt.zeroCounts.len * sizeof(int64))
+    if result.estimatedWaveletBytes > 0:
+      result.waveletEstimateErrorRatio = result.actualWaveletBytes.float /
+        result.estimatedWaveletBytes.float
+  else:
+    result.actualRleBytes = dict.runLengthBwt.memoryUsage
+    if result.estimatedRleBytes > 0:
+      result.rleEstimateErrorRatio = result.actualRleBytes.float /
+        result.estimatedRleBytes.float
 
 func succinctBytes(bits: SuccinctBitVector): int64 =
   int64(bits.data.len * sizeof(uint64) +
@@ -272,7 +289,7 @@ func memoryUsage*(dict: FmDictionary): FmDictionaryMemoryUsage =
     result.bwtBytes += int64(dict.bwt.zeroCounts.len * sizeof(int64))
   else:
     result.runSymbolsBytes = int64(dict.runLengthBwt.runSymbols.len *
-      sizeof(FmSymbol) + dict.runLengthBwt.runLengths.len * sizeof(uint32))
+      sizeof(FmSymbol))
     result.runBoundaryBytes = succinctBytes(dict.runLengthBwt.runStarts)
     result.runPrefixBytes = int64(dict.runLengthBwt.symbolPrefixes.len *
       sizeof(uint32) + sizeof(dict.runLengthBwt.symbolOffsets))
