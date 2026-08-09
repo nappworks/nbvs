@@ -55,3 +55,9 @@ task benchRadixBuildMemory, "Measure Radix Trie build peak RSS":
 
 task benchRunLengthBwt, "Benchmark RunLengthBwt primitives":
   exec "nim c --path:src -d:release --mm:arc -r benchmarks/run_length_bwt_bench.nim"
+
+task benchFmRev5, "Measure FM query phases and tail latency":
+  exec "nim c --path:src -d:release -d:nbvsFmBenchmark --mm:arc -r benchmarks/fm_dictionary_rev5.nim 1000000 16 0 0 100000 8 1 tail"
+
+task benchFmRev5Perf, "Build the rev5 Linux perf workload":
+  exec "nim c --path:src -d:release -d:nbvsFmBenchmark --mm:arc benchmarks/fm_dictionary_rev5.nim"

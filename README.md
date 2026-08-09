@@ -346,6 +346,12 @@ Code that directly read the former public `RunLengthBwt.runLengths` field must
 derive each length from adjacent `runStarts.select1` positions (using `n` for
 the final boundary); the dictionary search APIs are unchanged.
 
+Suffix and substring backward search now dispatches once per query to a
+Wavelet- or RLE-specialized loop. LF traversal uses the corresponding checked-
+free internal path after the FM row range has already been established.
+`accessRankUnchecked` is also available for advanced callers, but its caller
+must guarantee `0 <= position < n`; normal code should use `accessRank`.
+
 Construction uses SA-IS with `O(n)` time and `O(n)` temporary storage. L/S
 types and LMS positions are stored in two `BitVector` instances at one bit per
 flag. The Radix Trie is built directly from sorted strings and adjacent LCPs;
@@ -362,6 +368,10 @@ parent delta distribution, suffix density, and storage diagnostics. See
 8/16/32/64-byte matrix. `nimble benchRadixChildren` compares degree-specific
 linear, binary, and bitmap child lookup. `nimble benchRunLengthBwt` measures
 RLE primitives and run-start alternatives. These commands can take substantial time.
+`nimble benchFmRev5` reports backward-search, LF-traversal, materialization,
+ordering, and p50/p90/p95/p99/max latency. On Linux, build with
+`nimble benchFmRev5Perf` and run `bash benchmarks/run_fm_rev5_perf.sh` to collect
+per-query CPU counters when `perf` is installed and permitted by the kernel.
 
 ### ReversedWaveletMatrix
 
@@ -784,6 +794,11 @@ touched-word bitmapへ切り替え、Dictionary ID昇順を維持します。DFS
 `runStarts.select1`の位置（最終境界は`n`）から各長さを導出してください。
 辞書検索APIに変更はありません。
 
+Suffix/Substringのbackward searchはquery入口で一度だけ分岐し、Wavelet/RLE別のloopを
+実行します。LF traversalもFM rowの範囲が保証された後は対応backendの検査なし内部経路を
+使用します。高度な用途では`accessRankUnchecked`も利用できますが、呼び出し側で
+`0 <= position < n`を保証する必要があります。通常は`accessRank`を使用してください。
+
 構築処理は時間計算量`O(n)`、追加領域`O(n)`のSA-ISを使用します。L/S型とLMS位置は、
 各flagを1 bitで保持する2つの`BitVector`へ格納します。Radix Trieは辞書順文字列と
 隣接LCPから直接構築し、一時nodeはlabel copyやnodeごとのchildren seqではなく
@@ -799,6 +814,10 @@ dense/sparse edge offset、internal terminal range、terminal node用の
 matrixを実行します。`nimble benchRadixChildren`はdegree別のlinear、binary、bitmap探索を
 比較します。`nimble benchRunLengthBwt`はRLE primitiveとrun-start候補を測定します。
 これらの完走には相応の時間がかかります。
+`nimble benchFmRev5`はbackward search、LF traversal、materialization、orderingと
+p50/p90/p95/p99/max latencyを出力します。Linuxで`perf`が利用可能な場合は
+`nimble benchFmRev5Perf`でbuild後、`bash benchmarks/run_fm_rev5_perf.sh`により
+query単位のCPU counterを取得できます。
 
 ### ReversedWaveletMatrix
 

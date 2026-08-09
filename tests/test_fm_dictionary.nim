@@ -244,6 +244,23 @@ block frequentSubstring:
     (id: 0'u32, occurrences: 998'u32),
     (id: 1'u32, occurrences: 498'u32)]
 
+block largeSubstringOrdering:
+  var values = newSeq[string](600)
+  for index in 0..<values.len:
+    values[index] = "shared-needle-" & $index
+  for preference in [fbpWavelet, fbpRunLength, fbpAuto]:
+    let dict = genFmDictionary(values, FmDictionaryBuildOptions(
+      validateDistinct: true, fmBackend: preference))
+    var workspace = initFmQueryWorkspace(dict)
+    let ids = dict.findSubstring("needle", workspace)
+    doAssert ids.len == values.len
+    for index, id in ids:
+      doAssert id == DictionaryId(index)
+    let occurrences = dict.findSubstringOccurrences("needle", workspace)
+    doAssert occurrences.len == values.len
+    for index, item in occurrences:
+      doAssert item == (id: DictionaryId(index), occurrences: 1'u32)
+
 block utf8:
   let dict = genFmDictionary(@["東京", "東京都", "京都", "大阪"])
   doAssert dict.findExact("東京") == 0

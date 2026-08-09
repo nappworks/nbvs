@@ -7,6 +7,7 @@ proc verify(values: seq[FmSymbol]) =
   for position, expected in values:
     doAssert bwt.access(int64(position)) == expected
     let item = bwt.accessRank(int64(position))
+    doAssert bwt.accessRankUnchecked(int64(position)) == item
     doAssert item.value == uint64(expected)
     var expectedRank = 0'i64
     for index in 0..<position:

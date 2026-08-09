@@ -40,6 +40,7 @@ block fixedBitWidthAndAccessRank:
   doAssert wm.toSeq == values
   for index, value in values:
     let item = wm.accessRank(int64(index))
+    doAssert wm.accessRankUnchecked(int64(index)) == item
     doAssert item.value == value
     doAssert item.rankBefore == wm.rank(value, int64(index))
   doAssert genWaveletMatrix(newSeq[uint64](), 9).bitWidth == 9

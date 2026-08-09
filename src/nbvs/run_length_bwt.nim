@@ -89,15 +89,22 @@ func runAt(bwt: RunLengthBwt,
   result.run = int(bwt.runStarts.rank1(position + 1) - 1)
   result.start = bwt.runStartAt(result.run)
 
-func accessRank*(bwt: RunLengthBwt,
-                 position: int64): tuple[value: uint64, rankBefore: int64] =
-  ## `position`のsymbolと同じsymbolの`[0, position)`での出現数を返します。
-  bwt.checkIndex(position)
+func accessRankUnchecked*(bwt: RunLengthBwt,
+    position: int64): tuple[value: uint64, rankBefore: int64] =
+  ## 検査なしで`position`のsymbolと同値の出現数を返します。
+  ##
+  ## 呼び出し側は`0 <= position < bwt.n`を保証する必要があります。
   let location = bwt.runAt(position)
   let symbol = bwt.runSymbols[location.run]
   result.value = uint64(symbol)
   result.rankBefore = bwt.prefixBeforeRun(symbol, location.run) +
     position - location.start
+
+func accessRank*(bwt: RunLengthBwt,
+                 position: int64): tuple[value: uint64, rankBefore: int64] =
+  ## `position`のsymbolと同じsymbolの`[0, position)`での出現数を返します。
+  bwt.checkIndex(position)
+  bwt.accessRankUnchecked(position)
 
 func access*(bwt: RunLengthBwt, position: int64): FmSymbol =
   ## `position`のsymbolを返します。

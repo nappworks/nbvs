@@ -3,6 +3,8 @@
 ## 文字列はUTF-8 byte列として処理され、入力順がDictionary IDになります。
 
 import std/[algorithm, bitops, sets]
+when defined(nbvsFmBenchmark):
+  import std/[monotimes, times]
 import bit_vector, packed_array, succinct_bit_vector, succinct_radix_trie,
   wavelet_matrix, run_length_bwt
 import internal/[fm_symbols, suffix_array]
@@ -76,6 +78,20 @@ type
   LfStepResult = object
     symbol: FmSymbol
     nextRow: int64
+
+when defined(nbvsFmBenchmark):
+  type
+    FmQueryTiming* = object
+      ## rev5 benchmarkでquery phase別の所要時間を保持します。
+      backwardSearchNs*: int64
+      lfTraversalNs*: int64
+      materializationNs*: int64
+      orderingNs*: int64
+      totalNs*: int64
+      intervalWidth*: int64
+      lfSteps*: int64
+      totalOccurrences*: int64
+      uniqueIds*: int64
 
 const DefaultFmDictionaryBuildOptions* =
   FmDictionaryBuildOptions(validateDistinct: true, fmBackend: fbpAuto)
@@ -309,14 +325,42 @@ func backwardStep(dict: FmDictionary, symbol: FmSymbol,
   result.left = base + ranks.leftRank
   result.right = base + ranks.rightRank
 
-func backwardSearchBytes(dict: FmDictionary, pattern: string): FmInterval =
-  result = FmInterval(left: 0, right: dict.bwtLength)
-  if pattern.len == 0:
-    return
+func backwardStepWavelet(dict: FmDictionary, symbol: FmSymbol,
+                         interval: FmInterval): FmInterval {.inline.} =
+  let base = int64(dict.cTable.getUnchecked(int(symbol)))
+  let ranks = dict.bwt.rankPair(uint64(symbol), interval.left, interval.right)
+  result.left = base + ranks.leftRank
+  result.right = base + ranks.rightRank
+
+func backwardStepRunLength(dict: FmDictionary, symbol: FmSymbol,
+                           interval: FmInterval): FmInterval {.inline.} =
+  let base = int64(dict.cTable.getUnchecked(int(symbol)))
+  let ranks = dict.runLengthBwt.rankPair(symbol, interval.left,
+    interval.right)
+  result.left = base + ranks.leftRank
+  result.right = base + ranks.rightRank
+
+func backwardSearchBytesWavelet(dict: FmDictionary,
+                                pattern: string): FmInterval =
+  result = FmInterval(left: 0, right: dict.bwt.n)
   for index in countdown(pattern.high, 0):
-    result = dict.backwardStep(encodeByte(byte(pattern[index])), result)
+    result = dict.backwardStepWavelet(encodeByte(byte(pattern[index])), result)
     if result.left >= result.right:
       return
+
+func backwardSearchBytesRunLength(dict: FmDictionary,
+                                  pattern: string): FmInterval =
+  result = FmInterval(left: 0, right: dict.runLengthBwt.n)
+  for index in countdown(pattern.high, 0):
+    result = dict.backwardStepRunLength(encodeByte(byte(pattern[index])), result)
+    if result.left >= result.right:
+      return
+
+func backwardSearchBytes(dict: FmDictionary, pattern: string): FmInterval =
+  if dict.backendKind == fbRunLength:
+    dict.backwardSearchBytesRunLength(pattern)
+  else:
+    dict.backwardSearchBytesWavelet(pattern)
 
 func backwardSearchExact(dict: FmDictionary, value: string): FmInterval =
   result = FmInterval(left: 0, right: dict.bwtLength)
@@ -333,15 +377,35 @@ func backwardSearchPrefix(dict: FmDictionary, prefix: string): FmInterval =
     result = dict.backwardStep(SeparatorSymbol, result)
 
 func backwardSearchSuffix(dict: FmDictionary, suffix: string): FmInterval =
-  result = FmInterval(left: 0, right: dict.bwtLength)
-  result = dict.backwardStep(SeparatorSymbol, result)
-  for index in countdown(suffix.high, 0):
-    result = dict.backwardStep(encodeByte(byte(suffix[index])), result)
-    if result.left >= result.right:
-      return
+  if dict.backendKind == fbRunLength:
+    result = FmInterval(left: 0, right: dict.runLengthBwt.n)
+    result = dict.backwardStepRunLength(SeparatorSymbol, result)
+    for index in countdown(suffix.high, 0):
+      result = dict.backwardStepRunLength(encodeByte(byte(suffix[index])), result)
+      if result.left >= result.right:
+        return
+  else:
+    result = FmInterval(left: 0, right: dict.bwt.n)
+    result = dict.backwardStepWavelet(SeparatorSymbol, result)
+    for index in countdown(suffix.high, 0):
+      result = dict.backwardStepWavelet(encodeByte(byte(suffix[index])), result)
+      if result.left >= result.right:
+        return
 
 func lfStep(dict: FmDictionary, row: int64): LfStepResult {.inline.} =
   let item = dict.bwtAccessRank(row)
+  result.symbol = FmSymbol(item.value)
+  result.nextRow = int64(dict.cTable.getUnchecked(int(item.value))) +
+    item.rankBefore
+
+func lfStepWavelet(dict: FmDictionary, row: int64): LfStepResult {.inline.} =
+  let item = dict.bwt.accessRankUnchecked(row)
+  result.symbol = FmSymbol(item.value)
+  result.nextRow = int64(dict.cTable.getUnchecked(int(item.value))) +
+    item.rankBefore
+
+func lfStepRunLength(dict: FmDictionary, row: int64): LfStepResult {.inline.} =
+  let item = dict.runLengthBwt.accessRankUnchecked(row)
   result.symbol = FmSymbol(item.value)
   result.nextRow = int64(dict.cTable.getUnchecked(int(item.value))) +
     item.rankBefore
@@ -358,11 +422,11 @@ func idFromSeparatorFRow(dict: FmDictionary, row: int64): int64 {.inline.} =
   let encodedId = dict.startAnchorToEncodedId.getUnchecked(int(ordinal))
   if encodedId == 0: -1 else: int64(encodedId - 1)
 
-func dictionaryIdFromMatchRow(dict: FmDictionary, initialRow: int64): int64 =
-  var row = initialRow
+template dictionaryIdFromMatchRowImpl(stepCall: untyped): untyped =
+  var row {.inject.} = initialRow
   var steps = 0'u32
   while true:
-    let step = dict.lfStep(row)
+    let step = stepCall
     if step.symbol == SeparatorSymbol:
       let ordinal = step.nextRow -
         int64(dict.cTable.getUnchecked(int(SeparatorSymbol)))
@@ -376,6 +440,48 @@ func dictionaryIdFromMatchRow(dict: FmDictionary, initialRow: int64): int64 =
     inc steps
     if steps > dict.maxEncodedStringLength:
       raise newException(ValueError, "invalid FM Dictionary anchor chain")
+
+func dictionaryIdFromMatchRowWavelet(dict: FmDictionary,
+                                     initialRow: int64): int64 =
+  dictionaryIdFromMatchRowImpl(dict.lfStepWavelet(row))
+
+func dictionaryIdFromMatchRowRunLength(dict: FmDictionary,
+                                       initialRow: int64): int64 =
+  dictionaryIdFromMatchRowImpl(dict.lfStepRunLength(row))
+
+func dictionaryIdFromMatchRow(dict: FmDictionary, initialRow: int64): int64 =
+  if dict.backendKind == fbRunLength:
+    dict.dictionaryIdFromMatchRowRunLength(initialRow)
+  else:
+    dict.dictionaryIdFromMatchRowWavelet(initialRow)
+
+when defined(nbvsFmBenchmark):
+  template countedMatchRowImpl(stepCall: untyped): untyped =
+    var row {.inject.} = initialRow
+    var chainSteps = 0'u32
+    while true:
+      let step = stepCall
+      inc steps
+      if step.symbol == SeparatorSymbol:
+        let ordinal = step.nextRow -
+          int64(dict.cTable.getUnchecked(int(SeparatorSymbol)))
+        if ordinal < 0 or ordinal >= dict.startAnchorToEncodedId.len:
+          return -1
+        let encodedId = dict.startAnchorToEncodedId.getUnchecked(int(ordinal))
+        return if encodedId == 0: -1 else: int64(encodedId - 1)
+      if step.symbol == EndSymbol:
+        return -1
+      row = step.nextRow
+      inc chainSteps
+      if chainSteps > dict.maxEncodedStringLength:
+        raise newException(ValueError, "invalid FM Dictionary anchor chain")
+
+  func dictionaryIdFromMatchRowCounted(dict: FmDictionary,
+      initialRow: int64, steps: var int64): int64 =
+    if dict.backendKind == fbRunLength:
+      countedMatchRowImpl(dict.lfStepRunLength(row))
+    else:
+      countedMatchRowImpl(dict.lfStepWavelet(row))
 
 func findExactFm*(dict: FmDictionary, value: string): int64 =
   ## FM-indexで完全一致するDictionary IDを返します。
@@ -491,6 +597,9 @@ proc recordMatch(workspace: var FmQueryWorkspace, id: DictionaryId,
   elif countOccurrences:
     inc workspace.counts[index]
 
+proc orderMatches(workspace: var FmQueryWorkspace) =
+  workspace.touchedIds.sort()
+
 proc collectMatches(dict: FmDictionary, pattern: string,
                     workspace: var FmQueryWorkspace,
                     countOccurrences: bool) =
@@ -500,7 +609,7 @@ proc collectMatches(dict: FmDictionary, pattern: string,
     let dictionaryId = dict.dictionaryIdFromMatchRow(row)
     if dictionaryId >= 0:
       workspace.recordMatch(DictionaryId(dictionaryId), countOccurrences)
-  workspace.touchedIds.sort()
+  workspace.orderMatches()
 
 proc getStringIntoFm*(dict: FmDictionary, id: DictionaryId,
                       output: var string) =
@@ -599,3 +708,64 @@ iterator items*(dict: FmDictionary): string =
   ## 文字列をDictionary ID順に復元して列挙します。
   for dictionaryId in 0..<dict.len:
     yield dict.getString(DictionaryId(dictionaryId))
+
+when defined(nbvsFmBenchmark):
+  proc elapsedNs(started: MonoTime): int64 {.inline.} =
+    (getMonoTime() - started).inNanoseconds
+
+  proc benchmarkSuffixQuery*(dict: FmDictionary, suffix: string,
+                             output: var seq[DictionaryId]): FmQueryTiming =
+    ## Suffix queryをphase別に計測するbenchmark専用APIです。
+    let totalStarted = getMonoTime()
+    output.setLen(0)
+    var started = getMonoTime()
+    let interval = dict.backwardSearchSuffix(suffix)
+    result.backwardSearchNs = elapsedNs(started)
+    result.intervalWidth = interval.right - interval.left
+
+    started = getMonoTime()
+    for row in interval.left..<interval.right:
+      let dictionaryId = dict.dictionaryIdFromMatchRowCounted(row,
+        result.lfSteps)
+      if dictionaryId >= 0:
+        output.add DictionaryId(dictionaryId)
+    result.lfTraversalNs = elapsedNs(started)
+    result.totalOccurrences = int64(output.len)
+    result.uniqueIds = result.totalOccurrences
+
+    started = getMonoTime()
+    output.sort()
+    result.orderingNs = elapsedNs(started)
+    result.totalNs = elapsedNs(totalStarted)
+
+  proc benchmarkSubstringQuery*(dict: FmDictionary, pattern: string,
+      workspace: var FmQueryWorkspace,
+      output: var seq[DictionaryId]): FmQueryTiming =
+    ## Substring queryをphase別に計測するbenchmark専用APIです。
+    let totalStarted = getMonoTime()
+    output.setLen(0)
+    workspace.beginQuery(dict.len)
+    var started = getMonoTime()
+    let interval = dict.backwardSearchBytes(pattern)
+    result.backwardSearchNs = elapsedNs(started)
+    result.intervalWidth = interval.right - interval.left
+
+    started = getMonoTime()
+    for row in interval.left..<interval.right:
+      let dictionaryId = dict.dictionaryIdFromMatchRowCounted(row,
+        result.lfSteps)
+      if dictionaryId >= 0:
+        workspace.recordMatch(DictionaryId(dictionaryId), false)
+        inc result.totalOccurrences
+    result.lfTraversalNs = elapsedNs(started)
+
+    started = getMonoTime()
+    workspace.orderMatches()
+    result.orderingNs = elapsedNs(started)
+    result.uniqueIds = int64(workspace.touchedIds.len)
+
+    started = getMonoTime()
+    for dictionaryId in workspace.touchedIds:
+      output.add dictionaryId
+    result.materializationNs = elapsedNs(started)
+    result.totalNs = elapsedNs(totalStarted)
