@@ -2,23 +2,33 @@
 ##
 ## nodeはDFS preorder、edge labelと子一覧は連続領域へ格納します。
 
-import std/[algorithm, bitops, strutils]
+import std/[algorithm, bitops, math, strutils]
 import packed_array, succinct_bit_vector
 
 type
+  BlockPackedParents* = object
+    ## 256 node単位のbit幅で `node - parent` を圧縮します。
+    bitWidths*: seq[uint8]
+    wordOffsets*: seq[uint32]
+    data*: seq[uint64]
+
   SuccinctRadixTrie* = object
     ## byte列の完全一致、前方一致、IDからの復元を提供します。
-    firstChild*: PackedArray         ## `childNodes`内の子一覧開始位置。
-    childCount*: PackedArray         ## nodeごとの直接の子の数。
-    childNodes*: PackedArray         ## 直接の子node IDを格納する連続領域。
-    parent*: PackedArray             ## nodeから親nodeへのmapping。
-    subtreeEnd*: PackedArray         ## DFS部分木の排他的終端node ID。
-    edgeFirstBytes*: seq[byte]       ## root以外のedge label先頭byte。
-    edgeSuffixBytes*: seq[byte]      ## edge labelの2 byte目以降を連結した領域。
-    edgeSuffixOffsets*: PackedArray ## edge suffixの開始offset。末尾番兵を含みます。
-    terminalBits*: SuccinctBitVector ## terminal nodeを示すbit vector。
-    terminalIds*: PackedArray        ## terminal DFS順のDictionary ID。
-    idToTerminal*: PackedArray       ## Dictionary IDからterminal nodeへのmapping。
+    internalBits*: SuccinctBitVector    ## 子を持つnodeを示すbit vector。
+    internalFirstChild*: PackedArray    ## internal nodeごとの子一覧開始位置。
+    internalChildCount*: PackedArray    ## internal nodeごとの直接の子の数。
+    childNodes*: PackedArray            ## 直接の子node IDを格納する連続領域。
+    parents*: BlockPackedParents        ## nodeから親nodeへのdelta圧縮mapping。
+    edgeFirstBytes*: seq[byte]          ## root以外のedge label先頭byte。
+    edgeSuffixBytes*: seq[byte]         ## edge labelの2 byte目以降を連結した領域。
+    sparseSuffixes*: bool ## suffixが疎な場合にsparse metadataを使います。
+    hasSuffixBits*: SuccinctBitVector   ## suffixを持つedgeを示すbit vector。
+    edgeSuffixOffsets*: PackedArray ## adaptiveなsuffix offset。末尾番兵を含みます。
+    terminalBits*: SuccinctBitVector    ## terminal nodeを示すbit vector。
+    terminalIds*: PackedArray           ## terminal DFS順のDictionary ID。
+    idToTerminal*: PackedArray          ## Dictionary IDからterminal nodeへのmapping。
+    internalFirstTerminal*: PackedArray ## internal部分木の先頭terminal ordinal。
+    internalTerminalCount*: PackedArray ## internal部分木のterminal数。
 
   RadixTrieStats* = object
     ## Radix Trieの構造統計を表します。
@@ -28,6 +38,15 @@ type
     maximumEdgeLabelLength*: int64
     averageTerminalDepth*: float
     maximumDepth*: int64
+    internalNodeCount*: int64
+    leafRatio*: float
+    suffixBearingEdgeCount*: int64
+    suffixBearingEdgeRatio*: float
+    parentDeltaAverage*, parentDeltaMedian*: float
+    parentDeltaP90*, parentDeltaP99*, parentDeltaMaximum*: int64
+    parentDeltaBitWidthHistogram*: array[5, int64]
+    suffixLengthHistogram*: array[5, int64]
+    terminalIdCorrelation*: float
     degreeZeroCount*, degreeOneCount*: int64
     degreeTwoToFourCount*, degreeFiveToSixteenCount*: int64
     degreeSeventeenOrMoreCount*: int64
@@ -36,7 +55,8 @@ type
     ## Radix Trieの論理的な格納容量内訳をbyte単位で表します。
     topologyBytes*, edgeFirstBytes*, edgeSuffixBytes*: int64
     edgeBoundaryBytes*, terminalBitsBytes*, terminalIdsBytes*: int64
-    idToTerminalBytes*, childNavigationBytes*, totalBytes*: int64
+    idToTerminalBytes*, childNavigationBytes*, terminalRangeBytes*: int64
+    totalBytes*: int64
 
   BuildNode = object
     label: string
@@ -50,6 +70,64 @@ type
 
 func requiredBitWidth(maximum: uint64): int {.inline.} =
   if maximum == 0: 0 else: 64 - countLeadingZeroBits(maximum)
+
+func accessUnchecked(bits: SuccinctBitVector, node: int): bool {.inline.} =
+  ## 呼び出し側は `node` がbit vector範囲内であることを保証する。
+  (bits.data[node shr 6] and (1'u64 shl (node and 63))) != 0
+
+const ParentBlockSize = 256
+
+proc genBlockPackedParents(parents: openArray[int]): BlockPackedParents =
+  let blockCount = (parents.len + ParentBlockSize - 1) div ParentBlockSize
+  result.bitWidths = newSeq[uint8](blockCount)
+  result.wordOffsets = newSeq[uint32](blockCount + 1)
+  var totalWords = 0
+  for blockIndex in 0..<blockCount:
+    let first = blockIndex * ParentBlockSize
+    let last = min(parents.len, first + ParentBlockSize)
+    var maximumDelta = 0'u64
+    for node in first..<last:
+      maximumDelta = max(maximumDelta, uint64(node - parents[node]))
+    let bitWidth = requiredBitWidth(maximumDelta)
+    result.bitWidths[blockIndex] = uint8(bitWidth)
+    result.wordOffsets[blockIndex] = uint32(totalWords)
+    let totalBits = (last - first) * bitWidth
+    totalWords += (totalBits + 63) div 64
+  result.wordOffsets[blockCount] = uint32(totalWords)
+  result.data = newSeq[uint64](totalWords)
+  for node, parent in parents:
+    let blockIndex = node div ParentBlockSize
+    let local = node mod ParentBlockSize
+    let bitWidth = int(result.bitWidths[blockIndex])
+    if bitWidth == 0:
+      continue
+    let delta = uint64(node - parent)
+    let bitPosition = local * bitWidth
+    let word = int(result.wordOffsets[blockIndex]) + (bitPosition shr 6)
+    let offset = bitPosition and 63
+    result.data[word] = result.data[word] or (delta shl offset)
+    if offset + bitWidth > 64:
+      result.data[word + 1] = result.data[word + 1] or
+        (delta shr (64 - offset))
+
+func parentAt*(parents: BlockPackedParents, node: int): int {.inline.} =
+  ## 指定nodeの親node IDを返します。rootの親はroot自身です。
+  let blockIndex = node div ParentBlockSize
+  let bitWidth = int(parents.bitWidths[blockIndex])
+  if bitWidth == 0:
+    return node
+  let bitPosition = (node mod ParentBlockSize) * bitWidth
+  let word = int(parents.wordOffsets[blockIndex]) + (bitPosition shr 6)
+  let offset = bitPosition and 63
+  var delta = parents.data[word] shr offset
+  if offset + bitWidth > 64:
+    delta = delta or (parents.data[word + 1] shl (64 - offset))
+  delta = delta and maskForWidth(bitWidth)
+  node - int(delta)
+
+func parentAt*(trie: SuccinctRadixTrie, node: int): int {.inline.} =
+  ## 指定nodeの親node IDを返します。
+  trie.parents.parentAt(node)
 
 func commonPrefixLength(left, right: string): int {.inline.} =
   let limit = min(left.len, right.len)
@@ -150,73 +228,142 @@ proc genSuccinctRadixTrie*(strings: openArray[string]): SuccinctRadixTrie =
 
   var childTotal = 0
   var suffixTotal = 0
+  var suffixBearingCount = 0
   var terminalCount = 0
+  var internalCount = 0
   var maximumDegree = 0
   for node in nodes:
     childTotal += node.children.len
     maximumDegree = max(maximumDegree, node.children.len)
+    if node.children.len > 0:
+      inc internalCount
     if node.label.len > 0:
       suffixTotal += node.label.len - 1
+      if node.label.len > 1:
+        inc suffixBearingCount
     if node.terminalId >= 0:
       inc terminalCount
 
-  result.firstChild = genPackedArray(nodeCount,
+  var terminalPrefixes = newSeq[int](nodeCount + 1)
+  for flatNode, buildNode in order:
+    terminalPrefixes[flatNode + 1] = terminalPrefixes[flatNode]
+    if nodes[buildNode].terminalId >= 0:
+      inc terminalPrefixes[flatNode + 1]
+
+  result.internalBits = genSuccinctBitVector(int64(nodeCount))
+  result.internalFirstChild = genPackedArray(internalCount,
     requiredBitWidth(uint64(childTotal)))
-  result.childCount = genPackedArray(nodeCount,
+  result.internalChildCount = genPackedArray(internalCount,
     requiredBitWidth(uint64(maximumDegree)))
   result.childNodes = genPackedArray(childTotal,
     requiredBitWidth(uint64(max(0, nodeCount - 1))))
-  result.parent = genPackedArray(nodeCount,
-    requiredBitWidth(uint64(max(0, nodeCount - 1))))
-  result.subtreeEnd = genPackedArray(nodeCount,
-    requiredBitWidth(uint64(nodeCount)))
   result.edgeFirstBytes = newSeq[byte](nodeCount)
   result.edgeSuffixBytes = newSeq[byte](suffixTotal)
-  result.edgeSuffixOffsets = genPackedArray(nodeCount + 1,
+  result.sparseSuffixes = suffixBearingCount * 4 <= nodeCount
+  if result.sparseSuffixes:
+    result.hasSuffixBits = genSuccinctBitVector(int64(nodeCount))
+  let suffixOffsetCount = if result.sparseSuffixes:
+    suffixBearingCount + 1
+  else:
+    nodeCount + 1
+  result.edgeSuffixOffsets = genPackedArray(suffixOffsetCount,
     requiredBitWidth(uint64(suffixTotal)))
   result.terminalBits = genSuccinctBitVector(int64(nodeCount))
   result.terminalIds = genPackedArray(terminalCount,
     requiredBitWidth(uint64(strings.len)))
   result.idToTerminal = genPackedArray(strings.len,
     requiredBitWidth(uint64(max(0, nodeCount - 1))))
+  result.internalFirstTerminal = genPackedArray(internalCount,
+    requiredBitWidth(uint64(terminalCount)))
+  result.internalTerminalCount = genPackedArray(internalCount,
+    requiredBitWidth(uint64(terminalCount)))
 
   var childPosition = 0
   var suffixPosition = 0
+  var suffixBearingPosition = 0
   var terminalPosition = 0
+  var internalPosition = 0
+  var flatParents = newSeq[int](nodeCount)
   for flatNode, buildNode in order:
     let node = nodes[buildNode]
-    result.firstChild[flatNode] = uint64(childPosition)
-    result.childCount[flatNode] = uint64(node.children.len)
+    if node.children.len > 0:
+      result.internalBits.setBit(int64(flatNode))
+      result.internalFirstChild[internalPosition] = uint64(childPosition)
+      result.internalChildCount[internalPosition] = uint64(node.children.len)
+      let firstTerminal = terminalPrefixes[flatNode]
+      let subtreeTerminalCount =
+        terminalPrefixes[subtreeEnds[flatNode]] - firstTerminal
+      result.internalFirstTerminal[internalPosition] = uint64(firstTerminal)
+      result.internalTerminalCount[internalPosition] =
+        uint64(subtreeTerminalCount)
+      inc internalPosition
     for child in node.children:
       result.childNodes[childPosition] = uint64(buildToFlat[child])
       inc childPosition
-    result.parent[flatNode] = if node.parent < 0: 0'u64
-      else: uint64(buildToFlat[node.parent])
-    result.subtreeEnd[flatNode] = uint64(subtreeEnds[flatNode])
-    result.edgeSuffixOffsets[flatNode] = uint64(suffixPosition)
+    flatParents[flatNode] = if node.parent < 0: 0
+      else: buildToFlat[node.parent]
+    if not result.sparseSuffixes:
+      result.edgeSuffixOffsets[flatNode] = uint64(suffixPosition)
     if node.label.len > 0:
       result.edgeFirstBytes[flatNode] = byte(node.label[0])
-      for index in 1..<node.label.len:
-        result.edgeSuffixBytes[suffixPosition] = byte(node.label[index])
-        inc suffixPosition
+      if node.label.len > 1:
+        if result.sparseSuffixes:
+          result.hasSuffixBits.setBit(int64(flatNode))
+          result.edgeSuffixOffsets[suffixBearingPosition] = uint64(suffixPosition)
+        for index in 1..<node.label.len:
+          result.edgeSuffixBytes[suffixPosition] = byte(node.label[index])
+          inc suffixPosition
+        inc suffixBearingPosition
     if node.terminalId >= 0:
       result.terminalBits.setBit(int64(flatNode))
       result.terminalIds[terminalPosition] = uint64(node.terminalId)
       inc terminalPosition
-  result.edgeSuffixOffsets[nodeCount] = uint64(suffixPosition)
+  result.edgeSuffixOffsets[suffixOffsetCount - 1] = uint64(suffixPosition)
+  result.internalBits.build()
+  if result.sparseSuffixes:
+    result.hasSuffixBits.build()
   result.terminalBits.build()
+  result.parents = genBlockPackedParents(flatParents)
   for dictionaryId, buildNode in idToBuildNode:
     result.idToTerminal[dictionaryId] = uint64(buildToFlat[buildNode])
 
-func edgeSuffixStart(trie: SuccinctRadixTrie, node: int): int {.inline.} =
-  int(trie.edgeSuffixOffsets.getUnchecked(node))
+func internalIndex(trie: SuccinctRadixTrie, node: int): int {.inline.} =
+  if not trie.internalBits.accessUnchecked(node):
+    return -1
+  int(trie.internalBits.rank1Unchecked(int64(node)))
 
-func edgeSuffixEnd(trie: SuccinctRadixTrie, node: int): int {.inline.} =
-  int(trie.edgeSuffixOffsets.getUnchecked(node + 1))
+func childCountAt*(trie: SuccinctRadixTrie, node: int): int {.inline.} =
+  ## 指定nodeの直接の子の数を返します。
+  let index = trie.internalIndex(node)
+  if index < 0: 0
+  else: int(trie.internalChildCount.getUnchecked(index))
+
+func firstChildOffset*(trie: SuccinctRadixTrie, node: int): int {.inline.} =
+  ## internal nodeの `childNodes` 内の開始位置を返します。
+  ##
+  ## leafの場合は `-1` を返します。
+  let index = trie.internalIndex(node)
+  if index < 0: -1
+  else: int(trie.internalFirstChild.getUnchecked(index))
+
+func edgeSuffixRange*(trie: SuccinctRadixTrie,
+                      node: int): tuple[first, last: int] {.inline.} =
+  ## 指定nodeへ入るedgeのsuffix範囲を返します。
+  if not trie.sparseSuffixes:
+    return (first: int(trie.edgeSuffixOffsets.getUnchecked(node)),
+      last: int(trie.edgeSuffixOffsets.getUnchecked(node + 1)))
+  if not trie.hasSuffixBits.accessUnchecked(node):
+    return (first: 0, last: 0)
+  let ordinal = int(trie.hasSuffixBits.rank1Unchecked(int64(node)))
+  result.first = int(trie.edgeSuffixOffsets.getUnchecked(ordinal))
+  result.last = int(trie.edgeSuffixOffsets.getUnchecked(ordinal + 1))
 
 func findChild(trie: SuccinctRadixTrie, node: int, firstByte: byte): int =
-  let first = int(trie.firstChild.getUnchecked(node))
-  let count = int(trie.childCount.getUnchecked(node))
+  let internal = trie.internalIndex(node)
+  if internal < 0:
+    return -1
+  let first = int(trie.internalFirstChild.getUnchecked(internal))
+  let count = int(trie.internalChildCount.getUnchecked(internal))
   if count <= 4:
     for offset in 0..<count:
       let child = int(trie.childNodes.getUnchecked(first + offset))
@@ -246,9 +393,8 @@ func traversePattern(trie: SuccinctRadixTrie, pattern: string): TraverseResult =
     if child < 0:
       return TraverseResult(node: -1)
     inc position
-    let suffixStart = trie.edgeSuffixStart(child)
-    let suffixEnd = trie.edgeSuffixEnd(child)
-    for suffixPosition in suffixStart..<suffixEnd:
+    let suffix = trie.edgeSuffixRange(child)
+    for suffixPosition in suffix.first..<suffix.last:
       if position == pattern.len:
         return TraverseResult(node: child, atBoundary: false)
       if byte(pattern[position]) != trie.edgeSuffixBytes[suffixPosition]:
@@ -260,7 +406,7 @@ func findExact*(trie: SuccinctRadixTrie, value: string): int64 =
   ## 完全一致するDictionary IDを返し、存在しない場合は `-1` を返します。
   let traversal = trie.traversePattern(value)
   if traversal.node < 0 or not traversal.atBoundary or
-      not trie.terminalBits.access(int64(traversal.node)):
+      not trie.terminalBits.accessUnchecked(traversal.node):
     return -1
   let ordinal = trie.terminalBits.rank1(int64(traversal.node))
   int64(trie.terminalIds.getUnchecked(int(ordinal)))
@@ -272,10 +418,17 @@ proc findPrefixInto*(trie: SuccinctRadixTrie, prefix: string,
   let traversal = trie.traversePattern(prefix)
   if traversal.node < 0:
     return
-  let firstOrdinal = trie.terminalBits.rank1(int64(traversal.node))
-  let endNode = int(trie.subtreeEnd.getUnchecked(traversal.node))
-  let endOrdinal = trie.terminalBits.rank1(int64(endNode))
-  for ordinal in firstOrdinal..<endOrdinal:
+  var firstOrdinal, terminalCount: int64
+  let internal = trie.internalIndex(traversal.node)
+  if internal >= 0:
+    firstOrdinal = int64(trie.internalFirstTerminal.getUnchecked(internal))
+    terminalCount = int64(trie.internalTerminalCount.getUnchecked(internal))
+  elif trie.terminalBits.accessUnchecked(traversal.node):
+    firstOrdinal = trie.terminalBits.rank1Unchecked(int64(traversal.node))
+    terminalCount = 1
+  else:
+    return
+  for ordinal in firstOrdinal..<firstOrdinal + terminalCount:
     output.add uint32(trie.terminalIds.getUnchecked(int(ordinal)))
   output.sort()
 
@@ -288,20 +441,20 @@ proc getStringInto*(trie: SuccinctRadixTrie, id: uint32,
   var length = 0
   var current = node
   while current != 0:
-    length += 1 + trie.edgeSuffixEnd(current) - trie.edgeSuffixStart(current)
-    current = int(trie.parent.getUnchecked(current))
+    let suffix = trie.edgeSuffixRange(current)
+    length += 1 + suffix.last - suffix.first
+    current = trie.parentAt(current)
   output.setLen(length)
   var writePosition = length
   while node != 0:
-    let suffixStart = trie.edgeSuffixStart(node)
-    let suffixEnd = trie.edgeSuffixEnd(node)
-    let edgeLength = 1 + suffixEnd - suffixStart
+    let suffix = trie.edgeSuffixRange(node)
+    let edgeLength = 1 + suffix.last - suffix.first
     writePosition -= edgeLength
     output[writePosition] = char(trie.edgeFirstBytes[node])
-    for offset in 0..<suffixEnd - suffixStart:
+    for offset in 0..<suffix.last - suffix.first:
       output[writePosition + 1 + offset] =
-        char(trie.edgeSuffixBytes[suffixStart + offset])
-    node = int(trie.parent.getUnchecked(node))
+        char(trie.edgeSuffixBytes[suffix.first + offset])
+    node = trie.parentAt(node)
 
 proc getString*(trie: SuccinctRadixTrie, id: uint32): string =
   ## Dictionary IDから元の文字列を復元します。
@@ -315,21 +468,30 @@ func succinctBytes(values: SuccinctBitVector): int64 =
     int64(values.blockPairPrefix.len + values.wordPairPrefix.len) *
       int64(sizeof(uint32))
 
+func parentBytes(values: BlockPackedParents): int64 =
+  int64(values.bitWidths.len) + int64(values.wordOffsets.len) * 4 +
+    int64(values.data.len) * 8
+
 func memoryUsage*(trie: SuccinctRadixTrie): RadixTrieMemoryUsage =
   ## Radix Trieが所有する各構造の論理的な格納容量を返します。
-  result.topologyBytes = packedBytes(trie.parent) + packedBytes(trie.subtreeEnd)
+  result.topologyBytes = parentBytes(trie.parents)
   result.edgeFirstBytes = int64(trie.edgeFirstBytes.len)
   result.edgeSuffixBytes = int64(trie.edgeSuffixBytes.len)
-  result.edgeBoundaryBytes = packedBytes(trie.edgeSuffixOffsets)
+  result.edgeBoundaryBytes = succinctBytes(trie.hasSuffixBits) +
+    packedBytes(trie.edgeSuffixOffsets)
   result.terminalBitsBytes = succinctBytes(trie.terminalBits)
   result.terminalIdsBytes = packedBytes(trie.terminalIds)
   result.idToTerminalBytes = packedBytes(trie.idToTerminal)
-  result.childNavigationBytes = packedBytes(trie.firstChild) +
-    packedBytes(trie.childCount) + packedBytes(trie.childNodes)
+  result.childNavigationBytes = succinctBytes(trie.internalBits) +
+    packedBytes(trie.internalFirstChild) +
+    packedBytes(trie.internalChildCount) + packedBytes(trie.childNodes)
+  result.terminalRangeBytes = packedBytes(trie.internalFirstTerminal) +
+    packedBytes(trie.internalTerminalCount)
   result.totalBytes = result.topologyBytes + result.edgeFirstBytes +
     result.edgeSuffixBytes + result.edgeBoundaryBytes +
     result.terminalBitsBytes + result.terminalIdsBytes +
-    result.idToTerminalBytes + result.childNavigationBytes
+    result.idToTerminalBytes + result.childNavigationBytes +
+    result.terminalRangeBytes
 
 func stats*(trie: SuccinctRadixTrie): RadixTrieStats =
   ## node数、edge長、terminal depth、degree分布を集計して返します。
@@ -338,19 +500,47 @@ func stats*(trie: SuccinctRadixTrie): RadixTrieStats =
   result.terminalCount = trie.terminalBits.totalOnes
   var depthSum = 0'i64
   var depths = newSeq[int64](int(result.nodeCount))
+  var parentDeltas = newSeqOfCap[int64](max(0, int(result.nodeCount) - 1))
+  var terminalOrdinal = 0'i64
+  var sumOrdinal, sumId, sumOrdinalSquared, sumIdSquared, sumProduct: float
   for node in 0..<int(result.nodeCount):
-    let suffixLength = trie.edgeSuffixEnd(node) - trie.edgeSuffixStart(node)
+    let suffix = trie.edgeSuffixRange(node)
+    let suffixLength = suffix.last - suffix.first
     if node > 0:
       let labelLength = int64(1 + suffixLength)
       result.totalEdgeLabelBytes += labelLength
       result.maximumEdgeLabelLength = max(result.maximumEdgeLabelLength,
         labelLength)
-      let parent = int(trie.parent.getUnchecked(node))
+      let parent = trie.parentAt(node)
       depths[node] = depths[parent] + 1
-    if trie.terminalBits.access(int64(node)):
+      let delta = int64(node - parent)
+      parentDeltas.add delta
+      let bitWidth = requiredBitWidth(uint64(delta))
+      if bitWidth <= 4: inc result.parentDeltaBitWidthHistogram[0]
+      elif bitWidth <= 8: inc result.parentDeltaBitWidthHistogram[1]
+      elif bitWidth <= 12: inc result.parentDeltaBitWidthHistogram[2]
+      elif bitWidth <= 16: inc result.parentDeltaBitWidthHistogram[3]
+      else: inc result.parentDeltaBitWidthHistogram[4]
+    if suffixLength == 0: inc result.suffixLengthHistogram[0]
+    elif suffixLength <= 4: inc result.suffixLengthHistogram[1]
+    elif suffixLength <= 8: inc result.suffixLengthHistogram[2]
+    elif suffixLength <= 16: inc result.suffixLengthHistogram[3]
+    else: inc result.suffixLengthHistogram[4]
+    if suffixLength > 0:
+      inc result.suffixBearingEdgeCount
+    if trie.terminalBits.accessUnchecked(node):
       depthSum += depths[node]
       result.maximumDepth = max(result.maximumDepth, depths[node])
-    let degree = int(trie.childCount.getUnchecked(node))
+      let dictionaryId = float(trie.terminalIds.getUnchecked(
+        int(terminalOrdinal)))
+      let ordinal = float(terminalOrdinal)
+      sumOrdinal += ordinal
+      sumId += dictionaryId
+      sumOrdinalSquared += ordinal * ordinal
+      sumIdSquared += dictionaryId * dictionaryId
+      sumProduct += ordinal * dictionaryId
+      inc terminalOrdinal
+    let degree = trie.childCountAt(node)
     case degree
     of 0: inc result.degreeZeroCount
     of 1: inc result.degreeOneCount
@@ -363,3 +553,33 @@ func stats*(trie: SuccinctRadixTrie): RadixTrieStats =
   if result.terminalCount > 0:
     result.averageTerminalDepth =
       float(depthSum) / float(result.terminalCount)
+    let count = float(result.terminalCount)
+    let numerator = count * sumProduct - sumOrdinal * sumId
+    let denominator = sqrt((count * sumOrdinalSquared - sumOrdinal *
+      sumOrdinal) * (count * sumIdSquared - sumId * sumId))
+    if denominator > 0:
+      result.terminalIdCorrelation = numerator / denominator
+  result.internalNodeCount = trie.internalBits.totalOnes
+  if result.nodeCount > 0:
+    result.leafRatio =
+      float(result.nodeCount - result.internalNodeCount) / float(
+          result.nodeCount)
+  if result.edgeCount > 0:
+    result.suffixBearingEdgeRatio =
+      float(result.suffixBearingEdgeCount) / float(result.edgeCount)
+  if parentDeltas.len > 0:
+    parentDeltas.sort()
+    var deltaSum = 0'i64
+    for delta in parentDeltas:
+      deltaSum += delta
+    result.parentDeltaAverage = float(deltaSum) / float(parentDeltas.len)
+    result.parentDeltaMedian = if (parentDeltas.len and 1) == 0:
+      float(parentDeltas[parentDeltas.len div 2 - 1] +
+        parentDeltas[parentDeltas.len div 2]) / 2.0
+    else:
+      float(parentDeltas[parentDeltas.len div 2])
+    result.parentDeltaP90 = parentDeltas[
+      min(parentDeltas.high, (parentDeltas.len * 90) div 100)]
+    result.parentDeltaP99 = parentDeltas[
+      min(parentDeltas.high, (parentDeltas.len * 99) div 100)]
+    result.parentDeltaMaximum = parentDeltas[^1]

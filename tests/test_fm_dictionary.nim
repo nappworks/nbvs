@@ -147,6 +147,16 @@ block compressedEdges:
   # 1文字Trieよりnodeを減らし、仕様例どおり "appl" と "ica" を共有する。
   doAssert trieStats.edgeCount == 6
   doAssert trieStats.maximumEdgeLabelLength == 4
+  doAssert trieStats.internalNodeCount == 3
+  doAssert dict.radixTrie.internalFirstChild.len == 3
+  doAssert dict.radixTrie.internalChildCount.len == 3
+  doAssert dict.radixTrie.internalFirstTerminal.len == 3
+  doAssert dict.radixTrie.internalTerminalCount.len == 3
+  let expectedOffsetCount = if dict.radixTrie.sparseSuffixes:
+    trieStats.suffixBearingEdgeCount + 1
+  else:
+    trieStats.nodeCount + 1
+  doAssert dict.radixTrie.edgeSuffixOffsets.len == expectedOffsetCount
   doAssert dict.findExact("app") == -1
   doAssert dict.findPrefix("app") == @[0'u32, 1, 2, 3]
   doAssert dict.findPrefix("appl") == @[0'u32, 1, 2, 3]
@@ -194,6 +204,7 @@ block allBytes:
     everyByte[index] = char(index)
   let binaryNeedle = "\0\1"
   let dict = genFmDictionary(@[everyByte, binaryNeedle])
+  doAssert not dict.radixTrie.sparseSuffixes
   doAssert dict.getString(0) == everyByte
   doAssert dict.getString(1) == binaryNeedle
   doAssert dict.findExact(everyByte) == 0
@@ -209,9 +220,10 @@ block repeatedPattern:
 
 block packedBoundaries:
   var values: seq[string]
-  for index in 0..<130:
+  for index in 0..<300:
     values.add "entry-" & $index
   let dict = genFmDictionary(values)
+  doAssert dict.radixTrie.sparseSuffixes
   for index, value in values:
     doAssert dict.findExact(value) == index
     doAssert dict.getString(DictionaryId(index)) == value
