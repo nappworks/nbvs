@@ -120,14 +120,19 @@ proc runTrial(kind: CorpusKind, values: openArray[string], trial: int) =
     sink = sink xor uint64(prefixOutput.len)
   let prefixNs = elapsedNs(started)
 
-  var prefixGroupNs: array[3, int64]
-  for index, targetCount in [10, 100, 1_000]:
+  var prefixGroupNs: array[8, float]
+  var prefixWorkspace = initPrefixQueryWorkspace(dict)
+  let prefixTargets = [1, 10, 100, 1_000, 10_000, 100_000, 500_000,
+    values.len]
+  for index, targetCount in prefixTargets:
     let prefix = dict.radixTrie.prefixNear(targetCount)
+    let iterations = max(1, min(QueryIterations,
+      10_000_000 div max(1, min(targetCount, values.len))))
     started = getMonoTime()
-    for _ in 0..<QueryIterations:
-      dict.findPrefixInto(prefix, prefixOutput)
+    for _ in 0..<iterations:
+      dict.findPrefixInto(prefix, prefixWorkspace, prefixOutput)
       sink = sink xor uint64(prefixOutput.len)
-    prefixGroupNs[index] = elapsedNs(started)
+    prefixGroupNs[index] = float(elapsedNs(started)) / iterations.float
 
   var restored: string
   started = getMonoTime()
@@ -143,9 +148,10 @@ proc runTrial(kind: CorpusKind, values: openArray[string], trial: int) =
     &"{float(exactHitNs) / QueryIterations.float:.1f}," &
     &"{float(exactMissNs) / QueryIterations.float:.1f}," &
     &"{float(prefixNs) / QueryIterations.float:.1f}," &
-    &"{float(prefixGroupNs[0]) / QueryIterations.float:.1f}," &
-    &"{float(prefixGroupNs[1]) / QueryIterations.float:.1f}," &
-    &"{float(prefixGroupNs[2]) / QueryIterations.float:.1f}," &
+    &"{prefixGroupNs[0]:.1f},{prefixGroupNs[1]:.1f}," &
+    &"{prefixGroupNs[2]:.1f},{prefixGroupNs[3]:.1f}," &
+    &"{prefixGroupNs[4]:.1f},{prefixGroupNs[5]:.1f}," &
+    &"{prefixGroupNs[6]:.1f},{prefixGroupNs[7]:.1f}," &
     &"{float(restoreNs) / QueryIterations.float:.1f}," &
     &"{memory.totalBytes},{trieStats.nodeCount}," &
     &"{trieStats.averageEdgeLabelLength:.3f}," &
@@ -157,8 +163,10 @@ proc runTrial(kind: CorpusKind, values: openArray[string], trial: int) =
 
 proc run(count, averageLength, trials: int) =
   echo "distribution,count,sample_bytes,trial,build_ms,exact_hit_ns," &
-    "exact_miss_ns,prefix_one_ns,prefix_near_10_ns,prefix_near_100_ns," &
-    "prefix_near_1000_ns,restore_ns,trie_bytes,node_count," &
+    "exact_miss_ns,prefix_one_ns,prefix_near_1_ns,prefix_near_10_ns," &
+    "prefix_near_100_ns,prefix_near_1000_ns,prefix_near_10000_ns," &
+    "prefix_near_100000_ns,prefix_near_500000_ns,prefix_all_ns," &
+    "restore_ns,trie_bytes,node_count," &
     "average_edge_label_bytes,average_terminal_depth,internal_node_count," &
     "leaf_ratio,suffix_edge_ratio,parent_delta_median,parent_delta_p99," &
     "terminal_id_correlation"

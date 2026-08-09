@@ -2,7 +2,7 @@
 ##
 ## nodeはDFS preorder、edge labelと子一覧は連続領域へ格納します。
 
-import std/[algorithm, bitops, math, strutils]
+import std/[algorithm, bitops, math]
 import packed_array, succinct_bit_vector
 
 type
@@ -18,6 +18,8 @@ type
     internalFirstChild*: PackedArray    ## internal nodeごとの子一覧開始位置。
     internalChildCount*: PackedArray    ## internal nodeごとの直接の子の数。
     childNodes*: PackedArray            ## 直接の子node IDを格納する連続領域。
+    highDegreeBitmapOffsets*: PackedArray ## 高degree nodeのbitmap番号+1。
+    highDegreeBitmaps*: seq[uint64] ## degree 17以上だけが持つ256-bit bitmap。
     parents*: BlockPackedParents        ## nodeから親nodeへのdelta圧縮mapping。
     edgeFirstBytes*: seq[byte]          ## root以外のedge label先頭byte。
     edgeSuffixBytes*: seq[byte]         ## edge labelの2 byte目以降を連結した領域。
@@ -58,11 +60,16 @@ type
     idToTerminalBytes*, childNavigationBytes*, terminalRangeBytes*: int64
     totalBytes*: int64
 
+  PrefixQueryWorkspace* = object
+    ## 大きなprefix結果をID順へ整列するbitmap workspaceです。
+    words: seq[uint64]
+    touchedWords: seq[int]
+
   BuildNode = object
-    label: string
-    parent: int
-    children: seq[int]
-    terminalId: int64
+    parent: int32
+    firstChild, nextSibling: int32
+    sourceId, edgeStart, edgeLength: uint32
+    terminalId: uint32 # 0は非terminal、Dictionary IDは+1で保持する。
 
   TraverseResult = object
     node: int
@@ -134,96 +141,144 @@ func commonPrefixLength(left, right: string): int {.inline.} =
   while result < limit and left[result] == right[result]:
     inc result
 
-proc insert(nodes: var seq[BuildNode], value: string, dictionaryId: int) =
-  var node = 0
-  var position = 0
-  while position < value.len:
-    var matchingChild = -1
-    for child in nodes[node].children:
-      if nodes[child].label[0] == value[position]:
-        matchingChild = child
-        break
-    if matchingChild < 0:
-      let leaf = nodes.len
-      nodes.add BuildNode(label: value[position..^1], parent: node,
-        terminalId: int64(dictionaryId))
-      nodes[node].children.add leaf
-      return
+iterator buildChildren(nodes: seq[BuildNode], node: int): int =
+  var child = int(nodes[node].firstChild)
+  while child >= 0:
+    yield child
+    child = int(nodes[child].nextSibling)
 
-    let remainder = value[position..^1]
-    let shared = commonPrefixLength(nodes[matchingChild].label, remainder)
-    if shared == nodes[matchingChild].label.len:
-      position += shared
-      node = matchingChild
-      continue
+proc appendChild(nodes: var seq[BuildNode], parent, child: int) =
+  if nodes[parent].firstChild < 0:
+    nodes[parent].firstChild = int32(child)
+  else:
+    var last = int(nodes[parent].firstChild)
+    while nodes[last].nextSibling >= 0:
+      last = int(nodes[last].nextSibling)
+    nodes[last].nextSibling = int32(child)
 
-    let oldLabel = nodes[matchingChild].label
-    let branch = nodes.len
-    nodes.add BuildNode(label: oldLabel[0..<shared], parent: node,
-      children: @[matchingChild], terminalId: -1)
-    for index, child in nodes[node].children.mpairs:
-      if child == matchingChild:
-        child = branch
-        break
-    nodes[matchingChild].label = oldLabel[shared..^1]
-    nodes[matchingChild].parent = branch
-    position += shared
-    if position == value.len:
-      nodes[branch].terminalId = int64(dictionaryId)
+func buildChildCount(nodes: seq[BuildNode], parent: int): int =
+  for _ in nodes.buildChildren(parent):
+    inc result
+
+proc sortedDictionaryIds(strings: openArray[string]): seq[uint32] =
+  ## openArrayをclosure captureせず、IDだけをstable merge sortする。
+  result = newSeq[uint32](strings.len)
+  for id in 0..<strings.len:
+    result[id] = uint32(id)
+  var scratch = newSeq[uint32](strings.len)
+  var width = 1
+  while width < strings.len:
+    var first = 0
+    while first < strings.len:
+      let middle = min(first + width, strings.len)
+      let last = min(first + width * 2, strings.len)
+      var left = first
+      var right = middle
+      for output in first..<last:
+        if right >= last or (left < middle and
+            (strings[int(result[left])] < strings[int(result[right])] or
+             (strings[int(result[left])] == strings[int(result[right])] and
+              result[left] <= result[right]))):
+          scratch[output] = result[left]
+          inc left
+        else:
+          scratch[output] = result[right]
+          inc right
+      first = last
+    swap(result, scratch)
+    width = width shl 1
+
+proc buildSortedLcp(strings: openArray[string]): tuple[
+    nodes: seq[BuildNode], idToBuildNode: seq[int]] =
+  ## 辞書順と隣接LCPから、labelを参照だけで保持するflat topologyを構築する。
+  let sortedIds = sortedDictionaryIds(strings)
+
+  result.nodes = @[BuildNode(parent: -1, firstChild: -1,
+    nextSibling: -1, sourceId: uint32.high)]
+  result.idToBuildNode = newSeq[int](strings.len)
+  var path = @[0]
+  var previousId = -1
+  var pathDepths = @[0'u32]
+  for encodedId in sortedIds:
+    let dictionaryId = int(encodedId)
+    let value = strings[dictionaryId]
+    let lcp = if previousId < 0: 0
+      else: commonPrefixLength(strings[previousId], value)
+    var splitChild = -1
+    while int(pathDepths[^1]) > lcp:
+      splitChild = path.pop()
+      discard pathDepths.pop()
+    if int(pathDepths[^1]) < lcp:
+      let parent = path[^1]
+      doAssert splitChild >= 0
+      let branch = result.nodes.len
+      result.nodes.add BuildNode(parent: int32(parent),
+        firstChild: int32(splitChild), nextSibling: -1,
+        sourceId: uint32(previousId),
+        edgeStart: pathDepths[^1],
+        edgeLength: uint32(lcp - int(pathDepths[^1])))
+      if int(result.nodes[parent].firstChild) == splitChild:
+        result.nodes[parent].firstChild = int32(branch)
+      else:
+        var previousSibling = int(result.nodes[parent].firstChild)
+        while int(result.nodes[previousSibling].nextSibling) != splitChild:
+          previousSibling = int(result.nodes[previousSibling].nextSibling)
+        result.nodes[previousSibling].nextSibling = int32(branch)
+      result.nodes[branch].nextSibling = result.nodes[splitChild].nextSibling
+      result.nodes[splitChild].nextSibling = -1
+      result.nodes[splitChild].parent = int32(branch)
+      let consumed = uint32(lcp - int(pathDepths[^1]))
+      result.nodes[splitChild].edgeStart += consumed
+      result.nodes[splitChild].edgeLength -= consumed
+      path.add branch
+      pathDepths.add uint32(lcp)
+    let parent = path[^1]
+    if value.len == lcp:
+      if result.nodes[parent].terminalId == 0:
+        result.nodes[parent].terminalId = uint32(dictionaryId + 1)
+      result.idToBuildNode[dictionaryId] = parent
     else:
-      let leaf = nodes.len
-      nodes.add BuildNode(label: value[position..^1], parent: branch,
-        terminalId: int64(dictionaryId))
-      nodes[branch].children.add leaf
-    return
-
-  # 重複検査を省略した場合、完全一致は最初のIDを返し、各IDは同じterminalを参照する。
-  if nodes[node].terminalId < 0:
-    nodes[node].terminalId = int64(dictionaryId)
+      let leaf = result.nodes.len
+      result.nodes.add BuildNode(parent: int32(parent), firstChild: -1,
+        nextSibling: -1, sourceId: uint32(dictionaryId),
+        edgeStart: uint32(lcp), edgeLength: uint32(value.len - lcp),
+        terminalId: uint32(dictionaryId + 1))
+      result.nodes.appendChild(parent, leaf)
+      path.add leaf
+      pathDepths.add uint32(value.len)
+      result.idToBuildNode[dictionaryId] = leaf
+    previousId = dictionaryId
 
 proc genSuccinctRadixTrie*(strings: openArray[string]): SuccinctRadixTrie =
   ## 入力順のDictionary IDを維持したpath-compressed Radix Trieを構築します。
   ##
   ## 文字列はUTF-8文字ではなく任意のbyte列として扱います。構築時間と一時領域は
   ## edge探索を除いて `O(n)` です。完成後のTrieはimmutableです。
-  var nodes = @[BuildNode(parent: -1, terminalId: -1)]
-  var idToBuildNode = newSeq[int](strings.len)
-  for dictionaryId, value in strings:
-    nodes.insert(value, dictionaryId)
-    # terminalは後続の挿入によるedge split後も同じBuildNodeに残る。
-    var current = 0
-    var position = 0
-    while position < value.len:
-      for child in nodes[current].children:
-        if value.continuesWith(nodes[child].label, position):
-          position += nodes[child].label.len
-          current = child
-          break
-    idToBuildNode[dictionaryId] = current
+  var (nodes, idToBuildNode) = buildSortedLcp(strings)
 
-  for node in nodes.mitems:
-    node.children.sort(proc(left, right: int): int =
-      cmp(nodes[left].label[0], nodes[right].label[0]))
-
-  var order = newSeqOfCap[int](nodes.len)
+  var order = newSeqOfCap[uint32](nodes.len)
   var stack = @[0]
+  var reverseChildren = newSeqOfCap[int](256)
   while stack.len > 0:
     let current = stack.pop()
-    order.add current
-    for index in countdown(nodes[current].children.high, 0):
-      stack.add nodes[current].children[index]
+    order.add uint32(current)
+    reverseChildren.setLen(0)
+    for child in nodes.buildChildren(current):
+      reverseChildren.add child
+    for index in countdown(reverseChildren.high, 0):
+      stack.add reverseChildren[index]
 
-  var buildToFlat = newSeq[int](nodes.len)
+  var buildToFlat = newSeq[uint32](nodes.len)
   for flatNode, buildNode in order:
-    buildToFlat[buildNode] = flatNode
+    buildToFlat[int(buildNode)] = uint32(flatNode)
 
   let nodeCount = nodes.len
-  var subtreeEnds = newSeq[int](nodeCount)
+  var subtreeEnds = newSeq[uint32](nodeCount)
   for flatNode in countdown(nodeCount - 1, 0):
-    subtreeEnds[flatNode] = max(subtreeEnds[flatNode], flatNode + 1)
-    let buildNode = order[flatNode]
+    subtreeEnds[flatNode] = max(subtreeEnds[flatNode], uint32(flatNode + 1))
+    let buildNode = int(order[flatNode])
     if nodes[buildNode].parent >= 0:
-      let flatParent = buildToFlat[nodes[buildNode].parent]
+      let flatParent = int(buildToFlat[int(nodes[buildNode].parent)])
       subtreeEnds[flatParent] = max(subtreeEnds[flatParent], subtreeEnds[flatNode])
 
   var childTotal = 0
@@ -232,22 +287,26 @@ proc genSuccinctRadixTrie*(strings: openArray[string]): SuccinctRadixTrie =
   var terminalCount = 0
   var internalCount = 0
   var maximumDegree = 0
-  for node in nodes:
-    childTotal += node.children.len
-    maximumDegree = max(maximumDegree, node.children.len)
-    if node.children.len > 0:
+  var highDegreeCount = 0
+  for nodeIndex, node in nodes:
+    let childCount = nodes.buildChildCount(nodeIndex)
+    childTotal += childCount
+    maximumDegree = max(maximumDegree, childCount)
+    if childCount > 0:
       inc internalCount
-    if node.label.len > 0:
-      suffixTotal += node.label.len - 1
-      if node.label.len > 1:
+      if childCount >= 17:
+        inc highDegreeCount
+    if node.edgeLength > 0:
+      suffixTotal += int(node.edgeLength) - 1
+      if node.edgeLength > 1:
         inc suffixBearingCount
-    if node.terminalId >= 0:
+    if node.terminalId > 0:
       inc terminalCount
 
-  var terminalPrefixes = newSeq[int](nodeCount + 1)
+  var terminalPrefixes = newSeq[uint32](nodeCount + 1)
   for flatNode, buildNode in order:
     terminalPrefixes[flatNode + 1] = terminalPrefixes[flatNode]
-    if nodes[buildNode].terminalId >= 0:
+    if nodes[int(buildNode)].terminalId > 0:
       inc terminalPrefixes[flatNode + 1]
 
   result.internalBits = genSuccinctBitVector(int64(nodeCount))
@@ -257,6 +316,9 @@ proc genSuccinctRadixTrie*(strings: openArray[string]): SuccinctRadixTrie =
     requiredBitWidth(uint64(maximumDegree)))
   result.childNodes = genPackedArray(childTotal,
     requiredBitWidth(uint64(max(0, nodeCount - 1))))
+  result.highDegreeBitmapOffsets = genPackedArray(internalCount,
+    requiredBitWidth(uint64(highDegreeCount)))
+  result.highDegreeBitmaps = newSeq[uint64](highDegreeCount * 4)
   result.edgeFirstBytes = newSeq[byte](nodeCount)
   result.edgeSuffixBytes = newSeq[byte](suffixTotal)
   result.sparseSuffixes = suffixBearingCount * 4 <= nodeCount
@@ -283,40 +345,56 @@ proc genSuccinctRadixTrie*(strings: openArray[string]): SuccinctRadixTrie =
   var suffixBearingPosition = 0
   var terminalPosition = 0
   var internalPosition = 0
+  var highDegreePosition = 0
   var flatParents = newSeq[int](nodeCount)
   for flatNode, buildNode in order:
-    let node = nodes[buildNode]
-    if node.children.len > 0:
+    let buildNodeIndex = int(buildNode)
+    let node = nodes[buildNodeIndex]
+    let nodeChildCount = nodes.buildChildCount(buildNodeIndex)
+    if nodeChildCount > 0:
       result.internalBits.setBit(int64(flatNode))
       result.internalFirstChild[internalPosition] = uint64(childPosition)
-      result.internalChildCount[internalPosition] = uint64(node.children.len)
+      result.internalChildCount[internalPosition] = uint64(nodeChildCount)
       let firstTerminal = terminalPrefixes[flatNode]
       let subtreeTerminalCount =
-        terminalPrefixes[subtreeEnds[flatNode]] - firstTerminal
+        terminalPrefixes[int(subtreeEnds[flatNode])] - firstTerminal
       result.internalFirstTerminal[internalPosition] = uint64(firstTerminal)
       result.internalTerminalCount[internalPosition] =
         uint64(subtreeTerminalCount)
+      if nodeChildCount >= 17:
+        result.highDegreeBitmapOffsets[internalPosition] =
+          uint64(highDegreePosition + 1)
+        for child in nodes.buildChildren(buildNodeIndex):
+          let childNode = nodes[child]
+          let firstByte = byte(strings[childNode.sourceId][childNode.edgeStart])
+          let wordIndex = highDegreePosition * 4 + (int(firstByte) shr 6)
+          result.highDegreeBitmaps[wordIndex] =
+            result.highDegreeBitmaps[wordIndex] or
+            (1'u64 shl (int(firstByte) and 63))
+        inc highDegreePosition
       inc internalPosition
-    for child in node.children:
+    for child in nodes.buildChildren(buildNodeIndex):
       result.childNodes[childPosition] = uint64(buildToFlat[child])
       inc childPosition
     flatParents[flatNode] = if node.parent < 0: 0
-      else: buildToFlat[node.parent]
+      else: int(buildToFlat[int(node.parent)])
     if not result.sparseSuffixes:
       result.edgeSuffixOffsets[flatNode] = uint64(suffixPosition)
-    if node.label.len > 0:
-      result.edgeFirstBytes[flatNode] = byte(node.label[0])
-      if node.label.len > 1:
+    if node.edgeLength > 0:
+      let source = strings[int(node.sourceId)]
+      result.edgeFirstBytes[flatNode] = byte(source[int(node.edgeStart)])
+      if node.edgeLength > 1:
         if result.sparseSuffixes:
           result.hasSuffixBits.setBit(int64(flatNode))
           result.edgeSuffixOffsets[suffixBearingPosition] = uint64(suffixPosition)
-        for index in 1..<node.label.len:
-          result.edgeSuffixBytes[suffixPosition] = byte(node.label[index])
+        for index in 1..<int(node.edgeLength):
+          result.edgeSuffixBytes[suffixPosition] =
+            byte(source[int(node.edgeStart) + index])
           inc suffixPosition
         inc suffixBearingPosition
-    if node.terminalId >= 0:
+    if node.terminalId > 0:
       result.terminalBits.setBit(int64(flatNode))
-      result.terminalIds[terminalPosition] = uint64(node.terminalId)
+      result.terminalIds[terminalPosition] = uint64(node.terminalId - 1)
       inc terminalPosition
   result.edgeSuffixOffsets[suffixOffsetCount - 1] = uint64(suffixPosition)
   result.internalBits.build()
@@ -364,12 +442,46 @@ func findChild(trie: SuccinctRadixTrie, node: int, firstByte: byte): int =
     return -1
   let first = int(trie.internalFirstChild.getUnchecked(internal))
   let count = int(trie.internalChildCount.getUnchecked(internal))
-  if count <= 4:
-    for offset in 0..<count:
+  if count >= 17:
+    let encodedBitmap = int(
+      trie.highDegreeBitmapOffsets.getUnchecked(internal))
+    if encodedBitmap > 0:
+      let bitmap = encodedBitmap - 1
+      let targetWord = int(firstByte) shr 6
+      let targetBit = int(firstByte) and 63
+      let word = trie.highDegreeBitmaps[bitmap * 4 + targetWord]
+      let mask = 1'u64 shl targetBit
+      if (word and mask) == 0:
+        return -1
+      var ordinal = 0
+      for wordIndex in 0..<targetWord:
+        ordinal += countSetBits(
+          trie.highDegreeBitmaps[bitmap * 4 + wordIndex])
+      ordinal += countSetBits(word and (mask - 1))
+      return int(trie.childNodes.getUnchecked(first + ordinal))
+  template matches(offset: int): int =
+    block:
       let child = int(trie.childNodes.getUnchecked(first + offset))
-      if trie.edgeFirstBytes[child] == firstByte:
-        return child
-    return -1
+      if trie.edgeFirstBytes[child] == firstByte: child else: -1
+  case count
+  of 1:
+    return matches(0)
+  of 2:
+    result = matches(0)
+    if result < 0: result = matches(1)
+    return
+  of 3:
+    result = matches(0)
+    if result < 0: result = matches(1)
+    if result < 0: result = matches(2)
+    return
+  of 4:
+    result = matches(0)
+    if result < 0: result = matches(1)
+    if result < 0: result = matches(2)
+    if result < 0: result = matches(3)
+    return
+  else: discard
   var left = first
   var right = first + count
   while left < right:
@@ -411,9 +523,9 @@ func findExact*(trie: SuccinctRadixTrie, value: string): int64 =
   let ordinal = trie.terminalBits.rank1(int64(traversal.node))
   int64(trie.terminalIds.getUnchecked(int(ordinal)))
 
-proc findPrefixInto*(trie: SuccinctRadixTrie, prefix: string,
-                     output: var seq[uint32]) =
-  ## byte単位で前方一致するDictionary IDを昇順で `output` へ格納します。
+proc findPrefixTrieOrderInto*(trie: SuccinctRadixTrie, prefix: string,
+                              output: var seq[uint32]) =
+  ## byte単位の前方一致IDをTrieのDFS順で格納します。
   output.setLen(0)
   let traversal = trie.traversePattern(prefix)
   if traversal.node < 0:
@@ -430,6 +542,45 @@ proc findPrefixInto*(trie: SuccinctRadixTrie, prefix: string,
     return
   for ordinal in firstOrdinal..<firstOrdinal + terminalCount:
     output.add uint32(trie.terminalIds.getUnchecked(int(ordinal)))
+
+proc initPrefixQueryWorkspace*(dictionaryCount: int): PrefixQueryWorkspace =
+  ## 指定件数向けのprefix bitmap workspaceを初期化します。
+  if dictionaryCount < 0:
+    raise newException(ValueError, "dictionary count must be non-negative")
+  result.words = newSeq[uint64]((dictionaryCount + 63) shr 6)
+
+proc findPrefixInto*(trie: SuccinctRadixTrie, prefix: string,
+                     workspace: var PrefixQueryWorkspace,
+                     output: var seq[uint32]) =
+  ## workspaceを再利用し、前方一致IDを昇順で格納します。
+  trie.findPrefixTrieOrderInto(prefix, output)
+  if output.len < 256:
+    output.sort()
+    return
+  let requiredWords = (int(trie.idToTerminal.len) + 63) shr 6
+  if workspace.words.len != requiredWords:
+    workspace = initPrefixQueryWorkspace(int(trie.idToTerminal.len))
+  workspace.touchedWords.setLen(0)
+  for id in output:
+    let word = int(id) shr 6
+    if workspace.words[word] == 0:
+      workspace.touchedWords.add word
+    workspace.words[word] = workspace.words[word] or
+      (1'u64 shl (int(id) and 63))
+  workspace.touchedWords.sort()
+  output.setLen(0)
+  for wordIndex in workspace.touchedWords:
+    var bits = workspace.words[wordIndex]
+    while bits != 0:
+      let bit = countTrailingZeroBits(bits)
+      output.add uint32((wordIndex shl 6) + bit)
+      bits = bits and (bits - 1)
+    workspace.words[wordIndex] = 0
+
+proc findPrefixInto*(trie: SuccinctRadixTrie, prefix: string,
+                     output: var seq[uint32]) =
+  ## byte単位で前方一致するDictionary IDを昇順で `output` へ格納します。
+  trie.findPrefixTrieOrderInto(prefix, output)
   output.sort()
 
 proc getStringInto*(trie: SuccinctRadixTrie, id: uint32,
@@ -484,7 +635,9 @@ func memoryUsage*(trie: SuccinctRadixTrie): RadixTrieMemoryUsage =
   result.idToTerminalBytes = packedBytes(trie.idToTerminal)
   result.childNavigationBytes = succinctBytes(trie.internalBits) +
     packedBytes(trie.internalFirstChild) +
-    packedBytes(trie.internalChildCount) + packedBytes(trie.childNodes)
+    packedBytes(trie.internalChildCount) + packedBytes(trie.childNodes) +
+    packedBytes(trie.highDegreeBitmapOffsets) +
+    int64(trie.highDegreeBitmaps.len * sizeof(uint64))
   result.terminalRangeBytes = packedBytes(trie.internalFirstTerminal) +
     packedBytes(trie.internalTerminalCount)
   result.totalBytes = result.topologyBytes + result.edgeFirstBytes +
