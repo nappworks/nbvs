@@ -151,12 +151,12 @@ func access*(wm: WaveletMatrix, i: int64): uint64 =
     else:
       pos -= ones
 
-func accessRank*(wm: WaveletMatrix,
-                 pos: int64): tuple[value: uint64, rankBefore: int64] =
-  ## `pos` の値と、同じ値の `[0, pos)` における出現回数を返します。
+func accessRankUnchecked*(wm: WaveletMatrix,
+    pos: int64): tuple[value: uint64, rankBefore: int64] =
+  ## 検査なしで`pos`の値と同値の`[0, pos)`における出現数を返します。
   ##
-  ## accessとrankに共通する経路を融合し、`O(bitWidth)` 時間で処理します。
-  wm.checkIndex(pos)
+  ## 呼び出し側は`0 <= pos < wm.n`を保証する必要があります。FM内部の
+  ## LF traversalなど、範囲が既に保証されたhot path向けです。
   var current = pos
   var intervalLeft = 0'i64
   for level in 0..<wm.bitWidth:
@@ -171,6 +171,14 @@ func accessRank*(wm: WaveletMatrix,
       current -= currentOnes
       intervalLeft -= leftOnes
   result.rankBefore = current - intervalLeft
+
+func accessRank*(wm: WaveletMatrix,
+                 pos: int64): tuple[value: uint64, rankBefore: int64] =
+  ## `pos` の値と、同じ値の `[0, pos)` における出現回数を返します。
+  ##
+  ## accessとrankに共通する経路を融合し、`O(bitWidth)` 時間で処理します。
+  wm.checkIndex(pos)
+  wm.accessRankUnchecked(pos)
 
 func `[]`*(wm: WaveletMatrix, i: int64): uint64 =
   ## Alias for `access(wm, i)`.

@@ -104,6 +104,40 @@ suffix最大0.945、substring最大1.055で、いずれも2倍以内です。
 
 再測定は`nimble benchRunLengthBwt`と`nimble benchFmRev4`を使用します。
 
+## FmDictionary rev5 query path改善（2026-08-09）
+
+backward searchをWavelet/RLE別loopへ分離し、query入口でのみbackendをdispatchするように
+変更しました。LF traversalは範囲保証済みrowに対して`accessRankUnchecked`を使用します。
+汎用`accessRank`のbounds checkと公開検索API、Auto選択閾値は維持しています。
+
+変更前mainとの同一query比較（5,000件、release／ARC、warm cache）では、末尾近傍にある
+高hit substringのWavelet end-to-endが161.40 ms/queryから147.10 ms/queryとなり、8.9%
+改善しました。RLEは140.69 msから139.06 ms、1-hit suffixは両backendとも変動3%程度で、
+LF step数が多いWavelet queryで主に効果が出ています。
+
+100万件random corpus、平均16 byte、8-byte substring、各backend 100,000 queryの結果です。
+同一query setを1周warm-up後、hit bucket別に集計しました。
+
+| backend | hit数 | query数 | backward平均 | LF平均 | p50 | p95 | p99 | p99/p50 |
+|:---|:---:|---:|---:|---:|---:|---:|---:|---:|
+| Wavelet | 0–1 | 51,869 | 8.46 us | 3.97 us | 12.00 us | 27.70 us | 40.30 us | 3.36 |
+| Wavelet | 2–10 | 32,335 | 12.06 us | 36.09 us | 43.10 us | 94.70 us | 126.60 us | 2.94 |
+| Wavelet | 11–100 | 15,796 | 13.48 us | 134.39 us | 147.21 us | 215.21 us | 274.01 us | 1.86 |
+| RLE | 0–1 | 51,869 | 9.82 us | 5.17 us | 14.70 us | 33.20 us | 50.10 us | 3.41 |
+| RLE | 2–10 | 32,335 | 14.08 us | 48.01 us | 55.30 us | 124.00 us | 173.11 us | 3.13 |
+| RLE | 11–100 | 15,796 | 14.84 us | 178.85 us | 191.21 us | 294.31 us | 381.81 us | 2.00 |
+
+hit増加時はLF traversalがbackward searchの約3〜12倍となり、主要コストです。
+Substring orderingは候補群の中央にあたる256件でbitmap切替を試しましたが、Waveletで約4%
+改善する一方RLEでは約4%悪化しました。このpilotが採用基準を満たさないため他閾値の本実装は
+見送りました。direct C-tableも一貫したend-to-end改善がなく、不採用としました。
+
+`nimble benchFmRev5`はpattern長1/2/4/8/16/32/64、hit bucket別のphaseとtail latencyを
+CSV出力します。`benchmarks/run_fm_rev5_perf.sh`はWavelet/RLEのSuffix/Substringについて
+cycles、instructions、branch/cache/L1/LLC missを`perf stat`で取得します。この環境には
+`perf`がインストールされていなかったため、CPU counter実測値は未取得です。実行条件は
+Nim 2.2.10、Linux 5.15.146.1 WSL2、amd64、release、ARC、scalarです。
+
 ### 100万件のmetadata候補比較
 
 `radix_compaction_bench.nim 1000000 16`による100万回のmicrobenchmarkです。
