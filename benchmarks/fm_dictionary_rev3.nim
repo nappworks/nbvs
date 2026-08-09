@@ -1,7 +1,10 @@
-## rev3向けFM backend、BWT run、prefix materialization benchmark。
+## rev3/rev4向けFM backend、BWT run、primitive benchmark matrix。
 
 import std/[monotimes, os, parseutils, strformat, strutils, times]
 import nbvs
+
+when defined(linux):
+  import std/posix
 
 const
   Seed = 0x666d_7265_7633_2026'u64
@@ -30,6 +33,13 @@ func nextRandom(state: var uint64): uint64 =
 
 proc elapsedNs(started: MonoTime): int64 =
   (getMonoTime() - started).inNanoseconds
+
+proc peakRssKiB(): int64 =
+  when defined(linux):
+    var usage: Rusage
+    if getrusage(RUSAGE_SELF, addr usage) == 0:
+      return int64(usage.ru_maxrss)
+  -1
 
 func fit(value: string, targetLength: int, padding: char): string =
   result = value
@@ -95,14 +105,45 @@ proc measure(kind: CorpusKind, values: seq[string], averageLength: int,
     sink = sink xor uint64(dict.findSubstring(substring).len)
   let substringNs = elapsedNs(started)
 
+  var state = Seed xor uint64(values.len) xor uint64(ord(kind))
+  started = getMonoTime()
+  for _ in 0..<QueryIterations:
+    let left = int64(nextRandom(state) mod uint64(dictionaryStats.bwtLength))
+    let right = min(dictionaryStats.bwtLength, left + 64)
+    let ranks = if dict.backendKind == fbRunLength:
+      dict.runLengthBwt.rankPair(encodeByte(byte('a')), left, right)
+    else:
+      dict.bwt.rankPair(uint64(encodeByte(byte('a'))), left, right)
+    sink = sink xor uint64(ranks.leftRank + ranks.rightRank)
+  let rankPairNs = elapsedNs(started)
+  started = getMonoTime()
+  for _ in 0..<QueryIterations:
+    let position = int64(nextRandom(state) mod uint64(dictionaryStats.bwtLength))
+    let item = if dict.backendKind == fbRunLength:
+      dict.runLengthBwt.accessRank(position)
+    else:
+      dict.bwt.accessRank(position)
+    sink = sink xor item.value xor uint64(item.rankBefore)
+  let accessRankNs = elapsedNs(started)
+
   echo &"{kind},{values.len},{averageLength},{preference}," &
     &"{dictionaryStats.fmBackendKind},{dictionaryStats.bwtLength}," &
     &"{dictionaryStats.runCount},{dictionaryStats.runRatio:.6f}," &
     &"{dictionaryStats.averageRunLength:.3f}," &
-    &"{dictionaryStats.maximumRunLength},{memory.fmTotalBytes}," &
+    &"{dictionaryStats.maximumRunLength}," &
+    &"{dictionaryStats.estimatedWaveletBytes}," &
+    &"{dictionaryStats.actualWaveletBytes}," &
+    &"{dictionaryStats.estimatedRleBytes}," &
+    &"{dictionaryStats.actualRleBytes}," &
+    &"{dictionaryStats.waveletEstimateErrorRatio:.6f}," &
+    &"{dictionaryStats.rleEstimateErrorRatio:.6f}," &
+    &"{memory.fmTotalBytes}," &
     &"{float(buildNs) / 1e6:.3f}," &
+    &"{peakRssKiB()}," &
     &"{float(suffixNs) / QueryIterations.float:.1f}," &
-    &"{float(substringNs) / QueryIterations.float:.1f}"
+    &"{float(substringNs) / QueryIterations.float:.1f}," &
+    &"{float(rankPairNs) / QueryIterations.float:.1f}," &
+    &"{float(accessRankNs) / QueryIterations.float:.1f}"
 
 proc run(count, averageLength: int, corpusFilter = -1,
          preferenceFilter = -1) =
@@ -117,7 +158,10 @@ proc run(count, averageLength: int, corpusFilter = -1,
 
 when isMainModule:
   echo "corpus,count,avg_len,preference,selected,bwt_n,runs,run_ratio," &
-    "average_run,max_run,fm_bytes,build_ms,suffix_ns,substring_ns"
+    "average_run,max_run,estimated_wavelet_bytes,actual_wavelet_bytes," &
+    "estimated_rle_bytes,actual_rle_bytes,wavelet_estimate_ratio," &
+    "rle_estimate_ratio,fm_bytes,build_ms,peak_rss_kib,suffix_ns," &
+    "substring_ns,rank_pair_ns,access_rank_ns"
   if paramCount() >= 2:
     var count, averageLength: int
     var corpusFilter = -1
@@ -130,13 +174,12 @@ when isMainModule:
       discard parseInt(paramStr(4), preferenceFilter)
     if count <= 0 or averageLength <= 0:
       raise newException(ValueError, "count and averageLength must be positive")
-    if corpusFilter >= ord(low(CorpusKind)) and
-        corpusFilter <= ord(high(CorpusKind)) and
-        preferenceFilter >= -1 and
-        preferenceFilter <= ord(high(FmBackendPreference)):
+    if (corpusFilter == -1 or (corpusFilter >= ord(low(CorpusKind)) and
+        corpusFilter <= ord(high(CorpusKind)))) and
+        (preferenceFilter == -1 or (preferenceFilter >=
+          ord(low(FmBackendPreference)) and preferenceFilter <=
+          ord(high(FmBackendPreference)))):
       run(count, averageLength, corpusFilter, preferenceFilter)
-    elif corpusFilter == -1 and preferenceFilter == -1:
-      run(count, averageLength)
     else:
       raise newException(ValueError,
         "corpus filter must be -1..9 and preference filter -1..2")

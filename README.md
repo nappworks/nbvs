@@ -338,8 +338,13 @@ duplicate-checking hash set when the caller already guarantees distinct input.
 The default remains `true`. Set `fmBackend` to `fbpWavelet` or `fbpRunLength`
 for reproducible comparisons; `fbpAuto` (the default) selects RLE only when its
 estimated storage is clearly smaller. `FmDictionary.stats()` reports run
-statistics and the selection estimates, while `memoryUsage()` reports the
-selected backend's storage without retaining both final payloads.
+statistics, estimated/actual backend bytes, and estimation error ratios, while
+`memoryUsage()` reports the selected backend's storage without retaining both
+final payloads. The RLE payload derives lengths from run boundaries and does
+not retain a `runLengths` array. Its fused `rankPair` includes a same-run path.
+Code that directly read the former public `RunLengthBwt.runLengths` field must
+derive each length from adjacent `runStarts.select1` positions (using `n` for
+the final boundary); the dictionary search APIs are unchanged.
 
 Construction uses SA-IS with `O(n)` time and `O(n)` temporary storage. L/S
 types and LMS positions are stored in two `BitVector` instances at one bit per
@@ -353,9 +358,10 @@ dictionary is immutable. `stats()` and `memoryUsage()` expose trie structure,
 parent delta distribution, suffix density, and storage diagnostics. See
 [benchmarks.md](benchmarks.md) for measured performance.
 
-`nimble benchFmRev3` runs the deterministic 10-corpus, 10k/100k/1m-entry and
+`nimble benchFmRev4` runs the deterministic 10-corpus, 10k/100k/1m-entry and
 8/16/32/64-byte matrix. `nimble benchRadixChildren` compares degree-specific
-linear, binary, and bitmap child lookup. Both commands can take substantial time.
+linear, binary, and bitmap child lookup. `nimble benchRunLengthBwt` measures
+RLE primitives and run-start alternatives. These commands can take substantial time.
 
 ### ReversedWaveletMatrix
 
@@ -771,7 +777,12 @@ touched-word bitmapへ切り替え、Dictionary ID昇順を維持します。DFS
 省略できます。既定値は後方互換のため`true`です。再現可能な比較では`fmBackend`へ
 `fbpWavelet`または`fbpRunLength`を指定できます。既定の`fbpAuto`はRLEの推定容量が
 明確に小さい場合だけRLEを選びます。`FmDictionary.stats()`はrun統計と選択時の推定値を、
-`memoryUsage()`は両方の完成payloadを保持せず選択されたbackendの容量内訳を返します。
+実容量、推定誤差を返し、`memoryUsage()`は両方の完成payloadを保持せず選択されたbackendの
+容量内訳を返します。RLE完成payloadはrun境界から長さを導出するため`runLengths`配列を
+保持しません。融合`rankPair`には同一run専用経路があります。
+旧公開field `RunLengthBwt.runLengths`を直接参照していたコードは、隣接する
+`runStarts.select1`の位置（最終境界は`n`）から各長さを導出してください。
+辞書検索APIに変更はありません。
 
 構築処理は時間計算量`O(n)`、追加領域`O(n)`のSA-ISを使用します。L/S型とLMS位置は、
 各flagを1 bitで保持する2つの`BitVector`へ格納します。Radix Trieは辞書順文字列と
@@ -784,9 +795,10 @@ dense/sparse edge offset、internal terminal range、terminal node用の
 `memoryUsage()`でTrie構造、parent delta分布、suffix密度、容量内訳を確認できます。
 実測値は [benchmarks.md](benchmarks.md) を参照してください。
 
-`nimble benchFmRev3`は決定的な10 corpusについて、10k/100k/1m件と平均8/16/32/64 byteの
+`nimble benchFmRev4`は決定的な10 corpusについて、10k/100k/1m件と平均8/16/32/64 byteの
 matrixを実行します。`nimble benchRadixChildren`はdegree別のlinear、binary、bitmap探索を
-比較します。どちらも完走には相応の時間がかかります。
+比較します。`nimble benchRunLengthBwt`はRLE primitiveとrun-start候補を測定します。
+これらの完走には相応の時間がかかります。
 
 ### ReversedWaveletMatrix
 

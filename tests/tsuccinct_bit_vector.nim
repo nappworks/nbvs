@@ -52,6 +52,19 @@ proc checkAgainstNaive(n: int64, ones: openArray[int64]) =
   for k in -1'i64..min(sbv.totalZeros + 1, 2048'i64):
     doAssert sbv.select0(k) == naiveSelect(bits, false, k)
 
+func allocatedBytes(sbv: SuccinctBitVector): int64 =
+  int64(sbv.data.len * sizeof(uint64) +
+    sbv.blockPairPrefix.len * sizeof(uint32) +
+    sbv.wordPairPrefix.len * sizeof(uint32) +
+    sbv.selectStorage.len * sizeof(uint64))
+
+block storageEstimation:
+  for bitLength in [0'i64, 1, 63, 64, 65, 511, 512, 513, 8192,
+                    8193, 65536, 65537, 1_000_000]:
+    let sbv = genSuccinctBitVector(bitLength)
+    doAssert estimateSuccinctBitVectorBytes(bitLength) == sbv.allocatedBytes
+  expectRaises(ValueError): discard estimateSuccinctBitVectorBytes(-1)
+
 block helpers:
   doAssert ceilDiv(-1, 64) == 0
   doAssert ceilDiv(0, 64) == 0
