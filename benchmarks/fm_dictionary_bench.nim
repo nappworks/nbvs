@@ -232,8 +232,26 @@ proc run(count, averageLength: int, japanese: bool) =
     &"{radixMemory.childNavigationBytes},{radixMemory.edgeFirstBytes}," &
     &"{radixMemory.edgeSuffixBytes},{radixMemory.edgeBoundaryBytes}," &
     &"{radixMemory.terminalBitsBytes},{radixMemory.terminalIdsBytes}," &
-    &"{radixMemory.idToTerminalBytes},{trieStats.nodeCount}," &
+    &"{radixMemory.idToTerminalBytes},{radixMemory.terminalRangeBytes}," &
+    &"{trieStats.nodeCount}," &
     &"{trieStats.edgeCount},{trieStats.terminalCount}," &
+    &"{trieStats.internalNodeCount},{trieStats.leafRatio:.6f}," &
+    &"{trieStats.suffixBearingEdgeCount}," &
+    &"{trieStats.suffixBearingEdgeRatio:.6f}," &
+    &"{trieStats.parentDeltaAverage:.3f}," &
+    &"{trieStats.parentDeltaMedian:.3f},{trieStats.parentDeltaP90}," &
+    &"{trieStats.parentDeltaP99},{trieStats.parentDeltaMaximum}," &
+    &"{trieStats.terminalIdCorrelation:.6f}," &
+    &"{trieStats.parentDeltaBitWidthHistogram[0]}," &
+    &"{trieStats.parentDeltaBitWidthHistogram[1]}," &
+    &"{trieStats.parentDeltaBitWidthHistogram[2]}," &
+    &"{trieStats.parentDeltaBitWidthHistogram[3]}," &
+    &"{trieStats.parentDeltaBitWidthHistogram[4]}," &
+    &"{trieStats.suffixLengthHistogram[0]}," &
+    &"{trieStats.suffixLengthHistogram[1]}," &
+    &"{trieStats.suffixLengthHistogram[2]}," &
+    &"{trieStats.suffixLengthHistogram[3]}," &
+    &"{trieStats.suffixLengthHistogram[4]}," &
     &"{trieStats.averageEdgeLabelLength:.3f}," &
     &"{trieStats.maximumEdgeLabelLength}," &
     &"{trieStats.averageTerminalDepth:.3f},{trieStats.maximumDepth}," &
@@ -261,7 +279,15 @@ when isMainModule:
     "storage_mib,bytes_per_character,build_peak_rss_kib,radix_bytes,topology_bytes," &
     "child_navigation_bytes,edge_first_bytes,edge_suffix_bytes," &
     "edge_boundary_bytes,terminal_bits_bytes,terminal_ids_bytes," &
-    "id_to_terminal_bytes,node_count,edge_count,terminal_count," &
+    "id_to_terminal_bytes,terminal_range_bytes,node_count,edge_count," &
+    "terminal_count,internal_node_count,leaf_ratio,suffix_edge_count," &
+    "suffix_edge_ratio,parent_delta_average,parent_delta_median," &
+    "parent_delta_p90,parent_delta_p99,parent_delta_max," &
+    "terminal_id_correlation," &
+    "parent_delta_bits_1_4,parent_delta_bits_5_8," &
+    "parent_delta_bits_9_12,parent_delta_bits_13_16," &
+    "parent_delta_bits_17_plus,suffix_length_0,suffix_length_1_4," &
+    "suffix_length_5_8,suffix_length_9_16,suffix_length_17_plus," &
     "average_edge_label_length,maximum_edge_label_length," &
     "average_terminal_depth,maximum_depth,degree_0,degree_1,degree_2_4," &
     "degree_5_16,degree_17_plus"

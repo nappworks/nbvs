@@ -10,6 +10,56 @@
 以下の2026-07-17既存性能表は、ウォームアップを1回実行した後の3試行の中央値です。
 生の計測結果は `benchmarks/*_trial[1-3].csv` に保存しています。
 
+## Succinct Radix Trie metadata圧縮（2026-08-09）
+
+`fmDictrev2.md`に基づき、DFS preorderとPackedArray中心のhot pathを維持したまま、
+次のmetadata圧縮を採用しました。
+
+- `internalBits`によりfirst-child／degree metadataをinternal nodeだけへ限定
+- 全nodeの`subtreeEnd`をinternal nodeだけのterminal ordinal rangeへ置換
+- suffix密度25%以下ではSBV＋sparse offset、それ以外ではdense offsetを選択
+- parent node IDを256 node単位の可変bit幅delta blockへ置換
+- `childNodes`とdirect ID → terminal node mappingは速度優先で維持
+
+release／ARCの旧rev1バイナリと新rev2バイナリを同じセッションで、100万件・平均16 byte、
+10,000 queryについて比較しました。
+
+| metric | rev1 | rev2 | 変化 |
+|:---|---:|---:|---:|
+| Trie storage | 19,166,581 byte | 11,976,962 byte | -37.5% |
+| Dictionary storage | 43.080 MiB | 36.223 MiB | -15.9% |
+| build | 4,645.211 ms | 4,636.979 ms | -0.2% |
+| peak RSS | 685,012 KiB | 685,544 KiB | +0.1% |
+| exact | 1,355.7 ns | 1,457.5 ns | 7.5%低下、92.5%維持 |
+| prefix（候補1件） | 1,514.7 ns | 1,448.1 ns | 4.4%改善 |
+| restore | 945.5 ns | 634.2 ns | 32.9%改善 |
+
+rev2のTrie容量は11.42 MiB、Dictionary全体は36.22 MiBで、成功目標のTrie 12 MiB以下と
+Dictionary 35～38 MiBを達成しました。exactは許容下限85%を上回り、prefix／restoreは
+改善しています。build時間も1.2倍以内です。
+
+### 100万件のmetadata候補比較
+
+`radix_compaction_bench.nim 1000000 16`による100万回のmicrobenchmarkです。
+
+| 候補 | baseline容量 | candidate容量 | baseline | candidate | 判断 |
+|:---|---:|---:|---:|---:|:---|
+| internal SBV rank → direct index | 152,652 | 2,361,120 | 16.18 ns | 15.42 ns | 容量増が大きく不採用 |
+| firstChild Packed → Elias-Fano | 291,672 | 76,076 | 16.51 ns | 72.37 ns | 約4.4倍遅く不採用 |
+| childNodes → subtreeEnd chain | 2,916,672 | 2,916,672 | 29.91 ns | 26.42 ns | firstChild削減を含めても5%未満のため不採用 |
+| direct parent → block delta | 2,916,672 | 1,463,405 | 15.93 ns | 18.32 ns | 約50%削減、許容範囲で採用 |
+| terminal node → ordinal＋select | 2,625,000 | 2,500,000 | 17.37 ns | 82.95 ns | 4.8%削減に対し約4.8倍遅く不採用 |
+
+代表corpusではinternal node 111,112、leaf比率約90%、suffix保有edgeは1本でした。
+parent deltaは平均27.5、中央値6、p90 10、p99 100、最大1,000,000であり、block deltaの
+採用根拠となっています。terminal DFS ordinalと入力順IDの相関は約0.459で、mappingを
+省略できるほど辞書順に近くないため、既定ID互換mappingを維持しました。
+
+複数分布ではadaptive suffix方式により、10,000件のTrie容量がrev1比でrandom 11.6%、
+common-prefix 32.3%、URL/path 16.4%、code-symbol 22.6%、natural-name-like 20.3%
+減少しました。long edgeが多いcorpusではdense offsetへ切り替わるため、suffixごとの
+SBV rankを回避します。
+
 ## Succinct Radix Trie accelerator（2026-08-09）
 
 `fmDictrev1.md`のStage 1／2として、DFS preorderとpacked child metadataを使う

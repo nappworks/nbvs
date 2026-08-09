@@ -37,3 +37,6 @@ task benchRadixRepresentations, "Compare Radix Trie representations":
 
 task benchFmDistributions, "Run FmDictionary distribution benchmarks":
   exec "nim c --path:src -d:release --mm:arc -r benchmarks/fm_dictionary_distributions.nim"
+
+task benchRadixCompaction, "Compare Radix Trie metadata compaction":
+  exec "nim c --path:src -d:release --mm:arc -r benchmarks/experimental/radix_compaction_bench.nim"

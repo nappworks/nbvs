@@ -41,8 +41,8 @@ proc buildExperiment(trie: SuccinctRadixTrie): TopologyExperiment =
   var position = 0
   while position < bfsNodes.len:
     let node = bfsNodes[position]
-    let first = int(trie.firstChild.getUnchecked(node))
-    let count = int(trie.childCount.getUnchecked(node))
+    let first = trie.firstChildOffset(node)
+    let count = trie.childCountAt(node)
     for offset in 0..<count:
       bfsNodes.add int(trie.childNodes.getUnchecked(first + offset))
     inc position
@@ -54,7 +54,7 @@ proc buildExperiment(trie: SuccinctRadixTrie): TopologyExperiment =
   result.louds = genSuccinctBitVector(int64(2 * nodeCount - 1))
   position = 0
   for dfsNode in bfsNodes:
-    let degree = int(trie.childCount.getUnchecked(dfsNode))
+    let degree = trie.childCountAt(dfsNode)
     for _ in 0..<degree:
       result.louds.setBit(int64(position))
       inc position
@@ -67,7 +67,7 @@ proc buildExperiment(trie: SuccinctRadixTrie): TopologyExperiment =
   result.dfuds.setBit(0)
   position = 1
   for dfsNode in 0..<nodeCount:
-    let degree = int(trie.childCount.getUnchecked(dfsNode))
+    let degree = trie.childCountAt(dfsNode)
     for _ in 0..<degree:
       result.dfuds.setBit(int64(position))
       inc position
@@ -79,9 +79,13 @@ proc buildExperiment(trie: SuccinctRadixTrie): TopologyExperiment =
   let suffixBytes = trie.edgeSuffixBytes.len
   result.edgeSuffixDelimiters = genSuccinctBitVector(
     int64(suffixBytes + nodeCount))
+  var runningSuffixEnd = 0
   for node in 0..<nodeCount:
-    let suffixEnd = int(trie.edgeSuffixOffsets.getUnchecked(node + 1))
-    result.edgeSuffixDelimiters.setBit(int64(suffixEnd + node))
+    let suffix = trie.edgeSuffixRange(node)
+    if suffix.last > suffix.first:
+      doAssert suffix.first == runningSuffixEnd
+      runningSuffixEnd = suffix.last
+    result.edgeSuffixDelimiters.setBit(int64(runningSuffixEnd + node))
   result.edgeSuffixDelimiters.build()
 
 func loudsChildRange(experiment: TopologyExperiment,
@@ -142,9 +146,8 @@ func loudsLocate(trie: SuccinctRadixTrie, experiment: TopologyExperiment,
       return (bfsNode: -1, atBoundary: false)
     let dfsChild = int(experiment.bfsToDfs.getUnchecked(child))
     inc position
-    let suffixStart = int(trie.edgeSuffixOffsets.getUnchecked(dfsChild))
-    let suffixEnd = int(trie.edgeSuffixOffsets.getUnchecked(dfsChild + 1))
-    for suffixPosition in suffixStart..<suffixEnd:
+    let suffix = trie.edgeSuffixRange(dfsChild)
+    for suffixPosition in suffix.first..<suffix.last:
       if position == pattern.len:
         return (bfsNode: child, atBoundary: false)
       if byte(pattern[position]) != trie.edgeSuffixBytes[suffixPosition]:
@@ -172,21 +175,20 @@ proc loudsGetStringInto(trie: SuccinctRadixTrie,
   var current = bfsNode
   while current != 0:
     let dfsNode = int(experiment.bfsToDfs.getUnchecked(current))
-    length += 1 + int(trie.edgeSuffixOffsets.getUnchecked(dfsNode + 1)) -
-      int(trie.edgeSuffixOffsets.getUnchecked(dfsNode))
+    let suffix = trie.edgeSuffixRange(dfsNode)
+    length += 1 + suffix.last - suffix.first
     current = experiment.loudsParent(current)
   output.setLen(length)
   var writePosition = length
   while bfsNode != 0:
     let dfsNode = int(experiment.bfsToDfs.getUnchecked(bfsNode))
-    let suffixStart = int(trie.edgeSuffixOffsets.getUnchecked(dfsNode))
-    let suffixEnd = int(trie.edgeSuffixOffsets.getUnchecked(dfsNode + 1))
-    let edgeLength = 1 + suffixEnd - suffixStart
+    let suffix = trie.edgeSuffixRange(dfsNode)
+    let edgeLength = 1 + suffix.last - suffix.first
     writePosition -= edgeLength
     output[writePosition] = char(trie.edgeFirstBytes[dfsNode])
-    for offset in 0..<suffixEnd - suffixStart:
+    for offset in 0..<suffix.last - suffix.first:
       output[writePosition + offset + 1] =
-        char(trie.edgeSuffixBytes[suffixStart + offset])
+        char(trie.edgeSuffixBytes[suffix.first + offset])
     bfsNode = experiment.loudsParent(bfsNode)
 
 proc validate(trie: SuccinctRadixTrie, experiment: TopologyExperiment,
@@ -194,17 +196,18 @@ proc validate(trie: SuccinctRadixTrie, experiment: TopologyExperiment,
   for dfsNode in 0..<trie.edgeFirstBytes.len:
     let bfsNode = int(experiment.dfsToBfs.getUnchecked(dfsNode))
     let childRange = experiment.loudsChildRange(bfsNode)
-    doAssert childRange.count == int(trie.childCount.getUnchecked(dfsNode))
+    doAssert childRange.count == trie.childCountAt(dfsNode)
     doAssert experiment.dfudsDegree(dfsNode) == childRange.count
     if bfsNode > 0:
       let parentBfs = experiment.loudsParent(bfsNode)
       doAssert int(experiment.bfsToDfs.getUnchecked(parentBfs)) ==
-        int(trie.parent.getUnchecked(dfsNode))
+        trie.parentAt(dfsNode)
     let suffixRange = experiment.sbvSuffixRange(dfsNode)
-    doAssert suffixRange.first ==
-      int(trie.edgeSuffixOffsets.getUnchecked(dfsNode))
-    doAssert suffixRange.last ==
-      int(trie.edgeSuffixOffsets.getUnchecked(dfsNode + 1))
+    let sparseSuffix = trie.edgeSuffixRange(dfsNode)
+    doAssert suffixRange.last - suffixRange.first ==
+      sparseSuffix.last - sparseSuffix.first
+    if sparseSuffix.last > sparseSuffix.first:
+      doAssert suffixRange == sparseSuffix
   var restored: string
   for id, value in values:
     doAssert trie.loudsFindExact(experiment, value) == id
@@ -227,8 +230,8 @@ proc run(count, averageLength: int) =
   var started = getMonoTime()
   for query in 0..<QueryIterations:
     let node = query mod nodeCount
-    sink = sink xor trie.firstChild.getUnchecked(node) xor
-      trie.childCount.getUnchecked(node)
+    sink = sink xor uint64(trie.firstChildOffset(node) + 1) xor
+      uint64(trie.childCountAt(node))
   let packedChildrenNs = elapsedNs(started)
 
   started = getMonoTime()
@@ -248,8 +251,8 @@ proc run(count, averageLength: int) =
   started = getMonoTime()
   for query in 0..<QueryIterations:
     let node = query mod nodeCount
-    sink = sink xor trie.edgeSuffixOffsets.getUnchecked(node) xor
-      trie.edgeSuffixOffsets.getUnchecked(node + 1)
+    let boundary = trie.edgeSuffixRange(node)
+    sink = sink xor uint64(boundary.first) xor uint64(boundary.last)
   let packedBoundaryNs = elapsedNs(started)
 
   started = getMonoTime()
@@ -284,9 +287,12 @@ proc run(count, averageLength: int) =
     sink = sink xor uint64(restored.len)
   let loudsRestoreNs = elapsedNs(started)
 
-  let packedTopologyBytes = packedBytes(trie.firstChild) +
-    packedBytes(trie.childCount) + packedBytes(trie.childNodes) +
-    packedBytes(trie.parent)
+  let packedTopologyBytes = sbvBytes(trie.internalBits) +
+    packedBytes(trie.internalFirstChild) +
+    packedBytes(trie.internalChildCount) + packedBytes(trie.childNodes) +
+    int64(trie.parents.bitWidths.len) +
+    int64(trie.parents.wordOffsets.len) * 4 +
+    int64(trie.parents.data.len) * 8
   echo "representation,bytes,ns_per_operation"
   echo &"dfs_packed_topology,{packedTopologyBytes}," &
     &"{float(packedChildrenNs) / QueryIterations.float:.2f}"

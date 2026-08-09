@@ -335,10 +335,11 @@ The default remains `true`.
 
 Construction uses SA-IS with `O(n)` time and `O(n)` temporary storage. L/S
 types and LMS positions are stored in two `BitVector` instances at one bit per
-flag. The Radix Trie uses DFS-preorder nodes, packed child/parent metadata,
-packed edge offsets, and a `SuccinctBitVector` for terminal nodes. The finished
-dictionary is immutable. `stats()` and `memoryUsage()` expose trie structure
-and storage diagnostics. See
+flag. The Radix Trie uses DFS-preorder nodes, internal-node-only child metadata,
+block-packed parent deltas, adaptive dense/sparse edge offsets, internal
+terminal ranges, and a `SuccinctBitVector` for terminal nodes. The finished
+dictionary is immutable. `stats()` and `memoryUsage()` expose trie structure,
+parent delta distribution, suffix density, and storage diagnostics. See
 [benchmarks.md](benchmarks.md) for measured performance.
 
 ### ReversedWaveletMatrix
@@ -392,6 +393,13 @@ natural-name-like corpora:
 
 ```sh
 nimble benchFmDistributions
+```
+
+Compare internal-node lookup, Elias-Fano first-child offsets, subtree-chain
+child navigation, block-packed parents, and terminal-ordinal mapping:
+
+```sh
+nimble benchRadixCompaction
 ```
 
 Both benchmark programs accept `count` and average byte length as positional
@@ -745,9 +753,11 @@ dict.getStringInto(3, restored)
 
 構築処理は時間計算量`O(n)`、追加領域`O(n)`のSA-ISを使用します。L/S型とLMS位置は、
 各flagを1 bitで保持する2つの`BitVector`へ格納します。Radix TrieはDFS preorderの
-node、packedな子・親metadataとedge offset、terminal node用の`SuccinctBitVector`を
-使用します。構築後のDictionaryはimmutableです。`stats()`と`memoryUsage()`でTrieの
-構造・容量内訳を確認できます。実測値は [benchmarks.md](benchmarks.md) を参照してください。
+node、internal node限定の子metadata、block-packed parent delta、adaptiveな
+dense/sparse edge offset、internal terminal range、terminal node用の
+`SuccinctBitVector`を使用します。構築後のDictionaryはimmutableです。`stats()`と
+`memoryUsage()`でTrie構造、parent delta分布、suffix密度、容量内訳を確認できます。
+実測値は [benchmarks.md](benchmarks.md) を参照してください。
 
 ### ReversedWaveletMatrix
 
@@ -798,6 +808,13 @@ random、共通prefix、URL/path、code symbol、自然言語名称風の各corp
 
 ```sh
 nimble benchFmDistributions
+```
+
+internal-node lookup、Elias-Fano first-child offset、subtree chainによる子navigation、
+block-packed parent、terminal ordinal mappingを比較します。
+
+```sh
+nimble benchRadixCompaction
 ```
 
 どちらも位置引数で件数と平均byte長を指定できます。分布benchmarkでは第3引数で

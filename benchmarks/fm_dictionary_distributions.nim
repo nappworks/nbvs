@@ -55,6 +55,40 @@ proc makeCorpus(kind: CorpusKind, count, averageLength: int): seq[string] =
       result[index] = padTo("東京データ" & $(index mod 53) & "-",
         max(0, averageLength - identifier.len), 'x') & identifier
 
+proc nodeString(trie: SuccinctRadixTrie, initialNode: int): string =
+  var node = initialNode
+  var length = 0
+  while node != 0:
+    let suffix = trie.edgeSuffixRange(node)
+    length += 1 + suffix.last - suffix.first
+    node = trie.parentAt(node)
+  result.setLen(length)
+  var writePosition = length
+  node = initialNode
+  while node != 0:
+    let suffix = trie.edgeSuffixRange(node)
+    let edgeLength = 1 + suffix.last - suffix.first
+    writePosition -= edgeLength
+    result[writePosition] = char(trie.edgeFirstBytes[node])
+    for offset in 0..<suffix.last - suffix.first:
+      result[writePosition + offset + 1] =
+        char(trie.edgeSuffixBytes[suffix.first + offset])
+    node = trie.parentAt(node)
+
+proc prefixNear(trie: SuccinctRadixTrie, targetCount: int): string =
+  var bestNode = 0
+  var bestDistance = int.high
+  for node in 0..<trie.edgeFirstBytes.len:
+    if not trie.internalBits.access(int64(node)):
+      continue
+    let internal = int(trie.internalBits.rank1Unchecked(int64(node)))
+    let terminalCount = int(trie.internalTerminalCount.getUnchecked(internal))
+    let distance = abs(terminalCount - targetCount)
+    if distance < bestDistance:
+      bestNode = node
+      bestDistance = distance
+  trie.nodeString(bestNode)
+
 proc runTrial(kind: CorpusKind, values: openArray[string], trial: int) =
   var started = getMonoTime()
   let dict = genFmDictionary(values)
@@ -86,6 +120,15 @@ proc runTrial(kind: CorpusKind, values: openArray[string], trial: int) =
     sink = sink xor uint64(prefixOutput.len)
   let prefixNs = elapsedNs(started)
 
+  var prefixGroupNs: array[3, int64]
+  for index, targetCount in [10, 100, 1_000]:
+    let prefix = dict.radixTrie.prefixNear(targetCount)
+    started = getMonoTime()
+    for _ in 0..<QueryIterations:
+      dict.findPrefixInto(prefix, prefixOutput)
+      sink = sink xor uint64(prefixOutput.len)
+    prefixGroupNs[index] = elapsedNs(started)
+
   var restored: string
   started = getMonoTime()
   for id in ids:
@@ -100,15 +143,25 @@ proc runTrial(kind: CorpusKind, values: openArray[string], trial: int) =
     &"{float(exactHitNs) / QueryIterations.float:.1f}," &
     &"{float(exactMissNs) / QueryIterations.float:.1f}," &
     &"{float(prefixNs) / QueryIterations.float:.1f}," &
+    &"{float(prefixGroupNs[0]) / QueryIterations.float:.1f}," &
+    &"{float(prefixGroupNs[1]) / QueryIterations.float:.1f}," &
+    &"{float(prefixGroupNs[2]) / QueryIterations.float:.1f}," &
     &"{float(restoreNs) / QueryIterations.float:.1f}," &
     &"{memory.totalBytes},{trieStats.nodeCount}," &
     &"{trieStats.averageEdgeLabelLength:.3f}," &
-    &"{trieStats.averageTerminalDepth:.3f}"
+    &"{trieStats.averageTerminalDepth:.3f}," &
+    &"{trieStats.internalNodeCount},{trieStats.leafRatio:.6f}," &
+    &"{trieStats.suffixBearingEdgeRatio:.6f}," &
+    &"{trieStats.parentDeltaMedian:.3f},{trieStats.parentDeltaP99}," &
+    &"{trieStats.terminalIdCorrelation:.6f}"
 
 proc run(count, averageLength, trials: int) =
   echo "distribution,count,sample_bytes,trial,build_ms,exact_hit_ns," &
-    "exact_miss_ns,prefix_one_ns,restore_ns,trie_bytes,node_count," &
-    "average_edge_label_bytes,average_terminal_depth"
+    "exact_miss_ns,prefix_one_ns,prefix_near_10_ns,prefix_near_100_ns," &
+    "prefix_near_1000_ns,restore_ns,trie_bytes,node_count," &
+    "average_edge_label_bytes,average_terminal_depth,internal_node_count," &
+    "leaf_ratio,suffix_edge_ratio,parent_delta_median,parent_delta_p99," &
+    "terminal_id_correlation"
   for kind in CorpusKind:
     let values = makeCorpus(kind, count, averageLength)
     for trial in 1..trials:
