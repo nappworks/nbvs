@@ -10,6 +10,83 @@
 以下の2026-07-17既存性能表は、ウォームアップを1回実行した後の3試行の中央値です。
 生の計測結果は `benchmarks/*_trial[1-3].csv` に保存しています。
 
+## Succinct Radix Trie accelerator（2026-08-09）
+
+`fmDictrev1.md`のStage 1／2として、DFS preorderとpacked child metadataを使う
+path-compressed Radix Trieを`FmDictionary`へ追加しました。exact、prefix、ID復元は
+Trieを使い、suffixとsubstringは従来のFM-indexを使います。以下はGCC、release、ARC、
+portable scalar backendで`benchmarks/fm_dictionary_bench.nim 1000000 16`を1回実行した
+参考値です。queryは固定seedによる10,000回で、CPU affinityは固定していません。
+
+| query | Radix Trie | FM-index | 速度倍率 |
+|:---|---:|---:|---:|
+| exact | 1,319.0 ns | 25,245.2 ns | 19.1x |
+| prefix（候補1件、sort込み） | 1,556.6 ns | 25,470.8 ns | 16.4x |
+| ID復元（`Into`） | 576.2 ns | 25,785.0 ns | 44.7x |
+
+FM Dictionary全体のbuildは4,748.687 ms、プロセス全体のpeak RSSは685,000 KiBでした。
+完成後の論理storageは43.080 MiB（元文字列1 byteあたり2.823 byte）で、うちTrieは
+19,166,581 byte（18.279 MiB）です。旧FM-only基準24.801 MiBに対する増分は約73.7%です。
+
+| Trie構造 | byte |
+|:---|---:|
+| topology（parent、subtree end） | 5,833,344 |
+| child navigation | 6,388,904 |
+| edge first bytes | 1,111,112 |
+| edge suffix bytes | 9 |
+| edge boundary metadata | 555,560 |
+| terminal bits | 152,652 |
+| terminal IDs | 2,500,000 |
+| ID → terminal | 2,625,000 |
+
+この生成データでは1,111,112 node、1,111,111 edge、1,000,000 terminalでした。
+平均edge label長は1.000 byte、最大10 byte、平均terminal depthは7.000、最大depthは7、
+degree分布は0: 1,000,000、1: 1、2–4: 0、5–16: 111,111、17以上: 0です。
+データ生成規則が共通prefixに偏るため、自然言語やURLなど別分布での複数試行は今後の
+比較も下記の追加benchmarkで実施しました。
+
+### Topology／edge境界比較
+
+`radix_representation_bench.nim 1000000 16`で全nodeの対応関係と境界を検証してから、
+100万回のnavigation primitiveを測定しました。
+
+| 表現 | 容量 | latency |
+|:---|---:|---:|
+| DFS packed topology | 9,305,576 byte | 19.69 ns |
+| LOUDS + BFS/DFS mapping | 6,138,516 byte | 332.38 ns |
+| DFUDS degree sequence | 305,172 byte | 270.71 ns |
+| PackedArray edge境界 | 555,560 byte | 18.45 ns |
+| delimiter付きSBV edge境界 | 152,652 byte | 138.53 ns |
+
+LOUDSはchild rangeとparentをrank/selectで復元できましたが、edge dataのDFS配置との
+相互変換mappingを含めても約34%省容量になる一方、child rangeが約17倍遅くなりました。
+DFUDSはdegree sequence自体は小さいものの、汎用parent／subtree navigationには
+balanced-parentheses補助索引が別途必要であり、degree取得だけでもpacked基準より約15倍
+遅い結果です。SBV edge境界は約73%省容量ですが約7.5倍遅くなりました。空suffixが連続
+し得るため、単純な末尾bit方式ではなくdelimiterを含むunary encodingを使用しています。
+以上から、hot pathにはDFS + PackedArrayを維持します。
+
+同じ100万件について、LOUDSで完全なexact／restore経路も全ID照合後に測定しました。
+exactはDFS 479.82 nsに対してLOUDS 2,263.46 ns、restoreはDFS 353.02 nsに対して
+LOUDS 1,392.13 nsでした。容量削減よりも4倍以上のlatency増加が支配的なため、公開APIの
+dispatchは変更していません。
+
+### 複数分布の反復測定
+
+`fm_dictionary_distributions.nim 10000 16 5`の5試行中央値です。各queryは10,000回、
+最初のexact走査をwarm-upとし、prefixは登録文字列全体を指定した候補1件の結果です。
+
+| 分布 | exact hit | exact miss | prefix | restore |
+|:---|---:|---:|---:|---:|
+| random | 350.3 ns | 486.5 ns | 437.8 ns | 239.8 ns |
+| common-prefix | 474.8 ns | 411.3 ns | 529.8 ns | 342.8 ns |
+| URL/path風 | 661.2 ns | 584.7 ns | 587.0 ns | 433.5 ns |
+| code symbol風 | 461.6 ns | 504.9 ns | 608.7 ns | 380.1 ns |
+| 自然言語名称風 | 577.2 ns | 537.0 ns | 512.0 ns | 362.5 ns |
+
+単発値の揺れはありますが、全分布でµs未満の中央値でした。大規模matrixは件数・平均長・
+試行数を引数で変更して再現できます。
+
 ## FmDictionary query／構築メモリ改善（2026-08-05）
 
 `nbvs_fmDirectory_add2.md`と`nbvs_fmDirectory_add3.md`に基づき、次を採用しました。

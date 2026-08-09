@@ -3,10 +3,12 @@
 ## 文字列はUTF-8 byte列として処理され、入力順がDictionary IDになります。
 
 import std/[algorithm, bitops, sets]
-import bit_vector, packed_array, succinct_bit_vector, wavelet_matrix
+import bit_vector, packed_array, succinct_bit_vector, succinct_radix_trie,
+  wavelet_matrix
 import internal/[fm_symbols, suffix_array]
 
 export fm_symbols
+export succinct_radix_trie
 
 type
   DictionaryId* = uint32
@@ -22,13 +24,14 @@ type
     validateDistinct*: bool ## 入力文字列の重複を構築前に検査します。
 
   FmDictionary* = object
-    ## 元文字列poolを保持せず、検索と復元を提供するDictionaryです。
+    ## FM-indexとRadix Trieを組み合わせて検索と復元を提供するDictionaryです。
     bwt*: WaveletMatrix ## BWT symbol列を保持する固定9-bit Wavelet Matrix。
     cTable*: PackedArray            ## symbol未満の総出現数を保持するC table。
     startAnchorToEncodedId*: PackedArray ## 開始anchorからencoded IDを得る配列。
     dictionaryIdToEndAnchor*: PackedArray ## IDから終了anchor ordinalを得る配列。
     dictionaryCount*: uint32        ## Dictionaryのエントリ数。
     maxEncodedStringLength*: uint32 ## 最大文字列長（UTF-8 byte数）。
+    radixTrie*: SuccinctRadixTrie   ## exact、prefix、ID復元用の補助索引。
 
   FmQueryWorkspace* = object
     ## substring検索の集約領域をクエリ間で再利用します。
@@ -73,6 +76,7 @@ proc genFmDictionary*(strings: openArray[string],
   seen = default(HashSet[string])
 
   result.dictionaryCount = uint32(strings.len)
+  result.radixTrie = genSuccinctRadixTrie(strings)
   let symbolCount = int(totalLength)
   var symbols = newSeq[FmSymbol](symbolCount)
   var separatorPositions = genSuccinctBitVector(int64(symbolCount))
@@ -224,14 +228,22 @@ func dictionaryIdFromMatchRow(dict: FmDictionary, initialRow: int64): int64 =
     if steps > dict.maxEncodedStringLength:
       raise newException(ValueError, "invalid FM Dictionary anchor chain")
 
-func findExact*(dict: FmDictionary, value: string): int64 =
-  ## 完全一致するDictionary IDを返し、存在しない場合は`-1`を返します。
+func findExactFm*(dict: FmDictionary, value: string): int64 =
+  ## FM-indexで完全一致するDictionary IDを返します。
   let interval = dict.backwardSearchExact(value)
   for row in interval.left..<interval.right:
     let dictionaryId = dict.idFromSeparatorFRow(row)
     if dictionaryId >= 0:
       return dictionaryId
   -1
+
+func findExactRadix*(dict: FmDictionary, value: string): int64 =
+  ## Radix Trieで完全一致するDictionary IDを返します。
+  dict.radixTrie.findExact(value)
+
+func findExact*(dict: FmDictionary, value: string): int64 =
+  ## 完全一致するDictionary IDをRadix Trieで検索します。
+  dict.findExactRadix(value)
 
 func contains*(dict: FmDictionary, value: string): bool =
   ## 完全一致する文字列が存在するかを返します。
@@ -242,9 +254,9 @@ proc allIds(dict: FmDictionary): seq[DictionaryId] =
   for index in 0..<result.len:
     result[index] = DictionaryId(index)
 
-proc findPrefixInto*(dict: FmDictionary, prefix: string,
-                     output: var seq[DictionaryId]) =
-  ## 前方一致するIDを既存の`output`容量を再利用して昇順で格納します。
+proc findPrefixIntoFm*(dict: FmDictionary, prefix: string,
+                       output: var seq[DictionaryId]) =
+  ## FM-indexで前方一致するIDを昇順で `output` へ格納します。
   output.setLen(0)
   if prefix.len == 0:
     for dictionaryId in 0..<dict.len:
@@ -256,6 +268,16 @@ proc findPrefixInto*(dict: FmDictionary, prefix: string,
     if dictionaryId >= 0:
       output.add DictionaryId(dictionaryId)
   output.sort()
+
+proc findPrefixIntoRadix*(dict: FmDictionary, prefix: string,
+                          output: var seq[DictionaryId]) =
+  ## Radix Trieで前方一致するIDを昇順で `output` へ格納します。
+  dict.radixTrie.findPrefixInto(prefix, output)
+
+proc findPrefixInto*(dict: FmDictionary, prefix: string,
+                     output: var seq[DictionaryId]) =
+  ## 前方一致するIDを既存の `output` 容量を再利用して昇順で格納します。
+  dict.findPrefixIntoRadix(prefix, output)
 
 proc findPrefix*(dict: FmDictionary, prefix: string): seq[DictionaryId] =
   ## byte単位で前方一致するDictionary IDを昇順で返します。
@@ -315,9 +337,9 @@ proc collectMatches(dict: FmDictionary, pattern: string,
       workspace.recordMatch(DictionaryId(dictionaryId), countOccurrences)
   workspace.touchedIds.sort()
 
-proc getStringInto*(dict: FmDictionary, id: DictionaryId,
-                    output: var string) =
-  ## Dictionary IDから復元した文字列を`output`へ格納します。
+proc getStringIntoFm*(dict: FmDictionary, id: DictionaryId,
+                      output: var string) =
+  ## FM-indexのLF traversalで復元した文字列を `output` へ格納します。
   ##
   ## 既存の文字列capacityを再利用します。IDが範囲外の場合は`IndexDefect`、
   ## 内部anchorが破損している場合は`ValueError`が発生します。
@@ -344,6 +366,16 @@ proc getStringInto*(dict: FmDictionary, id: DictionaryId,
       raise newException(ValueError, "invalid FM Dictionary string chain")
   for index in 0..<output.len div 2:
     swap(output[index], output[output.high - index])
+
+proc getStringIntoRadix*(dict: FmDictionary, id: DictionaryId,
+                         output: var string) =
+  ## Radix Trieで復元した文字列を `output` へ格納します。
+  dict.radixTrie.getStringInto(id, output)
+
+proc getStringInto*(dict: FmDictionary, id: DictionaryId,
+                    output: var string) =
+  ## Dictionary IDから復元した文字列を `output` へ格納します。
+  dict.getStringIntoRadix(id, output)
 
 proc getString*(dict: FmDictionary, id: DictionaryId): string =
   ## Dictionary IDから元の文字列を復元します。

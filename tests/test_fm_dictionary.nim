@@ -73,12 +73,18 @@ block basic:
   doAssert dict.findExact("hana") == 3
   doAssert dict.findExact("app") == -1
   doAssert dict.findExact("missing") == -1
+  doAssert dict.findExactRadix("application") ==
+    dict.findExactFm("application")
   doAssert dict.contains("banana")
   doAssert not dict.contains("ban")
   doAssert dict.findPrefix("app") == @[0'u32, 1'u32]
   var prefixOutput = @[99'u32, 100'u32]
   dict.findPrefixInto("app", prefixOutput)
   doAssert prefixOutput == @[0'u32, 1'u32]
+  var fmPrefixOutput, radixPrefixOutput: seq[DictionaryId]
+  dict.findPrefixIntoFm("app", fmPrefixOutput)
+  dict.findPrefixIntoRadix("app", radixPrefixOutput)
+  doAssert radixPrefixOutput == fmPrefixOutput
   doAssert dict.findPrefix("") == @[0'u32, 1, 2, 3]
   doAssert dict.findSuffix("ana") == @[2'u32, 3'u32]
   doAssert dict.findSuffix("") == @[0'u32, 1, 2, 3]
@@ -91,6 +97,10 @@ block basic:
     var output = "existing capacity"
     dict.getStringInto(DictionaryId(id), output)
     doAssert output == value
+    var fmOutput, radixOutput: string
+    dict.getStringIntoFm(DictionaryId(id), fmOutput)
+    dict.getStringIntoRadix(DictionaryId(id), radixOutput)
+    doAssert radixOutput == fmOutput
   var decoded: seq[string]
   for value in dict.items:
     decoded.add value
@@ -129,6 +139,22 @@ block anchoredPrefix:
   let dict = genFmDictionary(@["baaa", "aaab", "caaa", "a"])
   doAssert dict.findExact("a") == 3
   doAssert dict.findPrefix("a") == @[1'u32, 3'u32]
+
+block compressedEdges:
+  let values = @["application", "applicable", "applicant", "apple"]
+  let dict = genFmDictionary(values)
+  let trieStats = dict.radixTrie.stats()
+  # 1文字Trieよりnodeを減らし、仕様例どおり "appl" と "ica" を共有する。
+  doAssert trieStats.edgeCount == 6
+  doAssert trieStats.maximumEdgeLabelLength == 4
+  doAssert dict.findExact("app") == -1
+  doAssert dict.findPrefix("app") == @[0'u32, 1, 2, 3]
+  doAssert dict.findPrefix("appl") == @[0'u32, 1, 2, 3]
+  doAssert dict.findPrefix("appli") == @[0'u32, 1, 2]
+  doAssert dict.findPrefix("applicationx").len == 0
+  for id, value in values:
+    doAssert dict.findExactRadix(value) == dict.findExactFm(value)
+    doAssert dict.findExact(dict.getString(DictionaryId(id))) == id
 
 block reusableWorkspace:
   let dict = genFmDictionary(@["banana", "hana", "aaaaa", "missing"])
