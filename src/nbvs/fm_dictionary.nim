@@ -4,7 +4,7 @@
 
 import std/[algorithm, bitops, sets]
 import bit_vector, packed_array, succinct_bit_vector, succinct_radix_trie,
-  wavelet_matrix
+  wavelet_matrix, run_length_bwt
 import internal/[fm_symbols, suffix_array]
 
 export fm_symbols
@@ -14,6 +14,14 @@ type
   DictionaryId* = uint32
     ## FmDictionary内の文字列を入力順で識別するIDです。
 
+  FmBackendPreference* = enum
+    ## FM-indexのBWT表現を指定します。
+    fbpAuto, fbpWavelet, fbpRunLength
+
+  FmBackendKind* = enum
+    ## 構築済みFmDictionaryが使用するBWT表現です。
+    fbWavelet, fbRunLength
+
   FmInterval* = object
     ## FM-index検索結果の半開区間を表します。
     left*: int64
@@ -22,10 +30,33 @@ type
   FmDictionaryBuildOptions* = object
     ## FmDictionaryの構築方法を指定します。
     validateDistinct*: bool ## 入力文字列の重複を構築前に検査します。
+    fmBackend*: FmBackendPreference ## BWT表現。Autoは推定容量から選択します。
+
+  FmDictionaryStats* = object
+    ## BWTの圧縮性と選択済みFM backendの統計です。
+    fmBackendKind*: FmBackendKind
+    bwtLength*, runCount*: int64
+    runRatio*, averageRunLength*: float
+    maximumRunLength*: int64
+    estimatedWaveletBytes*, estimatedRleBytes*: int64
+
+  FmDictionaryMemoryUsage* = object
+    ## FmDictionaryの論理的な格納容量内訳をbyte単位で表します。
+    radixTrieBytes*: int64
+    fmBackendKind*: FmBackendKind
+    fmTotalBytes*, bwtBytes*: int64
+    runSymbolsBytes*, runBoundaryBytes*, runPrefixBytes*: int64
+    cTableBytes*, anchorBytes*, totalBytes*: int64
 
   FmDictionary* = object
     ## FM-indexとRadix Trieを組み合わせて検索と復元を提供するDictionaryです。
     bwt*: WaveletMatrix ## BWT symbol列を保持する固定9-bit Wavelet Matrix。
+    runLengthBwt*: RunLengthBwt ## RLE選択時のBWT。Wavelet選択時は空です。
+    backendKind*: FmBackendKind ## 実際に選択されたBWT表現。
+    bwtRunCount*: uint32 ## BWTのrun数。
+    maximumBwtRunLength*: uint32 ## BWTの最大run長。
+    estimatedWaveletBytes*: uint64 ## 構築前に推定したWavelet容量。
+    estimatedRunLengthBytes*: uint64 ## 構築前に推定したRLE容量。
     cTable*: PackedArray            ## symbol未満の総出現数を保持するC table。
     startAnchorToEncodedId*: PackedArray ## 開始anchorからencoded IDを得る配列。
     dictionaryIdToEndAnchor*: PackedArray ## IDから終了anchor ordinalを得る配列。
@@ -45,11 +76,36 @@ type
     nextRow: int64
 
 const DefaultFmDictionaryBuildOptions* =
-  FmDictionaryBuildOptions(validateDistinct: true)
+  FmDictionaryBuildOptions(validateDistinct: true, fmBackend: fbpAuto)
   ## 後方互換な既定の構築オプションです。
 
 func requiredBitWidth(maximum: uint64): int {.inline.} =
   if maximum == 0: 0 else: 64 - countLeadingZeroBits(maximum)
+
+func bwtLength(dict: FmDictionary): int64 {.inline.} =
+  if dict.backendKind == fbRunLength: dict.runLengthBwt.n else: dict.bwt.n
+
+func bwtRankPair(dict: FmDictionary, symbol: FmSymbol, left,
+                 right: int64): tuple[leftRank, rightRank: int64] {.inline.} =
+  if dict.backendKind == fbRunLength:
+    dict.runLengthBwt.rankPair(symbol, left, right)
+  else:
+    dict.bwt.rankPair(uint64(symbol), left, right)
+
+func bwtAccessRank(dict: FmDictionary,
+                   position: int64): tuple[value: uint64,
+                     rankBefore: int64] {.inline.} =
+  if dict.backendKind == fbRunLength:
+    dict.runLengthBwt.accessRank(position)
+  else:
+    dict.bwt.accessRank(position)
+
+func bwtSelect(dict: FmDictionary, symbol: FmSymbol,
+               ordinal: int64): int64 {.inline.} =
+  if dict.backendKind == fbRunLength:
+    dict.runLengthBwt.select(symbol, ordinal)
+  else:
+    dict.bwt.select(uint64(symbol), ordinal)
 
 proc genFmDictionary*(strings: openArray[string],
                       options = DefaultFmDictionaryBuildOptions): FmDictionary =
@@ -99,12 +155,22 @@ proc genFmDictionary*(strings: openArray[string],
   var suffixArray = buildSuffixArray(symbols)
   var bwtSymbols = newSeq[FmSymbol](symbolCount)
   var counts: array[AlphabetSize, uint64]
+  var previousBwtSymbol = FmSymbol.high
+  var currentRunLength = 0'u32
   for row, suffixStartValue in suffixArray:
     let suffixStart = int(suffixStartValue)
     let previous = if suffixStart == 0: symbols.high else: suffixStart - 1
     let symbol = symbols[previous]
     bwtSymbols[row] = symbol
     inc counts[int(symbol)]
+    if row == 0 or symbol != previousBwtSymbol:
+      inc result.bwtRunCount
+      currentRunLength = 1
+      previousBwtSymbol = symbol
+    else:
+      inc currentRunLength
+    result.maximumBwtRunLength = max(result.maximumBwtRunLength,
+      currentRunLength)
   if counts[int(EndSymbol)] != 1:
     raise newException(ValueError, "BWT must contain exactly one end symbol")
 
@@ -147,21 +213,87 @@ proc genFmDictionary*(strings: openArray[string],
   symbols = @[]
   suffixArray = @[]
   separatorPositions = default(SuccinctBitVector)
-  result.bwt = genWaveletMatrix(bwtSymbols, SymbolBitWidth)
+  # 推定値だけで選択し、完成後に両表現を保持しない。
+  let n = uint64(symbolCount)
+  let runs = uint64(result.bwtRunCount)
+  result.estimatedWaveletBytes = (n * SymbolBitWidth.uint64 + 7) div 8
+  let runLengthWidth = uint64(requiredBitWidth(
+    uint64(result.maximumBwtRunLength)))
+  result.estimatedRunLengthBytes =
+    (n + 7) div 8 + runs * 2 + (runs * runLengthWidth + 7) div 8 +
+    (runs * SymbolBitWidth.uint64 + 7) div 8 + runs * 4 +
+    uint64((AlphabetSize + 1) * sizeof(uint32))
+  let useRunLength = case options.fmBackend
+    of fbpWavelet: false
+    of fbpRunLength: true
+    of fbpAuto:
+      result.estimatedRunLengthBytes * 100 <=
+        result.estimatedWaveletBytes * 85 and runs * 5 <= n
+  if useRunLength:
+    result.backendKind = fbRunLength
+    result.runLengthBwt = genRunLengthBwt(bwtSymbols)
+  else:
+    result.backendKind = fbWavelet
+    result.bwt = genWaveletMatrix(bwtSymbols, SymbolBitWidth)
 
 func len*(dict: FmDictionary): int {.inline.} =
   ## Dictionaryのエントリ数を返します。
   int(dict.dictionaryCount)
 
+func stats*(dict: FmDictionary): FmDictionaryStats =
+  ## 選択済みbackendとBWT run統計を返します。
+  result.fmBackendKind = dict.backendKind
+  result.bwtLength = dict.bwtLength
+  result.runCount = int64(dict.bwtRunCount)
+  if result.bwtLength > 0:
+    result.runRatio = result.runCount.float / result.bwtLength.float
+  if result.runCount > 0:
+    result.averageRunLength = result.bwtLength.float / result.runCount.float
+  result.maximumRunLength = int64(dict.maximumBwtRunLength)
+  result.estimatedWaveletBytes = int64(dict.estimatedWaveletBytes)
+  result.estimatedRleBytes = int64(dict.estimatedRunLengthBytes)
+
+func succinctBytes(bits: SuccinctBitVector): int64 =
+  int64(bits.data.len * sizeof(uint64) +
+    bits.blockPairPrefix.len * sizeof(uint32) +
+    bits.wordPairPrefix.len * sizeof(uint32) +
+    bits.selectStorage.len * sizeof(uint64))
+
+func memoryUsage*(dict: FmDictionary): FmDictionaryMemoryUsage =
+  ## Trie、FM backend、anchorを含む論理的な格納容量を返します。
+  result.fmBackendKind = dict.backendKind
+  result.radixTrieBytes = dict.radixTrie.memoryUsage.totalBytes
+  result.cTableBytes = int64(dict.cTable.data.len * sizeof(uint64))
+  result.anchorBytes = int64((dict.startAnchorToEncodedId.data.len +
+    dict.dictionaryIdToEndAnchor.data.len) * sizeof(uint64))
+  if dict.backendKind == fbWavelet:
+    for level in dict.bwt.levels:
+      result.bwtBytes += succinctBytes(level)
+    result.bwtBytes += int64(dict.bwt.zeroCounts.len * sizeof(int64))
+  else:
+    result.runSymbolsBytes = int64(dict.runLengthBwt.runSymbols.len *
+      sizeof(FmSymbol) + dict.runLengthBwt.runLengths.len * sizeof(uint32))
+    result.runBoundaryBytes = succinctBytes(dict.runLengthBwt.runStarts)
+    result.runPrefixBytes = int64(dict.runLengthBwt.symbolPrefixes.len *
+      sizeof(uint32) + sizeof(dict.runLengthBwt.symbolOffsets))
+    for level in dict.runLengthBwt.runSymbolIndex.levels:
+      result.bwtBytes += succinctBytes(level)
+    result.bwtBytes += int64(dict.runLengthBwt.runSymbolIndex.zeroCounts.len *
+      sizeof(int64))
+  result.fmTotalBytes = result.bwtBytes + result.runSymbolsBytes +
+    result.runBoundaryBytes + result.runPrefixBytes + result.cTableBytes +
+    result.anchorBytes
+  result.totalBytes = result.radixTrieBytes + result.fmTotalBytes
+
 func backwardStep(dict: FmDictionary, symbol: FmSymbol,
                   interval: FmInterval): FmInterval {.inline.} =
   let base = int64(dict.cTable.getUnchecked(int(symbol)))
-  let ranks = dict.bwt.rankPair(uint64(symbol), interval.left, interval.right)
+  let ranks = dict.bwtRankPair(symbol, interval.left, interval.right)
   result.left = base + ranks.leftRank
   result.right = base + ranks.rightRank
 
 func backwardSearchBytes(dict: FmDictionary, pattern: string): FmInterval =
-  result = FmInterval(left: 0, right: dict.bwt.n)
+  result = FmInterval(left: 0, right: dict.bwtLength)
   if pattern.len == 0:
     return
   for index in countdown(pattern.high, 0):
@@ -170,7 +302,7 @@ func backwardSearchBytes(dict: FmDictionary, pattern: string): FmInterval =
       return
 
 func backwardSearchExact(dict: FmDictionary, value: string): FmInterval =
-  result = FmInterval(left: 0, right: dict.bwt.n)
+  result = FmInterval(left: 0, right: dict.bwtLength)
   result = dict.backwardStep(SeparatorSymbol, result)
   for index in countdown(value.high, 0):
     result = dict.backwardStep(encodeByte(byte(value[index])), result)
@@ -184,7 +316,7 @@ func backwardSearchPrefix(dict: FmDictionary, prefix: string): FmInterval =
     result = dict.backwardStep(SeparatorSymbol, result)
 
 func backwardSearchSuffix(dict: FmDictionary, suffix: string): FmInterval =
-  result = FmInterval(left: 0, right: dict.bwt.n)
+  result = FmInterval(left: 0, right: dict.bwtLength)
   result = dict.backwardStep(SeparatorSymbol, result)
   for index in countdown(suffix.high, 0):
     result = dict.backwardStep(encodeByte(byte(suffix[index])), result)
@@ -192,7 +324,7 @@ func backwardSearchSuffix(dict: FmDictionary, suffix: string): FmInterval =
       return
 
 func lfStep(dict: FmDictionary, row: int64): LfStepResult {.inline.} =
-  let item = dict.bwt.accessRank(row)
+  let item = dict.bwtAccessRank(row)
   result.symbol = FmSymbol(item.value)
   result.nextRow = int64(dict.cTable.getUnchecked(int(item.value))) +
     item.rankBefore
@@ -274,6 +406,22 @@ proc findPrefixIntoRadix*(dict: FmDictionary, prefix: string,
   ## Radix Trieで前方一致するIDを昇順で `output` へ格納します。
   dict.radixTrie.findPrefixInto(prefix, output)
 
+proc initPrefixQueryWorkspace*(dict: FmDictionary): PrefixQueryWorkspace =
+  ## `dict`向けprefix workspaceを初期化します。
+  initPrefixQueryWorkspace(dict.len)
+
+proc findPrefixIntoRadix*(dict: FmDictionary, prefix: string,
+                          workspace: var PrefixQueryWorkspace,
+                          output: var seq[DictionaryId]) =
+  ## bitmap workspaceを再利用して前方一致IDを昇順で格納します。
+  dict.radixTrie.findPrefixInto(prefix, workspace, output)
+
+proc findPrefixInto*(dict: FmDictionary, prefix: string,
+                     workspace: var PrefixQueryWorkspace,
+                     output: var seq[DictionaryId]) =
+  ## bitmap workspaceを再利用して前方一致IDを昇順で格納します。
+  dict.findPrefixIntoRadix(prefix, workspace, output)
+
 proc findPrefixInto*(dict: FmDictionary, prefix: string,
                      output: var seq[DictionaryId]) =
   ## 前方一致するIDを既存の `output` 容量を再利用して昇順で格納します。
@@ -348,7 +496,7 @@ proc getStringIntoFm*(dict: FmDictionary, id: DictionaryId,
   output.setLen(0)
   let endAnchorOrdinal = int64(
     dict.dictionaryIdToEndAnchor.getUnchecked(int(id)))
-  let anchorRow = dict.bwt.select(uint64(SeparatorSymbol), endAnchorOrdinal)
+  let anchorRow = dict.bwtSelect(SeparatorSymbol, endAnchorOrdinal)
   if anchorRow < 0:
     raise newException(ValueError, "invalid dictionary end anchor")
   var row = dict.lf(anchorRow)

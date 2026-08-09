@@ -13,6 +13,54 @@ func naiveOccurrenceCount(value, pattern: string): uint32 =
     if value.continuesWith(pattern, start):
       inc result
 
+proc verifyBackends(values: seq[string], patterns: seq[string]) =
+  let wavelet = genFmDictionary(values, FmDictionaryBuildOptions(
+    validateDistinct: true, fmBackend: fbpWavelet))
+  let runLength = genFmDictionary(values, FmDictionaryBuildOptions(
+    validateDistinct: true, fmBackend: fbpRunLength))
+  doAssert wavelet.backendKind == fbWavelet
+  doAssert runLength.backendKind == fbRunLength
+  for pattern in patterns:
+    doAssert wavelet.findExactFm(pattern) == runLength.findExactFm(pattern)
+    doAssert wavelet.findPrefix(pattern) == runLength.findPrefix(pattern)
+    doAssert wavelet.findSuffix(pattern) == runLength.findSuffix(pattern)
+    doAssert wavelet.findSubstring(pattern) == runLength.findSubstring(pattern)
+    doAssert wavelet.findSubstringOccurrences(pattern) ==
+      runLength.findSubstringOccurrences(pattern)
+  for id, value in values:
+    var waveletValue, runLengthValue: string
+    wavelet.getStringIntoFm(DictionaryId(id), waveletValue)
+    runLength.getStringIntoFm(DictionaryId(id), runLengthValue)
+    doAssert waveletValue == value
+    doAssert runLengthValue == value
+
+block forcedBackends:
+  verifyBackends(@["", "a", "aaaa", "banana", "band", "\0\xFF"],
+    @["", "a", "aa", "ana", "ban", "\0", "missing"])
+  let repetitive = genFmDictionary(@["aaaaaaaa", "aaaaaaab", "aaaaaaba"],
+    FmDictionaryBuildOptions(validateDistinct: true, fmBackend: fbpRunLength))
+  let backendStats = repetitive.stats
+  let usage = repetitive.memoryUsage
+  doAssert backendStats.fmBackendKind == fbRunLength
+  doAssert backendStats.runCount > 0
+  doAssert backendStats.maximumRunLength > 0
+  doAssert usage.fmBackendKind == fbRunLength
+  doAssert usage.totalBytes == usage.radixTrieBytes + usage.fmTotalBytes
+
+block prefixWorkspace:
+  var values: seq[string]
+  for index in countdown(599, 0):
+    values.add "common/" & $index
+  let dict = genFmDictionary(values)
+  var workspace = initPrefixQueryWorkspace(dict)
+  var output: seq[DictionaryId]
+  dict.findPrefixInto("common/", workspace, output)
+  doAssert output.len == values.len
+  for index, id in output:
+    doAssert id == DictionaryId(index)
+  dict.findPrefixInto("common/59", workspace, output)
+  doAssert output == dict.findPrefix("common/59")
+
 proc naiveSuffixArray(symbols: openArray[FmSymbol]): seq[uint32] =
   var values = newSeq[FmSymbol](symbols.len)
   for index, symbol in symbols:

@@ -6,6 +6,7 @@ import ./tsuccinct_bit_vector
 import ./telias_fano
 import ./twavelet_matrix
 import ./treversed_wavelet_matrix
+import ./trun_length_bwt
 import ./test_fm_dictionary
 
 {.warning[UnusedImport]: on.}

@@ -38,6 +38,36 @@ rev2のTrie容量は11.42 MiB、Dictionary全体は36.22 MiBで、成功目標�
 Dictionary 35～38 MiBを達成しました。exactは許容下限85%を上回り、prefix／restoreは
 改善しています。build時間も1.2倍以内です。
 
+## FmDictionary rev3実測（2026-08-09）
+
+Nim 2.2.10、release、ARCで、rev2とsorted + LCP builderを同一process形式・同一生成入力
+（100万件、23,000,000 input bytes）で個別実行しました。
+
+| metric | rev2 builder | sorted + LCP builder | 変化 |
+|:---|---:|---:|---:|
+| build | 1,049.423 ms | 435.933 ms | -58.46% |
+| peak RSS | 227,416 KiB | 158,824 KiB | -30.16% |
+| final Trie | 11,526,798 byte | 11,526,798 byte | 変更なし |
+| nodes | 1,066,670 | 1,066,670 | 変更なし |
+
+一時nodeを32-bit scalar metadataへ収め、IDだけをstable merge sortすることで、指示書の
+peak RSS 20%以上削減目標を達成しました。再測定には`nimble benchRadixBuildMemory`を
+使用します。
+
+child探索microbenchmark（各100万query）では、degree 17でbinary 8.65 ns、bitmap
+2.92 nsでした。bitmapは32 byte/nodeを要するため、degree 17以上だけに採用しています。
+
+FM matrixは10 corpus、10k/100k/1m件、平均長8/16/32/64、Wavelet/RLE/Autoで実行しました。
+Auto 120条件はすべて完了し、うち10条件でRLEを選択しました。RLEが選択されたrun比率は
+0.063440〜0.079760でした。100万件・64 byteのhighly-repetitiveではAutoがRLEを選び、
+FM容量71,508,894 byte、build 12,638.868 msでした。
+
+強制RLEは120条件中118条件を完了しました。残るrandomおよびlow-repetitiveの100万件・
+64 byteは、約65M symbolかつrun比率約0.8以上となり、この実行環境のメモリ上限で終了しました。
+対応するWaveletとAutoは完了しており、AutoはいずれもWaveletを選択しました。個別再開は
+`benchmarks/fm_dictionary_rev3.nim count averageLength corpusOrdinal preferenceOrdinal`
+で行えます。
+
 ### 100万件のmetadata候補比較
 
 `radix_compaction_bench.nim 1000000 16`による100万回のmicrobenchmarkです。

@@ -58,20 +58,8 @@ proc buildBwtValues(symbols: openArray[FmSymbol],
     let previous = if suffixStart == 0: symbols.high else: suffixStart - 1
     result[row] = uint64(symbols[previous])
 
-proc sbvBytes(values: SuccinctBitVector): int64 =
-  result += int64(values.data.len) * 8
-  result += int64(values.blockPairPrefix.len) * 4
-  result += int64(values.wordPairPrefix.len) * 4
-  result += int64(values.selectStorage.len) * 8
-
 proc dictionaryBytes(dict: FmDictionary): int64 =
-  for level in dict.bwt.levels:
-    result += sbvBytes(level)
-  result += int64(dict.bwt.zeroCounts.len) * 8
-  result += int64(dict.cTable.data.len) * 8
-  result += int64(dict.startAnchorToEncodedId.data.len) * 8
-  result += int64(dict.dictionaryIdToEndAnchor.data.len) * 8
-  result += dict.radixTrie.memoryUsage.totalBytes
+  dict.memoryUsage.totalBytes
 
 proc binaryFind(values: openArray[string], value: string): int =
   var left = 0
