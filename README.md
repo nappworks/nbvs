@@ -29,7 +29,7 @@ including rank/select queries, Elias-Fano encoding, and wavelet matrices.
 - `EliasFano`: Elias-Fano encoding for nondecreasing `uint64` sequences.
 - `WaveletMatrix`: rank/select, quantile, and range-frequency index for `uint64` sequences.
 - `ReversedWaveletMatrix`: LSB-first wavelet matrix with access, rank, and select.
-- `FmDictionary`: self-indexed string dictionary with exact, prefix, suffix, and substring search.
+- `FmDictionary`: hybrid FM-index / path-compressed Radix Trie dictionary with exact, prefix, suffix, and substring search.
 
 ### Requirements
 
@@ -294,11 +294,12 @@ for item in values.valueCountsItems:
 
 ### FmDictionary
 
-`FmDictionary` is a self-indexed string dictionary backed by a BWT and a
-fixed 9-bit `WaveletMatrix`. It supports exact, prefix, suffix, and substring
-search as well as restoration by Dictionary ID without retaining the original
-string pool. UTF-8 strings are searched byte by byte; Unicode normalization is
-the caller's responsibility. Input strings must be distinct.
+`FmDictionary` combines a BWT-backed fixed 9-bit `WaveletMatrix` with a compact,
+path-compressed Radix Trie. Exact and prefix searches and Dictionary ID
+restoration use the trie; suffix and substring searches continue to use the
+FM-index. Edge labels are stored in shared byte arrays rather than retaining
+the original string pool. UTF-8 strings are searched byte by byte; Unicode
+normalization is the caller's responsibility. Input strings must be distinct.
 
 ```nim
 import nbvs/fm_dictionary
@@ -334,7 +335,10 @@ The default remains `true`.
 
 Construction uses SA-IS with `O(n)` time and `O(n)` temporary storage. L/S
 types and LMS positions are stored in two `BitVector` instances at one bit per
-flag. The finished dictionary is immutable. See
+flag. The Radix Trie uses DFS-preorder nodes, packed child/parent metadata,
+packed edge offsets, and a `SuccinctBitVector` for terminal nodes. The finished
+dictionary is immutable. `stats()` and `memoryUsage()` expose trie structure
+and storage diagnostics. See
 [benchmarks.md](benchmarks.md) for measured performance.
 
 ### ReversedWaveletMatrix
@@ -373,6 +377,26 @@ MSB-first `WaveletMatrix`.
 For RWM, `rankLessThan(value, pos)` traverses occupied LSB-first subtrees and
 prunes subtrees whose value bounds are already decided. Unlike the WM version,
 its cost depends on the value distribution rather than being `O(bitWidth)`.
+
+### Benchmarks
+
+Compare the production DFS/PackedArray Radix Trie representation with LOUDS,
+DFUDS, and SBV edge boundaries:
+
+```sh
+nimble benchRadixRepresentations
+```
+
+Run five repeated trials over random, common-prefix, URL/path, code-symbol, and
+natural-name-like corpora:
+
+```sh
+nimble benchFmDistributions
+```
+
+Both benchmark programs accept `count` and average byte length as positional
+arguments. The distribution benchmark accepts the trial count as its third
+argument.
 
 ### Documentation generation
 
@@ -415,7 +439,7 @@ compact bit vector と succinct data structure を Nim 向けに提供します�
 - `EliasFano`: 非減少 `uint64` 列の Elias-Fano 符号化。
 - `WaveletMatrix`: `uint64` 列の rank/select、quantile、値域頻度 index。
 - `ReversedWaveletMatrix`: access、rank、select 対応の LSB-first Wavelet Matrix。
-- `FmDictionary`: exact、prefix、suffix、substring検索に対応するself-index型文字列Dictionary。
+- `FmDictionary`: exact、prefix、suffix、substring検索に対応するFM-index / path-compressed Radix Trie複合Dictionary。
 
 ### 必要環境
 
@@ -680,10 +704,12 @@ for item in values.valueCountsItems:
 
 ### FmDictionary
 
-`FmDictionary` は、BWTと固定9-bit `WaveletMatrix`を用いたself-index型文字列
-Dictionaryです。元文字列poolを保持せず、exact、prefix、suffix、substring検索と
-Dictionary IDからの復元を提供します。UTF-8文字列はbyte単位で検索し、Unicode正規化は
-呼び出し側の責務です。入力文字列はdistinctである必要があります。
+`FmDictionary` は、BWTを用いた固定9-bit `WaveletMatrix`とcompactな
+path-compressed Radix Trieを組み合わせた文字列Dictionaryです。exact、prefix検索と
+Dictionary IDからの復元はTrieを使い、suffix、substring検索は従来どおりFM-indexを
+使います。edge labelは元文字列poolではなく共有byte配列へ格納します。UTF-8文字列は
+byte単位で検索し、Unicode正規化は呼び出し側の責務です。入力文字列はdistinctである
+必要があります。
 
 ```nim
 import nbvs/fm_dictionary
@@ -718,8 +744,10 @@ dict.getStringInto(3, restored)
 省略できます。既定値は後方互換のため`true`です。
 
 構築処理は時間計算量`O(n)`、追加領域`O(n)`のSA-ISを使用します。L/S型とLMS位置は、
-各flagを1 bitで保持する2つの`BitVector`へ格納します。構築後のDictionaryは
-immutableです。実測値は [benchmarks.md](benchmarks.md) を参照してください。
+各flagを1 bitで保持する2つの`BitVector`へ格納します。Radix TrieはDFS preorderの
+node、packedな子・親metadataとedge offset、terminal node用の`SuccinctBitVector`を
+使用します。構築後のDictionaryはimmutableです。`stats()`と`memoryUsage()`でTrieの
+構造・容量内訳を確認できます。実測値は [benchmarks.md](benchmarks.md) を参照してください。
 
 ### ReversedWaveletMatrix
 
@@ -756,6 +784,24 @@ LSB-firstの探索結果を値でsortします。
 RWMの `rankLessThan(value, pos)` は、LSB-firstの出現subtreeを走査し、
 値の上下限から結果が確定したsubtreeを枝刈りします。WM版の
 `O(bitWidth)` とは異なり、計算量は値の分布に依存します。
+
+### ベンチマーク
+
+本番のDFS／PackedArray Radix Trie表現と、LOUDS、DFUDS、SBV edge境界を比較します。
+
+```sh
+nimble benchRadixRepresentations
+```
+
+random、共通prefix、URL/path、code symbol、自然言語名称風の各corpusを5試行ずつ
+測定します。
+
+```sh
+nimble benchFmDistributions
+```
+
+どちらも位置引数で件数と平均byte長を指定できます。分布benchmarkでは第3引数で
+試行回数も指定できます。
 
 ### ドキュメント生成
 

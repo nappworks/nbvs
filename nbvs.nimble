@@ -31,3 +31,9 @@ task benchMemory, "Report SuccinctBitVector logical memory":
 
 task benchFmDictionary, "Run FmDictionary benchmarks":
   exec "nim c --path:src -d:release --mm:arc -r benchmarks/fm_dictionary_bench.nim"
+
+task benchRadixRepresentations, "Compare Radix Trie representations":
+  exec "nim c --path:src -d:release --mm:arc -r benchmarks/experimental/radix_representation_bench.nim"
+
+task benchFmDistributions, "Run FmDictionary distribution benchmarks":
+  exec "nim c --path:src -d:release --mm:arc -r benchmarks/fm_dictionary_distributions.nim"

@@ -2,6 +2,9 @@ import std/[algorithm, monotimes, os, parseutils, strformat, strutils, times]
 import nbvs
 import nbvs/internal/[fm_symbols, suffix_array]
 
+when defined(linux):
+  import std/posix
+
 const
   queryIterations = 10_000
   seed = 0x9e37_79b9_7f4a_7c15'u64
@@ -17,6 +20,14 @@ func nextRandom(state: var uint64): uint64 =
 
 proc elapsedNs(started: MonoTime): int64 =
   (getMonoTime() - started).inNanoseconds
+
+proc peakRssKiB(): int64 =
+  ## Linuxの `ru_maxrss` はKiB単位。非対応platformでは `-1` を返す。
+  when defined(linux):
+    var usage: Rusage
+    if getrusage(RUSAGE_SELF, addr usage) == 0:
+      return int64(usage.ru_maxrss)
+  -1
 
 proc makeValues(count, averageLength: int, japanese: bool): seq[string] =
   result = newSeq[string](count)
@@ -60,6 +71,7 @@ proc dictionaryBytes(dict: FmDictionary): int64 =
   result += int64(dict.cTable.data.len) * 8
   result += int64(dict.startAnchorToEncodedId.data.len) * 8
   result += int64(dict.dictionaryIdToEndAnchor.data.len) * 8
+  result += dict.radixTrie.memoryUsage.totalBytes
 
 proc binaryFind(values: openArray[string], value: string): int =
   var left = 0
@@ -97,6 +109,7 @@ proc run(count, averageLength: int, japanese: bool) =
   started = getMonoTime()
   let dict = genFmDictionary(values)
   let dictionaryNs = elapsedNs(started)
+  let buildPeakRssKiB = peakRssKiB()
 
   var state = seed xor uint64(count) xor uint64(averageLength)
   var ids = newSeq[int](queryIterations)
@@ -106,7 +119,12 @@ proc run(count, averageLength: int, japanese: bool) =
   started = getMonoTime()
   for id in ids:
     sink = sink xor uint64(dict.findExact(values[id]))
-  let exactNs = elapsedNs(started)
+  let radixExactNs = elapsedNs(started)
+
+  started = getMonoTime()
+  for id in ids:
+    sink = sink xor uint64(dict.findExactFm(values[id]))
+  let fmExactNs = elapsedNs(started)
 
   started = getMonoTime()
   for id in ids:
@@ -118,7 +136,13 @@ proc run(count, averageLength: int, japanese: bool) =
   for id in ids:
     dict.findPrefixInto(values[id], prefixOutput)
     sink = sink xor uint64(prefixOutput.len)
-  let prefixNs = elapsedNs(started)
+  let radixPrefixNs = elapsedNs(started)
+
+  started = getMonoTime()
+  for id in ids:
+    dict.findPrefixIntoFm(values[id], prefixOutput)
+    sink = sink xor uint64(prefixOutput.len)
+  let fmPrefixNs = elapsedNs(started)
 
   var workspace = initFmQueryWorkspace(dict)
   var substringOutput: seq[DictionaryId]
@@ -133,7 +157,13 @@ proc run(count, averageLength: int, japanese: bool) =
   for id in ids:
     dict.getStringInto(DictionaryId(id), restored)
     sink = sink xor uint64(restored.len)
-  let restoreNs = elapsedNs(started)
+  let radixRestoreNs = elapsedNs(started)
+
+  started = getMonoTime()
+  for id in ids:
+    dict.getStringIntoFm(DictionaryId(id), restored)
+    sink = sink xor uint64(restored.len)
+  let fmRestoreNs = elapsedNs(started)
 
   started = getMonoTime()
   for id in ids:
@@ -177,14 +207,19 @@ proc run(count, averageLength: int, japanese: bool) =
   let uncheckedPackedNs = elapsedNs(started)
 
   let storage = dictionaryBytes(dict)
+  let radixMemory = dict.radixTrie.memoryUsage
+  let trieStats = dict.radixTrie.stats
   echo &"{count},{averageLength},{japanese},{symbols.len}," &
     &"{float(suffixArrayNs) / 1e6:.3f},{float(bwtNs) / 1e6:.3f}," &
     &"{float(waveletNs) / 1e6:.3f},{float(dictionaryNs) / 1e6:.3f}," &
-    &"{float(exactNs) / queryIterations.float:.1f}," &
+    &"{float(radixExactNs) / queryIterations.float:.1f}," &
+    &"{float(fmExactNs) / queryIterations.float:.1f}," &
     &"{float(binaryNs) / queryIterations.float:.1f}," &
-    &"{float(prefixNs) / queryIterations.float:.1f}," &
+    &"{float(radixPrefixNs) / queryIterations.float:.1f}," &
+    &"{float(fmPrefixNs) / queryIterations.float:.1f}," &
     &"{float(substringNs) / queryIterations.float:.1f}," &
-    &"{float(restoreNs) / queryIterations.float:.1f}," &
+    &"{float(radixRestoreNs) / queryIterations.float:.1f}," &
+    &"{float(fmRestoreNs) / queryIterations.float:.1f}," &
     &"{float(separateNs) / queryIterations.float:.1f}," &
     &"{float(fusedNs) / queryIterations.float:.1f}," &
     &"{float(rankTwiceNs) / queryIterations.float:.1f}," &
@@ -192,7 +227,19 @@ proc run(count, averageLength: int, japanese: bool) =
     &"{float(checkedPackedNs) / queryIterations.float:.1f}," &
     &"{float(uncheckedPackedNs) / queryIterations.float:.1f}," &
     &"{float(storage) / 1024.0 / 1024.0:.3f}," &
-    &"{float(storage) / float(totalCharacters):.3f}"
+    &"{float(storage) / float(totalCharacters):.3f},{buildPeakRssKiB}," &
+    &"{radixMemory.totalBytes},{radixMemory.topologyBytes}," &
+    &"{radixMemory.childNavigationBytes},{radixMemory.edgeFirstBytes}," &
+    &"{radixMemory.edgeSuffixBytes},{radixMemory.edgeBoundaryBytes}," &
+    &"{radixMemory.terminalBitsBytes},{radixMemory.terminalIdsBytes}," &
+    &"{radixMemory.idToTerminalBytes},{trieStats.nodeCount}," &
+    &"{trieStats.edgeCount},{trieStats.terminalCount}," &
+    &"{trieStats.averageEdgeLabelLength:.3f}," &
+    &"{trieStats.maximumEdgeLabelLength}," &
+    &"{trieStats.averageTerminalDepth:.3f},{trieStats.maximumDepth}," &
+    &"{trieStats.degreeZeroCount},{trieStats.degreeOneCount}," &
+    &"{trieStats.degreeTwoToFourCount},{trieStats.degreeFiveToSixteenCount}," &
+    &"{trieStats.degreeSeventeenOrMoreCount}"
 
 when isMainModule:
   var count = 10_000
@@ -207,9 +254,16 @@ when isMainModule:
   if count <= 0 or averageLength <= 0:
     raise newException(ValueError, "count and averageLength must be positive")
   echo "count,avg_bytes,japanese,symbols,sa_ms,bwt_ms,wm_ms,fm_build_ms," &
-    "fm_exact_ns,sorted_binary_exact_ns,prefix_ns,substring_ns,restore_ns," &
+    "radix_exact_ns,fm_exact_ns,sorted_binary_exact_ns,radix_prefix_ns," &
+    "fm_prefix_ns,substring_ns,radix_restore_ns,fm_restore_ns," &
     "access_plus_rank_ns,access_rank_ns,rank_twice_ns,rank_pair_ns," &
     "packed_checked_ns,packed_unchecked_ns," &
-    "storage_mib,bytes_per_character"
+    "storage_mib,bytes_per_character,build_peak_rss_kib,radix_bytes,topology_bytes," &
+    "child_navigation_bytes,edge_first_bytes,edge_suffix_bytes," &
+    "edge_boundary_bytes,terminal_bits_bytes,terminal_ids_bytes," &
+    "id_to_terminal_bytes,node_count,edge_count,terminal_count," &
+    "average_edge_label_length,maximum_edge_label_length," &
+    "average_terminal_depth,maximum_depth,degree_0,degree_1,degree_2_4," &
+    "degree_5_16,degree_17_plus"
   run(count, averageLength, japanese)
   stderr.writeLine("sink=", sink)
