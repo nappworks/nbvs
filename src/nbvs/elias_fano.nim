@@ -26,6 +26,16 @@ type
     lows*: PackedArray ## Packed low-bit array.
     highBits*: SuccinctBitVector ## Unary-coded high-bit vector.
 
+  EliasFanoView* = object
+    ## `PackedArrayView` と `SuccinctBitVectorView` を合成する非所有Viewです。
+    n*: int64
+    universe*: uint64
+    lowBits*: int
+    lowMask*: uint64
+    maxHigh*: uint64
+    lows*: PackedArrayView
+    highBits*: SuccinctBitVectorView
+
 func floorLog2*(x: uint64): int =
   ## Returns `floor(log2(x))`.
   ##
@@ -61,6 +71,31 @@ func maskForLowBits*(lowBits: int): uint64 =
     result = uint64.high
   else:
     result = (1'u64 shl lowBits) - 1'u64
+
+func initEliasFanoView*(n: int64, universe: uint64, lows: PackedArrayView,
+    highBits: SuccinctBitVectorView): EliasFanoView =
+  ## 外部メモリを参照する2つの下位ViewからElias-Fano Viewを作成します。
+  ##
+  ## metadataと領域長の不整合、未buildのhigh-bit辞書では `ValueError` を
+  ## 送出します。各backing memoryの有効期間は呼び出し側の責任です。
+  if n < 0:
+    raise newException(ValueError, "n must be non-negative")
+  let lowBits = calcLowBits(universe, n)
+  if lows.len != n or lows.bitWidth != lowBits:
+    raise newException(ValueError, "low-bit view metadata does not match")
+  if not highBits.isCalced:
+    raise newException(ValueError, "high-bit rank dictionary is not built")
+  if highBits.totalOnes != n:
+    raise newException(ValueError, "high-bit one count does not match n")
+  result.n = n
+  result.universe = universe
+  result.lowBits = lowBits
+  result.lowMask = maskForLowBits(lowBits)
+  result.lows = lows
+  result.highBits = highBits
+  result.maxHigh =
+    if n == 0: 0'u64
+    else: uint64(highBits.select1(n - 1) - (n - 1))
 
 func genEliasFano*(xs: openArray[uint64], universe: uint64): EliasFano =
   ## Creates an Elias-Fano representation from a nondecreasing sequence.
@@ -117,12 +152,12 @@ func genEliasFano*(xs: openArray[uint64], universe: uint64): EliasFano =
 
   result.highBits.build()
 
-func checkIndex*(ef: EliasFano, i: int64) =
+func checkIndex*[E: EliasFano | EliasFanoView](ef: E, i: int64) =
   ## Raises `IndexDefect` when `i` is outside `0 ..< ef.n`.
   if i < 0 or i >= ef.n:
     raise newException(IndexDefect, "Index out of bounds")
 
-func access*(ef: EliasFano, i: int64): uint64 =
+func access*[E: EliasFano | EliasFanoView](ef: E, i: int64): uint64 =
   ## Returns the encoded value at index `i`.
   ef.checkIndex(i)
 
@@ -137,17 +172,17 @@ func access*(ef: EliasFano, i: int64): uint64 =
 
   result = (high shl ef.lowBits) or low
 
-func `[]`*(ef: EliasFano, i: int64): uint64 =
+func `[]`*[E: EliasFano | EliasFanoView](ef: E, i: int64): uint64 =
   ## Alias for `access(ef, i)`.
   result = ef.access(i)
 
-func select*(ef: EliasFano, i: int64): uint64 =
+func select*[E: EliasFano | EliasFanoView](ef: E, i: int64): uint64 =
   ## Alias for Elias-Fano access/select.
   ##
   ## `i` is 0-based.
   result = ef.access(i)
 
-func firstIndexWithHighAtLeast*(ef: EliasFano, high: uint64): int64 =
+func firstIndexWithHighAtLeast*[E: EliasFano | EliasFanoView](ef: E, high: uint64): int64 =
   ## Returns the smallest index `i` such that `high(i) >= high`.
   ##
   ## Returns `0` for an empty sequence or `high == 0`; returns `ef.n` when
@@ -164,7 +199,7 @@ func firstIndexWithHighAtLeast*(ef: EliasFano, high: uint64): int64 =
   let zeroPos = ef.highBits.select0(int64(high - 1))
   result = ef.highBits.rank1(zeroPos)
 
-func firstIndexWithHighGreaterThan*(ef: EliasFano, high: uint64): int64 =
+func firstIndexWithHighGreaterThan*[E: EliasFano | EliasFanoView](ef: E, high: uint64): int64 =
   ## Returns the smallest index `i` such that `high(i) > high`.
   if ef.n == 0:
     return 0
@@ -174,7 +209,7 @@ func firstIndexWithHighGreaterThan*(ef: EliasFano, high: uint64): int64 =
 
   result = ef.firstIndexWithHighAtLeast(high + 1)
 
-func lowerBoundByAccess*(ef: EliasFano, v: uint64): int64 =
+func lowerBoundByAccess*[E: EliasFano | EliasFanoView](ef: E, v: uint64): int64 =
   ## Returns `lowerBound(v)` using binary search over `access`.
   ##
   ## This is primarily useful as a simple reference implementation.
@@ -190,7 +225,7 @@ func lowerBoundByAccess*(ef: EliasFano, v: uint64): int64 =
 
   result = lo
 
-func lowerBound*(ef: EliasFano, v: uint64): int64 =
+func lowerBound*[E: EliasFano | EliasFanoView](ef: E, v: uint64): int64 =
   ## Returns the smallest index `i` such that `ef[i] >= v`.
   ##
   ## Returns `ef.n` if no such index exists.
@@ -236,7 +271,7 @@ func lowerBound*(ef: EliasFano, v: uint64): int64 =
 
   result = lo
 
-func upperBound*(ef: EliasFano, v: uint64): int64 =
+func upperBound*[E: EliasFano | EliasFanoView](ef: E, v: uint64): int64 =
   ## Returns the smallest index `i` such that `ef[i] > v`.
   ##
   ## Returns `ef.n` if no such index exists.  Handles `uint64.high` without
@@ -249,7 +284,7 @@ func upperBound*(ef: EliasFano, v: uint64): int64 =
 
   result = ef.lowerBound(v + 1)
 
-func lastLessEqual*(ef: EliasFano, v: uint64): int64 =
+func lastLessEqual*[E: EliasFano | EliasFanoView](ef: E, v: uint64): int64 =
   ## Returns the largest index `i` such that `ef[i] <= v`.
   ##
   ## Returns `-1` when no such index exists.
@@ -259,11 +294,11 @@ func lastLessEqual*(ef: EliasFano, v: uint64): int64 =
   let ub = ef.upperBound(v)
   result = ub - 1
 
-func predecessorIndex*(ef: EliasFano, v: uint64): int64 =
+func predecessorIndex*[E: EliasFano | EliasFanoView](ef: E, v: uint64): int64 =
   ## Alias for `lastLessEqual(ef, v)`.
   result = ef.lastLessEqual(v)
 
-func predecessor*(ef: EliasFano, v: uint64): uint64 =
+func predecessor*[E: EliasFano | EliasFanoView](ef: E, v: uint64): uint64 =
   ## Returns the largest encoded value `<= v`.
   ##
   ## Raises `ValueError` when no predecessor exists.
@@ -272,20 +307,20 @@ func predecessor*(ef: EliasFano, v: uint64): uint64 =
     raise newException(ValueError, "predecessor does not exist")
   result = ef.access(i)
 
-func countLessEqual*(ef: EliasFano, v: uint64): int64 =
+func countLessEqual*[E: EliasFano | EliasFanoView](ef: E, v: uint64): int64 =
   ## Returns the number of encoded values `<= v`.
   result = ef.upperBound(v)
 
-func countLessThan*(ef: EliasFano, v: uint64): int64 =
+func countLessThan*[E: EliasFano | EliasFanoView](ef: E, v: uint64): int64 =
   ## Returns the number of encoded values `< v`.
   result = ef.lowerBound(v)
 
-iterator items*(ef: EliasFano): uint64 =
+iterator items*[E: EliasFano | EliasFanoView](ef: E): uint64 =
   ## Iterates over encoded values in order.
   for i in 0'i64..<ef.n:
     yield ef.access(i)
 
-func toSeq*(ef: EliasFano): seq[uint64] =
+func toSeq*[E: EliasFano | EliasFanoView](ef: E): seq[uint64] =
   ## Converts the encoded sequence to an unpacked `seq[uint64]`.
   result = newSeq[uint64](int(ef.n))
   for i in 0'i64..<ef.n:

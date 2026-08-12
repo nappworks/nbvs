@@ -19,6 +19,44 @@ type
     levels*: seq[SuccinctBitVector] ## Bit vectors, from most to least significant.
     zeroCounts*: seq[int64] ## Number of zero bits at each level.
 
+  WaveletMatrixView* = object
+    ## 下位の `SuccinctBitVectorView` 群を参照する非所有Wavelet Matrixです。
+    n*: int64
+    bitWidth*: int
+    levels*: ExternalSpan[SuccinctBitVectorView]
+    zeroCounts*: ExternalSpan[int64]
+
+func initWaveletMatrixView*(n: int64, bitWidth: int,
+    levels: ptr UncheckedArray[SuccinctBitVectorView], levelCount: int,
+    zeroCounts: pointer, zeroCountsBytes: int): WaveletMatrixView =
+  ## 呼び出し側が保持するlevel descriptor列とzero-count列からViewを作成します。
+  ##
+  ## descriptor列自体もViewより長く有効に保つ必要があります。各levelの長さ・build
+  ## 状態、zero-count領域の容量とalignmentを検証します。
+  if n < 0 or bitWidth < 0 or bitWidth > 64:
+    raise newException(ValueError, "invalid Wavelet Matrix metadata")
+  if levelCount != bitWidth:
+    raise newException(ValueError, "level count does not match bitWidth")
+  if bitWidth > 0 and levels == nil:
+    raise newException(ValueError, "levels must not be nil")
+  let requiredZeroBytes = bitWidth * sizeof(int64)
+  if zeroCountsBytes < requiredZeroBytes:
+    raise newException(ValueError, "zero-count memory is too small")
+  if requiredZeroBytes > 0:
+    if zeroCounts == nil:
+      raise newException(ValueError, "zero-count memory must not be nil")
+    if cast[uint](zeroCounts) mod uint(alignof(int64)) != 0'u:
+      raise newException(ValueError, "zero-count memory is not int64-aligned")
+  for level in 0..<bitWidth:
+    if levels[level].lenOfBits != n or not levels[level].isCalced:
+      raise newException(ValueError, "invalid succinct bit-vector level")
+  result.n = n
+  result.bitWidth = bitWidth
+  result.levels = ExternalSpan[SuccinctBitVectorView](data: levels,
+    len: levelCount)
+  result.zeroCounts = ExternalSpan[int64](
+    data: cast[ptr UncheckedArray[int64]](zeroCounts), len: bitWidth)
+
 func valueBitWidth(x: uint64): int {.inline.} =
   if x == 0:
     1
@@ -119,25 +157,26 @@ func genWaveletMatrix*[Value: SomeUnsignedInt](values: openArray[Value],
         inc onePos
     swap(current, next)
 
-func checkIndex(wm: WaveletMatrix, i: int64) {.inline.} =
+func checkIndex[W: WaveletMatrix | WaveletMatrixView](wm: W, i: int64) {.inline.} =
   if i < 0 or i >= wm.n:
     raise newException(IndexDefect, "index out of bounds")
 
-func checkPosition(wm: WaveletMatrix, pos: int64) {.inline.} =
+func checkPosition[W: WaveletMatrix | WaveletMatrixView](wm: W, pos: int64) {.inline.} =
   if pos < 0 or pos > wm.n:
     raise newException(IndexDefect, "position out of bounds")
 
-func checkRange(wm: WaveletMatrix, left, right: int64) {.inline.} =
+func checkRange[W: WaveletMatrix | WaveletMatrixView](wm: W, left, right: int64) {.inline.} =
   if left < 0 or left > right or right > wm.n:
     raise newException(IndexDefect, "range out of bounds")
 
-func valueFits(wm: WaveletMatrix, value: uint64): bool {.inline.} =
+func valueFits[W: WaveletMatrix | WaveletMatrixView](wm: W, value: uint64): bool {.inline.} =
   wm.bitWidth == 64 or (wm.bitWidth > 0 and (value shr wm.bitWidth) == 0)
 
-func bitAtUnchecked(bits: SuccinctBitVector, pos: int64): bool {.inline.} =
+func bitAtUnchecked[B: SuccinctBitVector | SuccinctBitVectorView](
+    bits: B, pos: int64): bool {.inline.} =
   ((bits.data[int(pos shr 6)] shr int(pos and 63)) and 1'u64) != 0
 
-func access*(wm: WaveletMatrix, i: int64): uint64 =
+func access*[W: WaveletMatrix | WaveletMatrixView](wm: W, i: int64): uint64 =
   ## Returns the value at index `i`.
   wm.checkIndex(i)
   var pos = i
@@ -151,7 +190,7 @@ func access*(wm: WaveletMatrix, i: int64): uint64 =
     else:
       pos -= ones
 
-func accessRankUnchecked*(wm: WaveletMatrix,
+func accessRankUnchecked*[W: WaveletMatrix | WaveletMatrixView](wm: W,
     pos: int64): tuple[value: uint64, rankBefore: int64] =
   ## 検査なしで`pos`の値と同値の`[0, pos)`における出現数を返します。
   ##
@@ -172,7 +211,7 @@ func accessRankUnchecked*(wm: WaveletMatrix,
       intervalLeft -= leftOnes
   result.rankBefore = current - intervalLeft
 
-func accessRank*(wm: WaveletMatrix,
+func accessRank*[W: WaveletMatrix | WaveletMatrixView](wm: W,
                  pos: int64): tuple[value: uint64, rankBefore: int64] =
   ## `pos` の値と、同じ値の `[0, pos)` における出現回数を返します。
   ##
@@ -180,11 +219,11 @@ func accessRank*(wm: WaveletMatrix,
   wm.checkIndex(pos)
   wm.accessRankUnchecked(pos)
 
-func `[]`*(wm: WaveletMatrix, i: int64): uint64 =
+func `[]`*[W: WaveletMatrix | WaveletMatrixView](wm: W, i: int64): uint64 =
   ## Alias for `access(wm, i)`.
   wm.access(i)
 
-func rank*(wm: WaveletMatrix, value: uint64, pos: int64): int64 =
+func rank*[W: WaveletMatrix | WaveletMatrixView](wm: W, value: uint64, pos: int64): int64 =
   ## Counts occurrences of `value` in `[0, pos)`.
   wm.checkPosition(pos)
   if wm.n == 0 or not wm.valueFits(value):
@@ -202,7 +241,7 @@ func rank*(wm: WaveletMatrix, value: uint64, pos: int64): int64 =
       right = wm.zeroCounts[level] + wm.levels[level].rank1Unchecked(right)
   result = right - left
 
-func rank*(wm: WaveletMatrix, value: uint64, left, right: int64): int64 =
+func rank*[W: WaveletMatrix | WaveletMatrixView](wm: W, value: uint64, left, right: int64): int64 =
   ## Counts occurrences of `value` in `[left, right)`.
   wm.checkRange(left, right)
   if left == right or wm.n == 0 or not wm.valueFits(value):
@@ -220,7 +259,7 @@ func rank*(wm: WaveletMatrix, value: uint64, left, right: int64): int64 =
       hi = wm.zeroCounts[level] + wm.levels[level].rank1Unchecked(hi)
   result = hi - lo
 
-func rankPair*(wm: WaveletMatrix, value: uint64, left,
+func rankPair*[W: WaveletMatrix | WaveletMatrixView](wm: W, value: uint64, left,
                right: int64): tuple[leftRank, rightRank: int64] =
   ## `value`の`[0, left)`と`[0, right)`におけるrankを同時に返します。
   ##
@@ -248,12 +287,12 @@ func rankPair*(wm: WaveletMatrix, value: uint64, left,
   result.leftRank = leftPos - start
   result.rightRank = rightPos - start
 
-func rankIncl*(wm: WaveletMatrix, value: uint64, pos: int64): int64 =
+func rankIncl*[W: WaveletMatrix | WaveletMatrixView](wm: W, value: uint64, pos: int64): int64 =
   ## Counts occurrences of `value` in `[0, pos]`.
   wm.checkIndex(pos)
   result = wm.rank(value, pos + 1)
 
-func select*(wm: WaveletMatrix, value: uint64, k: int64): int64 =
+func select*[W: WaveletMatrix | WaveletMatrixView](wm: W, value: uint64, k: int64): int64 =
   ## Returns the position of the 0-based `k`-th occurrence, or `-1`.
   if k < 0 or wm.n == 0 or not wm.valueFits(value):
     return -1
@@ -281,13 +320,13 @@ func select*(wm: WaveletMatrix, value: uint64, k: int64): int64 =
       pos = wm.levels[level].select1(pos - wm.zeroCounts[level])
   result = pos
 
-func selectNth*(wm: WaveletMatrix, value: uint64, nth: int64): int64 =
+func selectNth*[W: WaveletMatrix | WaveletMatrixView](wm: W, value: uint64, nth: int64): int64 =
   ## Returns the position of the 1-based `nth` occurrence, or `-1`.
   if nth <= 0:
     return -1
   result = wm.select(value, nth - 1)
 
-func countLessThan*(wm: WaveletMatrix, left, right: int64,
+func countLessThan*[W: WaveletMatrix | WaveletMatrixView](wm: W, left, right: int64,
                     value: uint64): int64 =
   ## Counts values smaller than `value` in `[left, right)`.
   wm.checkRange(left, right)
@@ -312,13 +351,13 @@ func countLessThan*(wm: WaveletMatrix, left, right: int64,
       lo = wm.zeroCounts[level] + loOnes
       hi = wm.zeroCounts[level] + hiOnes
 
-func rankLessThan*(wm: WaveletMatrix, value: uint64, pos: int64): int64 =
+func rankLessThan*[W: WaveletMatrix | WaveletMatrixView](wm: W, value: uint64, pos: int64): int64 =
   ## Counts values smaller than `value` in `[0, pos)`.
   ##
   ## Runs in `O(bitWidth)` time.
   result = wm.countLessThan(0, pos, value)
 
-func occPosition*(wm: WaveletMatrix, value: uint64, pos: int64): int64 =
+func occPosition*[W: WaveletMatrix | WaveletMatrixView](wm: W, value: uint64, pos: int64): int64 =
   ## 安定な全体昇順列で、`[0, pos)` に由来する `value` の終端位置を返します。
   ##
   ## 単純な出現回数ではなく、列全体にある `value` 未満の要素数と、
@@ -331,7 +370,7 @@ func occPosition*(wm: WaveletMatrix, value: uint64, pos: int64): int64 =
     return wm.n
   result = wm.rankLessThan(value, wm.n) + wm.rank(value, pos)
 
-func rangeFreq*(wm: WaveletMatrix, left, right: int64,
+func rangeFreq*[W: WaveletMatrix | WaveletMatrixView](wm: W, left, right: int64,
                 lower, upper: uint64): int64 =
   ## Counts values in `[lower, upper)` within positions `[left, right)`.
   wm.checkRange(left, right)
@@ -340,7 +379,7 @@ func rangeFreq*(wm: WaveletMatrix, left, right: int64,
   result = wm.countLessThan(left, right, upper) -
     wm.countLessThan(left, right, lower)
 
-func quantile*(wm: WaveletMatrix, left, right, k: int64): uint64 =
+func quantile*[W: WaveletMatrix | WaveletMatrixView](wm: W, left, right, k: int64): uint64 =
   ## Returns the 0-based `k`-th smallest value in `[left, right)`.
   wm.checkRange(left, right)
   if k < 0 or k >= right - left:
@@ -365,7 +404,7 @@ func quantile*(wm: WaveletMatrix, left, right, k: int64): uint64 =
       lo = wm.zeroCounts[level] + loOnes
       hi = wm.zeroCounts[level] + hiOnes
 
-func predecessor*(wm: WaveletMatrix, left, right: int64,
+func predecessor*[W: WaveletMatrix | WaveletMatrixView](wm: W, left, right: int64,
                   upper: uint64): uint64 =
   ## Returns the greatest value `< upper` in `[left, right)`.
   ## Raises `ValueError` when no such value exists.
@@ -374,7 +413,7 @@ func predecessor*(wm: WaveletMatrix, left, right: int64,
     raise newException(ValueError, "predecessor does not exist")
   result = wm.quantile(left, right, count - 1)
 
-func successor*(wm: WaveletMatrix, left, right: int64,
+func successor*[W: WaveletMatrix | WaveletMatrixView](wm: W, left, right: int64,
                 lower: uint64): uint64 =
   ## Returns the smallest value `>= lower` in `[left, right)`.
   ## Raises `ValueError` when no such value exists.
@@ -383,18 +422,18 @@ func successor*(wm: WaveletMatrix, left, right: int64,
     raise newException(ValueError, "successor does not exist")
   result = wm.quantile(left, right, count)
 
-iterator items*(wm: WaveletMatrix): uint64 =
+iterator items*[W: WaveletMatrix | WaveletMatrixView](wm: W): uint64 =
   ## Iterates over values in original order.
   for i in 0'i64..<wm.n:
     yield wm.access(i)
 
-func toSeq*(wm: WaveletMatrix): seq[uint64] =
+func toSeq*[W: WaveletMatrix | WaveletMatrixView](wm: W): seq[uint64] =
   ## Decodes the matrix to a sequence in original order.
   result = newSeq[uint64](int(wm.n))
   for i in 0'i64..<wm.n:
     result[int(i)] = wm.access(i)
 
-iterator collectValueCountsItems*(wm: WaveletMatrix,
+iterator collectValueCountsItems*[W: WaveletMatrix | WaveletMatrixView](wm: W,
                                   left, right: int64): ValueCount =
   ## `[left, right)` の異なる値と頻度を内部探索順で逐次返します。
   ##
@@ -421,12 +460,12 @@ iterator collectValueCountsItems*(wm: WaveletMatrix,
     stack.add (level: node.level + 1, left: node.left - leftOnes,
       right: node.right - rightOnes, value: node.value)
 
-iterator collectValueCountsItems*(wm: WaveletMatrix): ValueCount =
+iterator collectValueCountsItems*[W: WaveletMatrix | WaveletMatrixView](wm: W): ValueCount =
   ## 列全体の異なる値と頻度を内部探索順で逐次返します。
   for item in wm.collectValueCountsItems(0, wm.n):
     yield item
 
-func collectValueCounts*(wm: WaveletMatrix,
+func collectValueCounts*[W: WaveletMatrix | WaveletMatrixView](wm: W,
                          left, right: int64): seq[ValueCount] =
   ## `[left, right)` の異なる値と頻度を走査順で収集します。
   ##
@@ -435,11 +474,11 @@ func collectValueCounts*(wm: WaveletMatrix,
   for item in wm.collectValueCountsItems(left, right):
     result.add item
 
-func collectValueCounts*(wm: WaveletMatrix): seq[ValueCount] =
+func collectValueCounts*[W: WaveletMatrix | WaveletMatrixView](wm: W): seq[ValueCount] =
   ## 列全体の異なる値と頻度を走査順で収集します。
   wm.collectValueCounts(0, wm.n)
 
-iterator valueCountsItems*(wm: WaveletMatrix,
+iterator valueCountsItems*[W: WaveletMatrix | WaveletMatrixView](wm: W,
                            left, right: int64): ValueCount =
   ## `[left, right)` の異なる値と頻度を値の昇順で逐次返します。
   ##
@@ -447,21 +486,21 @@ iterator valueCountsItems*(wm: WaveletMatrix,
   for item in wm.collectValueCountsItems(left, right):
     yield item
 
-iterator valueCountsItems*(wm: WaveletMatrix): ValueCount =
+iterator valueCountsItems*[W: WaveletMatrix | WaveletMatrixView](wm: W): ValueCount =
   ## 列全体の異なる値と頻度を値の昇順で逐次返します。
   for item in wm.valueCountsItems(0, wm.n):
     yield item
 
-func valueCounts*(wm: WaveletMatrix, left, right: int64): seq[ValueCount] =
+func valueCounts*[W: WaveletMatrix | WaveletMatrixView](wm: W, left, right: int64): seq[ValueCount] =
   ## `[left, right)` の異なる値と頻度を値の昇順で返します。
   for item in wm.valueCountsItems(left, right):
     result.add item
 
-func valueCounts*(wm: WaveletMatrix): seq[ValueCount] =
+func valueCounts*[W: WaveletMatrix | WaveletMatrixView](wm: W): seq[ValueCount] =
   ## 列全体の異なる値と頻度を値の昇順で返します。
   wm.valueCounts(0, wm.n)
 
-iterator collectDistinctValuesItems*(wm: WaveletMatrix,
+iterator collectDistinctValuesItems*[W: WaveletMatrix | WaveletMatrixView](wm: W,
                                      left, right: int64): uint64 =
   ## `[left, right)` の異なる値を内部探索順で逐次返します。
   ##
@@ -487,22 +526,22 @@ iterator collectDistinctValuesItems*(wm: WaveletMatrix,
     stack.add (level: node.level + 1, left: node.left - leftOnes,
       right: node.right - rightOnes, value: node.value)
 
-iterator collectDistinctValuesItems*(wm: WaveletMatrix): uint64 =
+iterator collectDistinctValuesItems*[W: WaveletMatrix | WaveletMatrixView](wm: W): uint64 =
   ## 列全体の異なる値を内部探索順で逐次返します。
   for value in wm.collectDistinctValuesItems(0, wm.n):
     yield value
 
-func collectDistinctValues*(wm: WaveletMatrix,
+func collectDistinctValues*[W: WaveletMatrix | WaveletMatrixView](wm: W,
                             left, right: int64): seq[uint64] =
   ## `[left, right)` の異なる値を内部探索順で収集します。
   for value in wm.collectDistinctValuesItems(left, right):
     result.add value
 
-func collectDistinctValues*(wm: WaveletMatrix): seq[uint64] =
+func collectDistinctValues*[W: WaveletMatrix | WaveletMatrixView](wm: W): seq[uint64] =
   ## 列全体の異なる値を内部探索順で収集します。
   wm.collectDistinctValues(0, wm.n)
 
-iterator distinctValuesItems*(wm: WaveletMatrix,
+iterator distinctValuesItems*[W: WaveletMatrix | WaveletMatrixView](wm: W,
                               left, right: int64): uint64 =
   ## `[left, right)` の異なる値を昇順で逐次返します。
   ##
@@ -510,17 +549,17 @@ iterator distinctValuesItems*(wm: WaveletMatrix,
   for value in wm.collectDistinctValuesItems(left, right):
     yield value
 
-iterator distinctValuesItems*(wm: WaveletMatrix): uint64 =
+iterator distinctValuesItems*[W: WaveletMatrix | WaveletMatrixView](wm: W): uint64 =
   ## 列全体の異なる値を昇順で逐次返します。
   for value in wm.distinctValuesItems(0, wm.n):
     yield value
 
-func distinctValues*(wm: WaveletMatrix,
+func distinctValues*[W: WaveletMatrix | WaveletMatrixView](wm: W,
                      left, right: int64): seq[uint64] =
   ## `[left, right)` の異なる値を昇順で返します。
   for value in wm.distinctValuesItems(left, right):
     result.add value
 
-func distinctValues*(wm: WaveletMatrix): seq[uint64] =
+func distinctValues*[W: WaveletMatrix | WaveletMatrixView](wm: W): seq[uint64] =
   ## 列全体の異なる値を昇順で返します。
   wm.distinctValues(0, wm.n)

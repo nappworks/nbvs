@@ -20,6 +20,41 @@ type
     levels*: seq[SuccinctBitVector] ## Bit vectors, from least to most significant.
     zeroCounts*: seq[int64]
 
+  ReversedWaveletMatrixView* = object
+    ## 下位の `SuccinctBitVectorView` 群を参照する非所有LSB-first Viewです。
+    n*: int64
+    bitWidth*: int
+    levels*: ExternalSpan[SuccinctBitVectorView]
+    zeroCounts*: ExternalSpan[int64]
+
+func initReversedWaveletMatrixView*(n: int64, bitWidth: int,
+    levels: ptr UncheckedArray[SuccinctBitVectorView], levelCount: int,
+    zeroCounts: pointer, zeroCountsBytes: int): ReversedWaveletMatrixView =
+  ## 呼び出し側所有のlevel descriptor列とzero-count列からViewを作成します。
+  if n < 0 or bitWidth < 0 or bitWidth > 64:
+    raise newException(ValueError, "invalid Reversed Wavelet Matrix metadata")
+  if levelCount != bitWidth:
+    raise newException(ValueError, "level count does not match bitWidth")
+  if bitWidth > 0 and levels == nil:
+    raise newException(ValueError, "levels must not be nil")
+  let requiredZeroBytes = bitWidth * sizeof(int64)
+  if zeroCountsBytes < requiredZeroBytes:
+    raise newException(ValueError, "zero-count memory is too small")
+  if requiredZeroBytes > 0:
+    if zeroCounts == nil:
+      raise newException(ValueError, "zero-count memory must not be nil")
+    if cast[uint](zeroCounts) mod uint(alignof(int64)) != 0'u:
+      raise newException(ValueError, "zero-count memory is not int64-aligned")
+  for level in 0..<bitWidth:
+    if levels[level].lenOfBits != n or not levels[level].isCalced:
+      raise newException(ValueError, "invalid succinct bit-vector level")
+  result.n = n
+  result.bitWidth = bitWidth
+  result.levels = ExternalSpan[SuccinctBitVectorView](data: levels,
+    len: levelCount)
+  result.zeroCounts = ExternalSpan[int64](
+    data: cast[ptr UncheckedArray[int64]](zeroCounts), len: bitWidth)
+
 func valueBitWidth(x: uint64): int {.inline.} =
   if x == 0: 1 else: 64 - countLeadingZeroBits(x)
 
@@ -73,26 +108,27 @@ func genReversedWaveletMatrix*(xs: openArray[uint64]): ReversedWaveletMatrix =
         inc onePos
     swap(current, next)
 
-func checkIndex(rwm: ReversedWaveletMatrix, i: int64) {.inline.} =
+func checkIndex[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, i: int64) {.inline.} =
   if i < 0 or i >= rwm.n:
     raise newException(IndexDefect, "index out of bounds")
 
-func checkPosition(rwm: ReversedWaveletMatrix, pos: int64) {.inline.} =
+func checkPosition[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, pos: int64) {.inline.} =
   if pos < 0 or pos > rwm.n:
     raise newException(IndexDefect, "position out of bounds")
 
-func checkRange(rwm: ReversedWaveletMatrix, left, right: int64) {.inline.} =
+func checkRange[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, left, right: int64) {.inline.} =
   if left < 0 or left > right or right > rwm.n:
     raise newException(IndexDefect, "range out of bounds")
 
-func valueFits(rwm: ReversedWaveletMatrix, value: uint64): bool {.inline.} =
+func valueFits[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, value: uint64): bool {.inline.} =
   rwm.bitWidth == 64 or
     (rwm.bitWidth > 0 and (value shr rwm.bitWidth) == 0)
 
-func bitAtUnchecked(bits: SuccinctBitVector, pos: int64): bool {.inline.} =
+func bitAtUnchecked[B: SuccinctBitVector | SuccinctBitVectorView](
+    bits: B, pos: int64): bool {.inline.} =
   ((bits.data[int(pos shr 6)] shr int(pos and 63)) and 1'u64) != 0
 
-func access*(rwm: ReversedWaveletMatrix, i: int64): uint64 =
+func access*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, i: int64): uint64 =
   ## Returns the value at index `i`.
   rwm.checkIndex(i)
   var pos = i
@@ -104,11 +140,11 @@ func access*(rwm: ReversedWaveletMatrix, i: int64): uint64 =
     else:
       pos -= ones
 
-func `[]`*(rwm: ReversedWaveletMatrix, i: int64): uint64 =
+func `[]`*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, i: int64): uint64 =
   ## Alias for `access(rwm, i)`.
   rwm.access(i)
 
-func rank*(rwm: ReversedWaveletMatrix, value: uint64, pos: int64): int64 =
+func rank*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, value: uint64, pos: int64): int64 =
   ## Counts occurrences of `value` in `[0, pos)`.
   rwm.checkPosition(pos)
   if rwm.n == 0 or not rwm.valueFits(value):
@@ -124,7 +160,7 @@ func rank*(rwm: ReversedWaveletMatrix, value: uint64, pos: int64): int64 =
       right = rwm.zeroCounts[level] + rwm.levels[level].rank1Unchecked(right)
   result = right - left
 
-func occPosition*(rwm: ReversedWaveletMatrix, value: uint64,
+func occPosition*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, value: uint64,
                   pos: int64): int64 =
   ## 安定な全体昇順列で、`[0, pos)` に由来する `value` の終端位置を返します。
   ##
@@ -148,7 +184,7 @@ func occPosition*(rwm: ReversedWaveletMatrix, value: uint64,
       right = rwm.zeroCounts[level] + ones
   result = right
 
-func rank*(rwm: ReversedWaveletMatrix, value: uint64,
+func rank*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, value: uint64,
            left, right: int64): int64 =
   ## Counts occurrences of `value` in `[left, right)`.
   rwm.checkRange(left, right)
@@ -166,13 +202,13 @@ func rank*(rwm: ReversedWaveletMatrix, value: uint64,
       hi = rwm.zeroCounts[level] + rwm.levels[level].rank1Unchecked(hi)
   result = hi - lo
 
-func rankIncl*(rwm: ReversedWaveletMatrix, value: uint64,
+func rankIncl*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, value: uint64,
                pos: int64): int64 =
   ## Counts occurrences of `value` in `[0, pos]`.
   rwm.checkIndex(pos)
   result = rwm.rank(value, pos + 1)
 
-func select*(rwm: ReversedWaveletMatrix, value: uint64, k: int64): int64 =
+func select*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, value: uint64, k: int64): int64 =
   ## Returns the position of the 0-based `k`-th occurrence, or `-1`.
   if k < 0 or rwm.n == 0 or not rwm.valueFits(value):
     return -1
@@ -196,7 +232,7 @@ func select*(rwm: ReversedWaveletMatrix, value: uint64, k: int64): int64 =
       pos = rwm.levels[level].select1(pos - rwm.zeroCounts[level])
   result = pos
 
-func selectNth*(rwm: ReversedWaveletMatrix, value: uint64,
+func selectNth*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, value: uint64,
                 nth: int64): int64 =
   ## Returns the position of the 1-based `nth` occurrence, or `-1`.
   if nth <= 0:
@@ -214,7 +250,7 @@ func remainingMask(bitWidth, level: int): uint64 {.inline.} =
     else: (1'u64 shl bitWidth) - 1'u64
   fullMask and not lowMask
 
-func countLessThanNode(rwm: ReversedWaveletMatrix, level: int,
+func countLessThanNode[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, level: int,
                        left, right: int64, partial, value: uint64): int64 =
   if left >= right:
     return 0
@@ -240,7 +276,7 @@ func countLessThanNode(rwm: ReversedWaveletMatrix, level: int,
   result += rwm.countLessThanNode(level + 1, oneLeft, oneRight,
     partial or (1'u64 shl level), value)
 
-func rankLessThan*(rwm: ReversedWaveletMatrix, value: uint64,
+func rankLessThan*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, value: uint64,
                    pos: int64): int64 =
   ## Counts values smaller than `value` in `[0, pos)`.
   ##
@@ -254,7 +290,7 @@ func rankLessThan*(rwm: ReversedWaveletMatrix, value: uint64,
     return pos
   result = rwm.countLessThanNode(0, 0, pos, 0, value)
 
-iterator collectValueCountsItems*(rwm: ReversedWaveletMatrix,
+iterator collectValueCountsItems*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W,
                                   left, right: int64): ValueCount =
   ## `[left, right)` の異なる値と頻度を内部探索順で逐次返します。
   ##
@@ -279,12 +315,12 @@ iterator collectValueCountsItems*(rwm: ReversedWaveletMatrix,
     stack.add (level: node.level + 1, left: node.left - leftOnes,
       right: node.right - rightOnes, value: node.value)
 
-iterator collectValueCountsItems*(rwm: ReversedWaveletMatrix): ValueCount =
+iterator collectValueCountsItems*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W): ValueCount =
   ## 列全体の異なる値と頻度を内部探索順で逐次返します。
   for item in rwm.collectValueCountsItems(0, rwm.n):
     yield item
 
-func collectValueCounts*(rwm: ReversedWaveletMatrix,
+func collectValueCounts*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W,
                          left, right: int64): seq[ValueCount] =
   ## `[left, right)` の異なる値と頻度を走査順で収集します。
   ##
@@ -293,11 +329,11 @@ func collectValueCounts*(rwm: ReversedWaveletMatrix,
   for item in rwm.collectValueCountsItems(left, right):
     result.add item
 
-func collectValueCounts*(rwm: ReversedWaveletMatrix): seq[ValueCount] =
+func collectValueCounts*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W): seq[ValueCount] =
   ## 列全体の異なる値と頻度を走査順で収集します。
   rwm.collectValueCounts(0, rwm.n)
 
-iterator valueCountsItems*(rwm: ReversedWaveletMatrix,
+iterator valueCountsItems*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W,
                            left, right: int64): ValueCount =
   ## `[left, right)` の異なる値と頻度を値の昇順で逐次返します。
   ##
@@ -307,22 +343,22 @@ iterator valueCountsItems*(rwm: ReversedWaveletMatrix,
   for item in values:
     yield item
 
-iterator valueCountsItems*(rwm: ReversedWaveletMatrix): ValueCount =
+iterator valueCountsItems*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W): ValueCount =
   ## 列全体の異なる値と頻度を値の昇順で逐次返します。
   for item in rwm.valueCountsItems(0, rwm.n):
     yield item
 
-func valueCounts*(rwm: ReversedWaveletMatrix,
+func valueCounts*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W,
                   left, right: int64): seq[ValueCount] =
   ## `[left, right)` の異なる値と頻度を値の昇順で返します。
   for item in rwm.valueCountsItems(left, right):
     result.add item
 
-func valueCounts*(rwm: ReversedWaveletMatrix): seq[ValueCount] =
+func valueCounts*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W): seq[ValueCount] =
   ## 列全体の異なる値と頻度を値の昇順で返します。
   rwm.valueCounts(0, rwm.n)
 
-iterator collectDistinctValuesItems*(rwm: ReversedWaveletMatrix,
+iterator collectDistinctValuesItems*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W,
                                      left, right: int64): uint64 =
   ## `[left, right)` の異なる値を内部探索順で逐次返します。
   ##
@@ -347,22 +383,22 @@ iterator collectDistinctValuesItems*(rwm: ReversedWaveletMatrix,
     stack.add (level: node.level + 1, left: node.left - leftOnes,
       right: node.right - rightOnes, value: node.value)
 
-iterator collectDistinctValuesItems*(rwm: ReversedWaveletMatrix): uint64 =
+iterator collectDistinctValuesItems*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W): uint64 =
   ## 列全体の異なる値を内部探索順で逐次返します。
   for value in rwm.collectDistinctValuesItems(0, rwm.n):
     yield value
 
-func collectDistinctValues*(rwm: ReversedWaveletMatrix,
+func collectDistinctValues*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W,
                             left, right: int64): seq[uint64] =
   ## `[left, right)` の異なる値を内部探索順で収集します。
   for value in rwm.collectDistinctValuesItems(left, right):
     result.add value
 
-func collectDistinctValues*(rwm: ReversedWaveletMatrix): seq[uint64] =
+func collectDistinctValues*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W): seq[uint64] =
   ## 列全体の異なる値を内部探索順で収集します。
   rwm.collectDistinctValues(0, rwm.n)
 
-iterator distinctValuesItems*(rwm: ReversedWaveletMatrix,
+iterator distinctValuesItems*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W,
                               left, right: int64): uint64 =
   ## `[left, right)` の異なる値を昇順で逐次返します。
   ##
@@ -372,27 +408,27 @@ iterator distinctValuesItems*(rwm: ReversedWaveletMatrix,
   for value in values:
     yield value
 
-iterator distinctValuesItems*(rwm: ReversedWaveletMatrix): uint64 =
+iterator distinctValuesItems*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W): uint64 =
   ## 列全体の異なる値を昇順で逐次返します。
   for value in rwm.distinctValuesItems(0, rwm.n):
     yield value
 
-func distinctValues*(rwm: ReversedWaveletMatrix,
+func distinctValues*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W,
                      left, right: int64): seq[uint64] =
   ## `[left, right)` の異なる値を昇順で返します。
   for value in rwm.distinctValuesItems(left, right):
     result.add value
 
-func distinctValues*(rwm: ReversedWaveletMatrix): seq[uint64] =
+func distinctValues*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W): seq[uint64] =
   ## 列全体の異なる値を昇順で返します。
   rwm.distinctValues(0, rwm.n)
 
-iterator items*(rwm: ReversedWaveletMatrix): uint64 =
+iterator items*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W): uint64 =
   ## Iterates over values in original order.
   for i in 0'i64..<rwm.n:
     yield rwm.access(i)
 
-func toSeq*(rwm: ReversedWaveletMatrix): seq[uint64] =
+func toSeq*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W): seq[uint64] =
   ## Decodes the matrix to a sequence in original order.
   result = newSeq[uint64](int(rwm.n))
   for i in 0'i64..<rwm.n:
