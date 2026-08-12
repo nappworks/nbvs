@@ -97,6 +97,11 @@ when defined(nbvsSimd):
     ]
 
 type
+  ExternalSpan*[T] = object
+    ## 外部メモリ上の連続した `T` 要素を参照する非所有spanです。
+    data*: ptr UncheckedArray[T]
+    len*: int
+
   SuccinctBitVector* = object
     ## Rank/select-capable bit vector.
     maxOfBits*: int64 ## Maximum number of addressable bits.
@@ -134,6 +139,29 @@ type
     # without increasing the padded prefix memory.
     selectStorage*: seq[uint64]
 
+  SuccinctBitVectorView* = object
+    ## 外部の連続メモリを参照する非所有succinct bit vectorです。
+    ##
+    ## 内部領域の配置は `requiredSuccinctBitVectorViewBytes` と
+    ## `initSuccinctBitVectorView` が決定します。pointer自体は永続化されず、Viewの
+    ## 使用中は呼び出し側がbacking memoryを有効に保つ必要があります。
+    maxOfBits*, lenOfBits*: int64
+    data*: ExternalSpan[uint64]
+    dataWords*: int
+    level*: int8
+    isCalced*: bool
+    totalOnes*, totalZeros*: int64
+    blockPairPrefix*, wordPairPrefix*: ExternalSpan[uint32]
+    level1Len*, level2Len*, level3Len*, level4Len*: int
+    level5Len*, level6Len*, level7Len*, level8Len*: int
+    selectStorage*: ExternalSpan[uint64]
+
+func `[]`*[T](span: ExternalSpan[T], index: int): lent T {.inline.} =
+  span.data[index]
+
+func `[]`*[T](span: var ExternalSpan[T], index: int): var T {.inline.} =
+  span.data[index]
+
 const
   SelectNodeWords = 4
   SelectFullSubtreeWords = [
@@ -164,7 +192,7 @@ func levelFanout(level: int): int {.inline.} =
   elif level == 8: 4
   else: 8
 
-func selectNodeWordOffset(sbv: SuccinctBitVector, wantedLevel, entryIdx: int): int =
+func selectNodeWordOffset[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, wantedLevel, entryIdx: int): int =
   ## Locates a level entry in the depth-first Select tree.
   let bitStart = int64(entryIdx) * levelBlockSize(wantedLevel)
   var currentLevel = int(sbv.level)
@@ -176,30 +204,30 @@ func selectNodeWordOffset(sbv: SuccinctBitVector, wantedLevel, entryIdx: int): i
     nodeWord += SelectNodeWords + lane * SelectFullSubtreeWords[currentLevel]
   result = nodeWord
 
-func level1Ptr(sbv: SuccinctBitVector, entryIdx: int): ptr int16 {.inline.} =
+func level1Ptr[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, entryIdx: int): ptr int16 {.inline.} =
   let nodeWord = sbv.selectNodeWordOffset(1, entryIdx)
   result = cast[ptr int16](unsafeAddr sbv.selectStorage[nodeWord])
 
-func levelI32Ptr(sbv: SuccinctBitVector, level, entryIdx: int): ptr int32 {.inline.} =
+func levelI32Ptr[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, level, entryIdx: int): ptr int32 {.inline.} =
   let nodeWord = sbv.selectNodeWordOffset(level, entryIdx)
   result = cast[ptr int32](unsafeAddr sbv.selectStorage[nodeWord])
 
-func level8Ptr(sbv: SuccinctBitVector): ptr int64 {.inline.} =
+func level8Ptr[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S): ptr int64 {.inline.} =
   cast[ptr int64](unsafeAddr sbv.selectStorage[0])
 
-func level1At(sbv: SuccinctBitVector, idx: int): int16 {.inline.} =
+func level1At[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, idx: int): int16 {.inline.} =
   cast[ptr UncheckedArray[int16]](sbv.level1Ptr(idx))[idx and 15]
 
-func levelI32At(sbv: SuccinctBitVector, level, idx: int): int32 {.inline.} =
+func levelI32At[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, level, idx: int): int32 {.inline.} =
   cast[ptr UncheckedArray[int32]](sbv.levelI32Ptr(level, idx))[idx and 7]
 
-func level8At(sbv: SuccinctBitVector, idx: int): int64 {.inline.} =
+func level8At[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, idx: int): int64 {.inline.} =
   cast[ptr UncheckedArray[int64]](sbv.level8Ptr())[idx]
 
-func setLevelI32(sbv: var SuccinctBitVector, level, idx: int, value: int32) {.inline.} =
+func setLevelI32[S: SuccinctBitVector | SuccinctBitVectorView](sbv: var S, level, idx: int, value: int32) {.inline.} =
   cast[ptr UncheckedArray[int32]](sbv.levelI32Ptr(level, idx))[idx and 7] = value
 
-func setLevel8(sbv: var SuccinctBitVector, idx: int, value: int64) {.inline.} =
+func setLevel8[S: SuccinctBitVector | SuccinctBitVectorView](sbv: var S, idx: int, value: int64) {.inline.} =
   cast[ptr UncheckedArray[int64]](sbv.level8Ptr())[idx] = value
 
 func ceilDiv*[T: SomeInteger](x, y: T): T =
@@ -238,7 +266,7 @@ func calcLevel*(maxBits: int64): int8 =
   else:
     -1
 
-func resetLevelPadding(sbv: var SuccinctBitVector) =
+func resetLevelPadding[S: SuccinctBitVector | SuccinctBitVectorView](sbv: var S) =
   # 論理entryはbuildで必ず上書きされるため、select走査が読む末尾paddingだけを
   # sentinelへ戻し、再build時の全tree初期化を避ける。
   if sbv.level >= 1:
@@ -348,22 +376,114 @@ func estimateSuccinctBitVectorBytes*(bitLength: int64): int64 =
     if level >= 8: inc nodeCount
     result += nodeCount * SelectNodeWords.int64 * int64(sizeof(uint64))
 
-func checkPos(sbv: SuccinctBitVector, pos: int64) =
+func requiredSuccinctBitVectorViewBytes*(bitLength: int64): int =
+  ## `SuccinctBitVectorView` の全backing領域に必要なbyte数を返します。
+  var bytes = estimateSuccinctBitVectorBytes(bitLength)
+  # uint32補助領域の要素数が奇数なら、後続select treeのuint64 alignmentに
+  # 4 byte必要です。各seqを別確保する所有型の見積もりには存在しない差です。
+  let hasSelectTree = calcLevel(bitLength) >= 1
+  var uint32Count = 0'i64
+  when not defined(nbvsSimd):
+    uint32Count = ceilDiv(bitLength, L1)
+  when defined(nbvsSimd):
+    if bitLength > L5 and bitLength <= int64(uint32.high):
+      uint32Count = ceilDiv(bitLength, L1 * 2)
+  if hasSelectTree and (uint32Count and 1) != 0:
+    bytes += 4
+  if bytes > int64(int.high):
+    raise newException(ValueError, "backing memory size exceeds int range")
+  result = int(bytes)
+
+func initSuccinctBitVectorView*(memory: pointer, memorySize: int,
+    maxBits: int64, built = false): SuccinctBitVectorView =
+  ## 1つの外部連続領域から非所有succinct bit vector viewを作成します。
+  ##
+  ## `built` は同じlayoutへ以前 `build` 済みのrank/select情報が格納されている
+  ## 場合に指定します。Viewのruntime metadataは再構成されますが、backing領域を
+  ## 初期化・所有・解放しません。容量不足、nil、alignment不正では
+  ## `ValueError` を送出します。
+  let required = requiredSuccinctBitVectorViewBytes(maxBits)
+  if memorySize < 0 or memorySize < required:
+    raise newException(ValueError, "backing memory is too small")
+  if required > 0:
+    if memory == nil:
+      raise newException(ValueError, "backing memory must not be nil")
+    if cast[uint](memory) mod uint(alignof(uint64)) != 0'u:
+      raise newException(ValueError, "backing memory is not uint64-aligned")
+
+  result.maxOfBits = maxBits
+  result.lenOfBits = maxBits
+  result.level = calcLevel(maxBits)
+  result.dataWords = int(ceilDiv(maxBits, 64'i64))
+  result.totalZeros = maxBits
+  result.level1Len = int(ceilDiv(maxBits, L1))
+  result.level2Len = int(ceilDiv(maxBits, L2))
+  result.level3Len = int(ceilDiv(maxBits, L3))
+  result.level4Len = int(ceilDiv(maxBits, L4))
+  result.level5Len = int(ceilDiv(maxBits, L5))
+  result.level6Len = int(ceilDiv(maxBits, L6))
+  result.level7Len = int(ceilDiv(maxBits, L7))
+  result.level8Len = int(ceilDiv(maxBits, L8))
+
+  var offset = 0
+  template takeSpan(field: untyped, Element: typedesc, count: int) =
+    block:
+      if count > 0:
+        offset = int(alignUp(int64(offset), int64(alignof(Element))))
+        field = ExternalSpan[Element](
+          data: cast[ptr UncheckedArray[Element]](
+            cast[pointer](cast[uint](memory) + uint(offset))), len: count)
+        offset += count * sizeof(Element)
+
+  takeSpan(result.data, uint64,
+    int(alignUp(int64(result.dataWords), 8'i64)))
+  when not defined(nbvsSimd):
+    takeSpan(result.wordPairPrefix, uint32, result.level1Len)
+  when defined(nbvsSimd):
+    if maxBits > L5 and maxBits <= int64(uint32.high):
+      takeSpan(result.blockPairPrefix, uint32,
+        int(ceilDiv(maxBits, L1 * 2)))
+
+  var nodeCount = 0
+  if result.level >= 1:
+    nodeCount = ceilDiv(result.level1Len, 16)
+    if result.level >= 2: nodeCount += ceilDiv(result.level2Len, 8)
+    if result.level >= 3: nodeCount += ceilDiv(result.level3Len, 8)
+    if result.level >= 4: nodeCount += ceilDiv(result.level4Len, 8)
+    if result.level >= 5: nodeCount += ceilDiv(result.level5Len, 8)
+    if result.level >= 6: nodeCount += ceilDiv(result.level6Len, 8)
+    if result.level >= 7: nodeCount += ceilDiv(result.level7Len, 8)
+    if result.level >= 8: inc nodeCount
+  takeSpan(result.selectStorage, uint64, nodeCount * SelectNodeWords)
+  doAssert offset == required
+
+  if built:
+    var ones = 0'i64
+    for wordIndex in 0..<result.dataWords:
+      var word = result.data[wordIndex]
+      if wordIndex == result.dataWords - 1 and (maxBits and 63) != 0:
+        word = word and ((1'u64 shl int(maxBits and 63)) - 1'u64)
+      ones += int64(countSetBits(word))
+    result.totalOnes = ones
+    result.totalZeros = maxBits - ones
+    result.isCalced = true
+
+func checkPos[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, pos: int64) =
   if pos < 0 or pos >= sbv.lenOfBits:
     raise newException(IndexDefect, "Index out of bounds")
 
-func access*(sbv: SuccinctBitVector, pos: int64): bool =
+func access*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, pos: int64): bool =
   ## Returns the bit at `pos`.
   sbv.checkPos(pos)
   let wordIdx = int(pos div 64)
   let bitIdx = int(pos mod 64)
   result = sbv.data[wordIdx].testBit(bitIdx)
 
-func `[]`*(sbv: SuccinctBitVector, pos: int64): bool =
+func `[]`*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, pos: int64): bool =
   ## Alias for `access(sbv, pos)`.
   result = sbv.access(pos)
 
-func setBit*(sbv: var SuccinctBitVector, pos: int64) =
+func setBit*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: var S, pos: int64) =
   ## Sets the bit at `pos` to `1` and marks the dictionary stale.
   sbv.checkPos(pos)
   let wordIdx = int(pos div 64)
@@ -371,7 +491,7 @@ func setBit*(sbv: var SuccinctBitVector, pos: int64) =
   sbv.data[wordIdx].setBit(bitIdx)
   sbv.isCalced = false
 
-func clearBit*(sbv: var SuccinctBitVector, pos: int64) =
+func clearBit*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: var S, pos: int64) =
   ## Clears the bit at `pos` to `0` and marks the dictionary stale.
   sbv.checkPos(pos)
   let wordIdx = int(pos div 64)
@@ -379,61 +499,68 @@ func clearBit*(sbv: var SuccinctBitVector, pos: int64) =
   sbv.data[wordIdx].clearBit(bitIdx)
   sbv.isCalced = false
 
-func `[]=`*(sbv: var SuccinctBitVector, pos: int64, b: bool) =
+func `[]=`*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: var S, pos: int64, b: bool) =
   ## Writes a boolean bit at `pos`.
   if b:
     sbv.setBit(pos)
   else:
     sbv.clearBit(pos)
 
-func `$`*(sbv: SuccinctBitVector): string =
-  ## Returns the logical bit string from index `0` to `lenOfBits - 1`.
+func toBitString[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S): string =
   for i in 0'i64..<sbv.lenOfBits:
     result.add(if sbv[i]: "1" else: "0")
 
-func logicalLevel1*(sbv: SuccinctBitVector): seq[int16] =
+func `$`*(sbv: SuccinctBitVector): string =
+  ## 論理bit列をindex順の文字列で返します。
+  result = toBitString(sbv)
+
+func `$`*(sbv: SuccinctBitVectorView): string =
+  ## 論理bit列をindex順の文字列で返します。
+  result = toBitString(sbv)
+
+func logicalLevel1*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S): seq[int16] =
   ## Returns the logical, unpadded level-1 StartPrefix array.
   if sbv.level >= 1:
     result = newSeq[int16](sbv.level1Len)
     for i in 0..<result.len: result[i] = sbv.level1At(i)
 
-func logicalLevel2*(sbv: SuccinctBitVector): seq[int32] =
+func logicalLevel2*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S): seq[int32] =
   ## Returns the logical, unpadded level-2 StartPrefix array.
   if sbv.level >= 2:
     result = newSeq[int32](sbv.level2Len)
     for i in 0..<result.len: result[i] = sbv.levelI32At(2, i)
 
-func logicalLevel3*(sbv: SuccinctBitVector): seq[int32] =
+func logicalLevel3*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S): seq[int32] =
   ## Returns the logical, unpadded level-3 StartPrefix array.
   if sbv.level >= 3:
     result = newSeq[int32](sbv.level3Len)
     for i in 0..<result.len: result[i] = sbv.levelI32At(3, i)
 
-func logicalLevel4*(sbv: SuccinctBitVector): seq[int32] =
+func logicalLevel4*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S): seq[int32] =
   ## Returns the logical, unpadded level-4 StartPrefix array.
   if sbv.level >= 4:
     result = newSeq[int32](sbv.level4Len)
     for i in 0..<result.len: result[i] = sbv.levelI32At(4, i)
 
-func logicalLevel5*(sbv: SuccinctBitVector): seq[int32] =
+func logicalLevel5*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S): seq[int32] =
   ## Returns the logical, unpadded level-5 StartPrefix array.
   if sbv.level >= 5:
     result = newSeq[int32](sbv.level5Len)
     for i in 0..<result.len: result[i] = sbv.levelI32At(5, i)
 
-func logicalLevel6*(sbv: SuccinctBitVector): seq[int32] =
+func logicalLevel6*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S): seq[int32] =
   ## Returns the logical, unpadded level-6 StartPrefix array.
   if sbv.level >= 6:
     result = newSeq[int32](sbv.level6Len)
     for i in 0..<result.len: result[i] = sbv.levelI32At(6, i)
 
-func logicalLevel7*(sbv: SuccinctBitVector): seq[int32] =
+func logicalLevel7*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S): seq[int32] =
   ## Returns the logical, unpadded level-7 StartPrefix array.
   if sbv.level >= 7:
     result = newSeq[int32](sbv.level7Len)
     for i in 0..<result.len: result[i] = sbv.levelI32At(7, i)
 
-func logicalLevel8*(sbv: SuccinctBitVector): seq[int64] =
+func logicalLevel8*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S): seq[int64] =
   ## Returns the logical, unpadded level-8 StartPrefix array.
   if sbv.level >= 8:
     result = newSeq[int64](sbv.level8Len)
@@ -455,7 +582,7 @@ when defined(nbvsSimd):
     let zero = mm256_xor_si256(x, x)
     result = mm256_sad_epu8(pcBytes, zero)
 
-func popcount512At*(sbv: SuccinctBitVector, baseBit: int64): int64 =
+func popcount512At*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, baseBit: int64): int64 =
   ## Returns the number of one bits in the 512-bit block starting at `baseBit`.
   when defined(nbvsSimd):
     let startWord = int(baseBit div 64)
@@ -478,7 +605,7 @@ func popcount512At*(sbv: SuccinctBitVector, baseBit: int64): int64 =
     for j in 0..<8:
       result += int64(countSetBits(sbv.data[startWord + j]))
 
-func buildWordPairPrefix(sbv: var SuccinctBitVector,
+func buildWordPairPrefix[S: SuccinctBitVector | SuccinctBitVectorView](sbv: var S,
                          baseBit: int64): int64 =
   let startWord = int(baseBit shr 6)
   var counts: array[8, uint32]
@@ -493,7 +620,7 @@ func buildWordPairPrefix(sbv: var SuccinctBitVector,
   for count in counts:
     result += int64(count)
 
-func build*(sbv: var SuccinctBitVector) =
+func build*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: var S) =
   ## Builds or rebuilds the rank/select dictionary.
   sbv.resetLevelPadding()
 
@@ -644,7 +771,7 @@ func build*(sbv: var SuccinctBitVector) =
   of 7: buildForLevel(7)
   else: buildForLevel(8)
 
-func rankIn512Block*(sbv: SuccinctBitVector, pos: int64): int64 =
+func rankIn512Block*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, pos: int64): int64 =
   ## Returns the number of one bits before `pos` within its 512-bit block.
   if pos < 0 or pos > sbv.lenOfBits:
     raise newException(IndexDefect, "Index out of bounds")
@@ -684,7 +811,7 @@ func rankIn512Block*(sbv: SuccinctBitVector, pos: int64): int64 =
     result += int64(countSetBits(
       sbv.data[startWord + wordOffset] and partialMask))
 
-func rank1Unchecked*(sbv: SuccinctBitVector, pos: int64): int64 =
+func rank1Unchecked*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, pos: int64): int64 =
   ## 検査なしで半開区間 `[0, pos)` のone bit数を返します。
   ##
   ## `build` 済みであり、`0 <= pos <= lenOfBits` を満たす場合だけ
@@ -739,7 +866,7 @@ func rank1Unchecked*(sbv: SuccinctBitVector, pos: int64): int64 =
   else: rankFromSelectTree(8)
   result += sbv.rankIn512Block(pos)
 
-func rank1*(sbv: SuccinctBitVector, pos: int64): int64 {.inline.} =
+func rank1*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, pos: int64): int64 {.inline.} =
   ## Returns the number of one bits in the half-open range `[0, pos)`.
   if not sbv.isCalced:
     raise newException(ValueError, "rank dictionary is not built")
@@ -747,16 +874,16 @@ func rank1*(sbv: SuccinctBitVector, pos: int64): int64 {.inline.} =
     raise newException(IndexDefect, "Index out of bounds")
   result = sbv.rank1Unchecked(pos)
 
-func rank0*(sbv: SuccinctBitVector, pos: int64): int64 =
+func rank0*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, pos: int64): int64 =
   ## Returns the number of zero bits in the half-open range `[0, pos)`.
   result = pos - sbv.rank1(pos)
 
-func rank1Incl*(sbv: SuccinctBitVector, pos: int64): int64 =
+func rank1Incl*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, pos: int64): int64 =
   ## Returns the number of one bits in the closed range `[0, pos]`.
   sbv.checkPos(pos)
   result = sbv.rank1(pos + 1)
 
-func rank0Incl*(sbv: SuccinctBitVector, pos: int64): int64 =
+func rank0Incl*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, pos: int64): int64 =
   ## Returns the number of zero bits in the closed range `[0, pos]`.
   sbv.checkPos(pos)
   result = sbv.rank0(pos + 1)
@@ -950,7 +1077,7 @@ func selectInWord64Pdep*(x: uint64, target: int): int =
   else:
     result = selectInWord64ByClearing(x, target)
 
-func selectWordIn512OnesAvx2*(sbv: SuccinctBitVector, baseBit: int64, target: int): tuple[wordOffset: int, rest: int] {.selectInline.} =
+func selectWordIn512OnesAvx2*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, baseBit: int64, target: int): tuple[wordOffset: int, rest: int] {.selectInline.} =
   ## Finds the word and residual target for one-bit select within a 512-bit block.
   var t = target
   let startWord = int(baseBit shr 6)
@@ -963,14 +1090,14 @@ func selectWordIn512OnesAvx2*(sbv: SuccinctBitVector, baseBit: int64, target: in
       result.rest = t
       return
 
-func selectIn512OnesAvx2*(sbv: SuccinctBitVector, baseBit: int64, target: int): int64 {.selectInline.} =
+func selectIn512OnesAvx2*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, baseBit: int64, target: int): int64 {.selectInline.} =
   ## Selects a one bit within a 512-bit block.
   let selected = sbv.selectWordIn512OnesAvx2(baseBit, target)
   let wordIdx = int(baseBit shr 6) + selected.wordOffset
   let bit = selectInWord64Pdep(sbv.data[wordIdx], selected.rest)
   result = int64(wordIdx) * 64 + int64(bit)
 
-func validMaskForWord(sbv: SuccinctBitVector, wordIdx: int): uint64 {.selectInline.} =
+func validMaskForWord[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, wordIdx: int): uint64 {.selectInline.} =
   if wordIdx < 0 or wordIdx >= sbv.dataWords:
     return 0'u64
   let bitStart = int64(wordIdx) * 64
@@ -982,7 +1109,7 @@ func validMaskForWord(sbv: SuccinctBitVector, wordIdx: int): uint64 {.selectInli
   else:
     (1'u64 shl int(remain)) - 1'u64
 
-func selectIn512ZerosTail*(sbv: SuccinctBitVector, baseBit: int64, target: int): int64 {.selectInline.} =
+func selectIn512ZerosTail*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, baseBit: int64, target: int): int64 {.selectInline.} =
   ## Selects a zero bit in a possibly partial trailing 512-bit block.
   var t = target
   let startWord = int(baseBit shr 6)
@@ -1003,7 +1130,7 @@ func selectIn512ZerosTail*(sbv: SuccinctBitVector, baseBit: int64, target: int):
 
   result = -1
 
-func selectWordIn512ZerosAvx2*(sbv: SuccinctBitVector, baseBit: int64, target: int): tuple[wordOffset: int, rest: int] {.selectInline.} =
+func selectWordIn512ZerosAvx2*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, baseBit: int64, target: int): tuple[wordOffset: int, rest: int] {.selectInline.} =
   ## Finds the word and residual target for zero-bit select within a full 512-bit block.
   var t = target
   let startWord = int(baseBit shr 6)
@@ -1016,7 +1143,7 @@ func selectWordIn512ZerosAvx2*(sbv: SuccinctBitVector, baseBit: int64, target: i
       result.rest = t
       return
 
-func selectIn512ZerosAvx2*(sbv: SuccinctBitVector, baseBit: int64, target: int): int64 {.selectInline.} =
+func selectIn512ZerosAvx2*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, baseBit: int64, target: int): int64 {.selectInline.} =
   ## Selects a zero bit within a 512-bit block.
   if baseBit + L1 > sbv.lenOfBits:
     return sbv.selectIn512ZerosTail(baseBit, target)
@@ -1035,7 +1162,7 @@ template validChildren(remaining: int64, blockSize: static[int64],
   else:
     int((remaining + blockSize - 1) shr shift)
 
-func select1*(sbv: SuccinctBitVector, k: int64): int64 =
+func select1*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, k: int64): int64 =
   ## Returns the position of the 0-based `k`-th one bit, or `-1` when out of range.
   if not sbv.isCalced:
     raise newException(ValueError, "rank dictionary is not built")
@@ -1085,7 +1212,7 @@ func select1*(sbv: SuccinctBitVector, k: int64): int64 =
 
   result = sbv.selectIn512OnesAvx2(baseBit, int(target))
 
-func select0*(sbv: SuccinctBitVector, k: int64): int64 =
+func select0*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, k: int64): int64 =
   ## Returns the position of the 0-based `k`-th zero bit, or `-1` when out of range.
   if not sbv.isCalced:
     raise newException(ValueError, "rank dictionary is not built")
@@ -1166,10 +1293,10 @@ func select0*(sbv: SuccinctBitVector, k: int64): int64 =
 
   result = sbv.selectIn512ZerosAvx2(baseBit, int(target))
 
-func select1Nth*(sbv: SuccinctBitVector, nth: int64): int64 =
+func select1Nth*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, nth: int64): int64 =
   ## Returns the position of the 1-based `nth` one bit, or `-1` when out of range.
   if nth <= 0: -1 else: sbv.select1(nth - 1)
 
-func select0Nth*(sbv: SuccinctBitVector, nth: int64): int64 =
+func select0Nth*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, nth: int64): int64 =
   ## Returns the position of the 1-based `nth` zero bit, or `-1` when out of range.
   if nth <= 0: -1 else: sbv.select0(nth - 1)

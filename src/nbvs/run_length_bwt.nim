@@ -13,7 +13,59 @@ type
     symbolOffsets*: array[AlphabetSize + 1, uint32]
     symbolPrefixes*: seq[uint32]
 
+  RunLengthBwtView* = object
+    ## 呼び出し側が所有する下位Viewと連続領域を参照する非所有BWTです。
+    n*: int64
+    runSymbols*: ExternalSpan[FmSymbol]
+    runStarts*: SuccinctBitVectorView
+    runSymbolIndex*: WaveletMatrixView
+    symbolOffsets*: ExternalSpan[uint32]
+    symbolPrefixes*: ExternalSpan[uint32]
+
+func initRunLengthBwtView*(n: int64, runSymbols: pointer,
+    runSymbolsBytes: int, runStarts: SuccinctBitVectorView,
+    runSymbolIndex: WaveletMatrixView, symbolOffsets: pointer,
+    symbolOffsetsBytes: int, symbolPrefixes: pointer,
+    symbolPrefixesBytes: int): RunLengthBwtView =
+  ## 外部領域と既存の下位Viewからread-only run-length BWTを構築します。
+  ##
+  ## 全領域はViewより長く有効で、各要素型のalignmentを満たす必要があります。
+  if n < 0 or runSymbolsBytes < 0 or symbolOffsetsBytes < 0 or
+      symbolPrefixesBytes < 0:
+    raise newException(ValueError, "invalid run-length BWT metadata")
+  if runStarts.lenOfBits != n or not runStarts.isCalced:
+    raise newException(ValueError, "invalid run-start bit vector")
+  let runs = int(runStarts.totalOnes)
+  if runSymbolsBytes < runs * sizeof(FmSymbol) or
+      runSymbolIndex.n != int64(runs) or
+      symbolOffsetsBytes < (AlphabetSize + 1) * sizeof(uint32):
+    raise newException(ValueError, "run-length BWT storage is too small")
+  let prefixCount = symbolPrefixesBytes div sizeof(uint32)
+  template validate(memory: pointer, count: int, Element: typedesc) =
+    if count > 0 and (memory == nil or
+        cast[uint](memory) mod uint(alignof(Element)) != 0'u):
+      raise newException(ValueError, "run-length BWT storage is invalid")
+  validate(runSymbols, runs, FmSymbol)
+  validate(symbolOffsets, AlphabetSize + 1, uint32)
+  validate(symbolPrefixes, prefixCount, uint32)
+  result.n = n
+  result.runSymbols = ExternalSpan[FmSymbol](
+    data: cast[ptr UncheckedArray[FmSymbol]](runSymbols), len: runs)
+  result.runStarts = runStarts
+  result.runSymbolIndex = runSymbolIndex
+  result.symbolOffsets = ExternalSpan[uint32](
+    data: cast[ptr UncheckedArray[uint32]](symbolOffsets),
+    len: AlphabetSize + 1)
+  result.symbolPrefixes = ExternalSpan[uint32](
+    data: cast[ptr UncheckedArray[uint32]](symbolPrefixes), len: prefixCount)
+  if result.symbolOffsets[AlphabetSize] != uint32(prefixCount):
+    raise newException(ValueError, "invalid symbol-prefix count")
+
 func runCount*(bwt: RunLengthBwt): int {.inline.} =
+  ## run数を返します。
+  bwt.runSymbols.len
+
+func runCount*(bwt: RunLengthBwtView): int {.inline.} =
   ## run数を返します。
   bwt.runSymbols.len
 
@@ -68,28 +120,28 @@ proc genRunLengthBwt*(values: openArray[FmSymbol]): RunLengthBwt =
     result.symbolPrefixes[int(result.symbolOffsets[symbolIndex] +
       seen[symbolIndex])] = totals[symbolIndex]
 
-func checkIndex(bwt: RunLengthBwt, position: int64) {.inline.} =
+func checkIndex[B: RunLengthBwt | RunLengthBwtView](bwt: B, position: int64) {.inline.} =
   if position < 0 or position >= bwt.n:
     raise newException(IndexDefect, "index out of bounds")
 
-func checkPosition(bwt: RunLengthBwt, position: int64) {.inline.} =
+func checkPosition[B: RunLengthBwt | RunLengthBwtView](bwt: B, position: int64) {.inline.} =
   if position < 0 or position > bwt.n:
     raise newException(IndexDefect, "position out of bounds")
 
-func prefixBeforeRun(bwt: RunLengthBwt, symbol: FmSymbol,
+func prefixBeforeRun[B: RunLengthBwt | RunLengthBwtView](bwt: B, symbol: FmSymbol,
                      run: int): int64 {.inline.} =
   let ordinal = bwt.runSymbolIndex.rank(uint64(symbol), int64(run))
   int64(bwt.symbolPrefixes[int(bwt.symbolOffsets[int(symbol)]) + int(ordinal)])
 
-func runStartAt(bwt: RunLengthBwt, run: int): int64 {.inline.} =
+func runStartAt[B: RunLengthBwt | RunLengthBwtView](bwt: B, run: int): int64 {.inline.} =
   bwt.runStarts.select1(int64(run))
 
-func runAt(bwt: RunLengthBwt,
+func runAt[B: RunLengthBwt | RunLengthBwtView](bwt: B,
            position: int64): tuple[run: int, start: int64] {.inline.} =
   result.run = int(bwt.runStarts.rank1(position + 1) - 1)
   result.start = bwt.runStartAt(result.run)
 
-func accessRankUnchecked*(bwt: RunLengthBwt,
+func accessRankUnchecked*[B: RunLengthBwt | RunLengthBwtView](bwt: B,
     position: int64): tuple[value: uint64, rankBefore: int64] =
   ## 検査なしで`position`のsymbolと同値の出現数を返します。
   ##
@@ -100,17 +152,17 @@ func accessRankUnchecked*(bwt: RunLengthBwt,
   result.rankBefore = bwt.prefixBeforeRun(symbol, location.run) +
     position - location.start
 
-func accessRank*(bwt: RunLengthBwt,
+func accessRank*[B: RunLengthBwt | RunLengthBwtView](bwt: B,
                  position: int64): tuple[value: uint64, rankBefore: int64] =
   ## `position`のsymbolと同じsymbolの`[0, position)`での出現数を返します。
   bwt.checkIndex(position)
   bwt.accessRankUnchecked(position)
 
-func access*(bwt: RunLengthBwt, position: int64): FmSymbol =
+func access*[B: RunLengthBwt | RunLengthBwtView](bwt: B, position: int64): FmSymbol =
   ## `position`のsymbolを返します。
   FmSymbol(bwt.accessRank(position).value)
 
-func rank*(bwt: RunLengthBwt, symbol: FmSymbol, position: int64): int64 =
+func rank*[B: RunLengthBwt | RunLengthBwtView](bwt: B, symbol: FmSymbol, position: int64): int64 =
   ## `symbol`の`[0, position)`における出現数を返します。
   bwt.checkPosition(position)
   if position == 0 or bwt.n == 0:
@@ -123,7 +175,7 @@ func rank*(bwt: RunLengthBwt, symbol: FmSymbol, position: int64): int64 =
   if bwt.runSymbols[run] == symbol:
     result += position - bwt.runStartAt(run)
 
-func rankPair*(bwt: RunLengthBwt, symbol: FmSymbol, left,
+func rankPair*[B: RunLengthBwt | RunLengthBwtView](bwt: B, symbol: FmSymbol, left,
                right: int64): tuple[leftRank, rightRank: int64] =
   ## `symbol`の`[0, left)`と`[0, right)`におけるrankを返します。
   if left < 0 or left > right or right > bwt.n:
@@ -179,7 +231,7 @@ func rankPair*(bwt: RunLengthBwt, symbol: FmSymbol, left,
   if rightRun >= 0 and bwt.runSymbols[rightRun] == symbol:
     result.rightRank += right - bwt.runStartAt(rightRun)
 
-func select*(bwt: RunLengthBwt, symbol: FmSymbol, ordinal: int64): int64 =
+func select*[B: RunLengthBwt | RunLengthBwtView](bwt: B, symbol: FmSymbol, ordinal: int64): int64 =
   ## 0-basedの`ordinal`番目の出現位置を返し、存在しなければ`-1`を返します。
   if ordinal < 0 or bwt.n == 0:
     return -1
@@ -199,17 +251,18 @@ func select*(bwt: RunLengthBwt, symbol: FmSymbol, ordinal: int64): int64 =
   let run = bwt.runSymbolIndex.select(uint64(symbol), int64(symbolRunOrdinal))
   bwt.runStarts.select1(run) + ordinal - int64(bwt.symbolPrefixes[low])
 
-func memoryUsage*(bwt: RunLengthBwt): int64 =
+func memoryUsage*[B: RunLengthBwt | RunLengthBwtView](bwt: B): int64 =
   ## 論理的な格納容量の概算をbyte単位で返します。
   result = int64(bwt.runSymbols.len * sizeof(FmSymbol) +
-    bwt.symbolPrefixes.len * sizeof(uint32) + sizeof(bwt.symbolOffsets))
+    (bwt.symbolPrefixes.len + AlphabetSize + 1) * sizeof(uint32))
   result += int64(bwt.runStarts.data.len * sizeof(uint64) +
     bwt.runStarts.blockPairPrefix.len * sizeof(uint32) +
     bwt.runStarts.wordPairPrefix.len * sizeof(uint32) +
     bwt.runStarts.selectStorage.len * sizeof(uint64))
-  for level in bwt.runSymbolIndex.levels:
-    result += int64(level.data.len * sizeof(uint64) +
-      level.blockPairPrefix.len * sizeof(uint32) +
-      level.wordPairPrefix.len * sizeof(uint32) +
-      level.selectStorage.len * sizeof(uint64))
+  for level in 0..<bwt.runSymbolIndex.bitWidth:
+    let bits = bwt.runSymbolIndex.levels[level]
+    result += int64(bits.data.len * sizeof(uint64) +
+      bits.blockPairPrefix.len * sizeof(uint32) +
+      bits.wordPairPrefix.len * sizeof(uint32) +
+      bits.selectStorage.len * sizeof(uint64))
   result += int64(bwt.runSymbolIndex.zeroCounts.len * sizeof(int64))

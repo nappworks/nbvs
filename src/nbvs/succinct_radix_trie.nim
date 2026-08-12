@@ -12,6 +12,12 @@ type
     wordOffsets*: seq[uint32]
     data*: seq[uint64]
 
+  BlockPackedParentsView* = object
+    ## 外部領域を参照する非所有parent mappingです。
+    bitWidths*: ExternalSpan[uint8]
+    wordOffsets*: ExternalSpan[uint32]
+    data*: ExternalSpan[uint64]
+
   SuccinctRadixTrie* = object
     ## byte列の完全一致、前方一致、IDからの復元を提供します。
     internalBits*: SuccinctBitVector    ## 子を持つnodeを示すbit vector。
@@ -31,6 +37,36 @@ type
     idToTerminal*: PackedArray          ## Dictionary IDからterminal nodeへのmapping。
     internalFirstTerminal*: PackedArray ## internal部分木の先頭terminal ordinal。
     internalTerminalCount*: PackedArray ## internal部分木のterminal数。
+
+  SuccinctRadixTrieView* = object
+    ## 呼び出し側が所有する下位Viewと連続領域を束ねるread-only Trieです。
+    internalBits*: SuccinctBitVectorView
+    internalFirstChild*, internalChildCount*: PackedArrayView
+    childNodes*, highDegreeBitmapOffsets*: PackedArrayView
+    highDegreeBitmaps*: ExternalSpan[uint64]
+    parents*: BlockPackedParentsView
+    edgeFirstBytes*, edgeSuffixBytes*: ExternalSpan[byte]
+    sparseSuffixes*: bool
+    hasSuffixBits*: SuccinctBitVectorView
+    edgeSuffixOffsets*: PackedArrayView
+    terminalBits*: SuccinctBitVectorView
+    terminalIds*, idToTerminal*: PackedArrayView
+    internalFirstTerminal*, internalTerminalCount*: PackedArrayView
+
+  SuccinctRadixTrieViewParts* = object
+    ## `SuccinctRadixTrieView` を構成する既存Viewと外部領域です。
+    internalBits*: SuccinctBitVectorView
+    internalFirstChild*, internalChildCount*: PackedArrayView
+    childNodes*, highDegreeBitmapOffsets*: PackedArrayView
+    highDegreeBitmaps*: ExternalSpan[uint64]
+    parents*: BlockPackedParentsView
+    edgeFirstBytes*, edgeSuffixBytes*: ExternalSpan[byte]
+    sparseSuffixes*: bool
+    hasSuffixBits*: SuccinctBitVectorView
+    edgeSuffixOffsets*: PackedArrayView
+    terminalBits*: SuccinctBitVectorView
+    terminalIds*, idToTerminal*: PackedArrayView
+    internalFirstTerminal*, internalTerminalCount*: PackedArrayView
 
   RadixTrieStats* = object
     ## Radix Trieの構造統計を表します。
@@ -75,10 +111,44 @@ type
     node: int
     atBoundary: bool
 
+func initSuccinctRadixTrieView*(
+    parts: SuccinctRadixTrieViewParts): SuccinctRadixTrieView =
+  ## 既存の下位Viewと外部領域から非所有Trieを構築します。
+  ##
+  ## 下位Viewと各領域の有効期間は呼び出し側が管理します。
+  let nodeCount = parts.edgeFirstBytes.len
+  if nodeCount <= 0 or parts.internalBits.lenOfBits != int64(nodeCount) or
+      parts.terminalBits.lenOfBits != int64(nodeCount) or
+      not parts.internalBits.isCalced or not parts.terminalBits.isCalced:
+    raise newException(ValueError, "invalid radix-trie metadata")
+  if parts.sparseSuffixes and
+      (parts.hasSuffixBits.lenOfBits != int64(nodeCount) or
+       not parts.hasSuffixBits.isCalced):
+    raise newException(ValueError, "invalid sparse-suffix metadata")
+  result = SuccinctRadixTrieView(
+    internalBits: parts.internalBits,
+    internalFirstChild: parts.internalFirstChild,
+    internalChildCount: parts.internalChildCount,
+    childNodes: parts.childNodes,
+    highDegreeBitmapOffsets: parts.highDegreeBitmapOffsets,
+    highDegreeBitmaps: parts.highDegreeBitmaps,
+    parents: parts.parents,
+    edgeFirstBytes: parts.edgeFirstBytes,
+    edgeSuffixBytes: parts.edgeSuffixBytes,
+    sparseSuffixes: parts.sparseSuffixes,
+    hasSuffixBits: parts.hasSuffixBits,
+    edgeSuffixOffsets: parts.edgeSuffixOffsets,
+    terminalBits: parts.terminalBits,
+    terminalIds: parts.terminalIds,
+    idToTerminal: parts.idToTerminal,
+    internalFirstTerminal: parts.internalFirstTerminal,
+    internalTerminalCount: parts.internalTerminalCount)
+
 func requiredBitWidth(maximum: uint64): int {.inline.} =
   if maximum == 0: 0 else: 64 - countLeadingZeroBits(maximum)
 
-func accessUnchecked(bits: SuccinctBitVector, node: int): bool {.inline.} =
+func accessUnchecked[B: SuccinctBitVector | SuccinctBitVectorView](
+    bits: B, node: int): bool {.inline.} =
   ## 呼び出し側は `node` がbit vector範囲内であることを保証する。
   (bits.data[node shr 6] and (1'u64 shl (node and 63))) != 0
 
@@ -132,7 +202,25 @@ func parentAt*(parents: BlockPackedParents, node: int): int {.inline.} =
   delta = delta and maskForWidth(bitWidth)
   node - int(delta)
 
+func parentAt*(parents: BlockPackedParentsView, node: int): int {.inline.} =
+  ## 指定nodeの親node IDを返します。rootの親はroot自身です。
+  let blockIndex = node div ParentBlockSize
+  let bitWidth = int(parents.bitWidths[blockIndex])
+  if bitWidth == 0:
+    return node
+  let bitPosition = (node mod ParentBlockSize) * bitWidth
+  let word = int(parents.wordOffsets[blockIndex]) + (bitPosition shr 6)
+  let offset = bitPosition and 63
+  var delta = parents.data[word] shr offset
+  if offset + bitWidth > 64:
+    delta = delta or (parents.data[word + 1] shl (64 - offset))
+  node - int(delta and maskForWidth(bitWidth))
+
 func parentAt*(trie: SuccinctRadixTrie, node: int): int {.inline.} =
+  ## 指定nodeの親node IDを返します。
+  trie.parents.parentAt(node)
+
+func parentAt*(trie: SuccinctRadixTrieView, node: int): int {.inline.} =
   ## 指定nodeの親node IDを返します。
   trie.parents.parentAt(node)
 
@@ -405,18 +493,21 @@ proc genSuccinctRadixTrie*(strings: openArray[string]): SuccinctRadixTrie =
   for dictionaryId, buildNode in idToBuildNode:
     result.idToTerminal[dictionaryId] = uint64(buildToFlat[buildNode])
 
-func internalIndex(trie: SuccinctRadixTrie, node: int): int {.inline.} =
+func internalIndex[T: SuccinctRadixTrie | SuccinctRadixTrieView](
+    trie: T, node: int): int {.inline.} =
   if not trie.internalBits.accessUnchecked(node):
     return -1
   int(trie.internalBits.rank1Unchecked(int64(node)))
 
-func childCountAt*(trie: SuccinctRadixTrie, node: int): int {.inline.} =
+func childCountAt*[T: SuccinctRadixTrie | SuccinctRadixTrieView](
+    trie: T, node: int): int {.inline.} =
   ## 指定nodeの直接の子の数を返します。
   let index = trie.internalIndex(node)
   if index < 0: 0
   else: int(trie.internalChildCount.getUnchecked(index))
 
-func firstChildOffset*(trie: SuccinctRadixTrie, node: int): int {.inline.} =
+func firstChildOffset*[T: SuccinctRadixTrie | SuccinctRadixTrieView](
+    trie: T, node: int): int {.inline.} =
   ## internal nodeの `childNodes` 内の開始位置を返します。
   ##
   ## leafの場合は `-1` を返します。
@@ -424,7 +515,7 @@ func firstChildOffset*(trie: SuccinctRadixTrie, node: int): int {.inline.} =
   if index < 0: -1
   else: int(trie.internalFirstChild.getUnchecked(index))
 
-func edgeSuffixRange*(trie: SuccinctRadixTrie,
+func edgeSuffixRange*[T: SuccinctRadixTrie | SuccinctRadixTrieView](trie: T,
                       node: int): tuple[first, last: int] {.inline.} =
   ## 指定nodeへ入るedgeのsuffix範囲を返します。
   if not trie.sparseSuffixes:
@@ -436,7 +527,8 @@ func edgeSuffixRange*(trie: SuccinctRadixTrie,
   result.first = int(trie.edgeSuffixOffsets.getUnchecked(ordinal))
   result.last = int(trie.edgeSuffixOffsets.getUnchecked(ordinal + 1))
 
-func findChild(trie: SuccinctRadixTrie, node: int, firstByte: byte): int =
+func findChild[T: SuccinctRadixTrie | SuccinctRadixTrieView](
+    trie: T, node: int, firstByte: byte): int =
   let internal = trie.internalIndex(node)
   if internal < 0:
     return -1
@@ -497,7 +589,8 @@ func findChild(trie: SuccinctRadixTrie, node: int, firstByte: byte): int =
       return child
   -1
 
-func traversePattern(trie: SuccinctRadixTrie, pattern: string): TraverseResult =
+func traversePattern[T: SuccinctRadixTrie | SuccinctRadixTrieView](
+    trie: T, pattern: string): TraverseResult =
   result = TraverseResult(node: 0, atBoundary: true)
   var position = 0
   while position < pattern.len:
@@ -514,7 +607,8 @@ func traversePattern(trie: SuccinctRadixTrie, pattern: string): TraverseResult =
       inc position
     result = TraverseResult(node: child, atBoundary: true)
 
-func findExact*(trie: SuccinctRadixTrie, value: string): int64 =
+func findExact*[T: SuccinctRadixTrie | SuccinctRadixTrieView](
+    trie: T, value: string): int64 =
   ## 完全一致するDictionary IDを返し、存在しない場合は `-1` を返します。
   let traversal = trie.traversePattern(value)
   if traversal.node < 0 or not traversal.atBoundary or
@@ -523,7 +617,8 @@ func findExact*(trie: SuccinctRadixTrie, value: string): int64 =
   let ordinal = trie.terminalBits.rank1(int64(traversal.node))
   int64(trie.terminalIds.getUnchecked(int(ordinal)))
 
-proc findPrefixTrieOrderInto*(trie: SuccinctRadixTrie, prefix: string,
+proc findPrefixTrieOrderInto*[T: SuccinctRadixTrie | SuccinctRadixTrieView](
+                              trie: T, prefix: string,
                               output: var seq[uint32]) =
   ## byte単位の前方一致IDをTrieのDFS順で格納します。
   output.setLen(0)
@@ -549,7 +644,8 @@ proc initPrefixQueryWorkspace*(dictionaryCount: int): PrefixQueryWorkspace =
     raise newException(ValueError, "dictionary count must be non-negative")
   result.words = newSeq[uint64]((dictionaryCount + 63) shr 6)
 
-proc findPrefixInto*(trie: SuccinctRadixTrie, prefix: string,
+proc findPrefixInto*[T: SuccinctRadixTrie | SuccinctRadixTrieView](
+                     trie: T, prefix: string,
                      workspace: var PrefixQueryWorkspace,
                      output: var seq[uint32]) =
   ## workspaceを再利用し、前方一致IDを昇順で格納します。
@@ -577,13 +673,15 @@ proc findPrefixInto*(trie: SuccinctRadixTrie, prefix: string,
       bits = bits and (bits - 1)
     workspace.words[wordIndex] = 0
 
-proc findPrefixInto*(trie: SuccinctRadixTrie, prefix: string,
+proc findPrefixInto*[T: SuccinctRadixTrie | SuccinctRadixTrieView](
+                     trie: T, prefix: string,
                      output: var seq[uint32]) =
   ## byte単位で前方一致するDictionary IDを昇順で `output` へ格納します。
   trie.findPrefixTrieOrderInto(prefix, output)
   output.sort()
 
-proc getStringInto*(trie: SuccinctRadixTrie, id: uint32,
+proc getStringInto*[T: SuccinctRadixTrie | SuccinctRadixTrieView](
+                    trie: T, id: uint32,
                     output: var string) =
   ## Dictionary IDから文字列を復元し、既存の `output` capacityを再利用します。
   if int64(id) >= trie.idToTerminal.len:
@@ -607,23 +705,28 @@ proc getStringInto*(trie: SuccinctRadixTrie, id: uint32,
         char(trie.edgeSuffixBytes[suffix.first + offset])
     node = trie.parentAt(node)
 
-proc getString*(trie: SuccinctRadixTrie, id: uint32): string =
+proc getString*[T: SuccinctRadixTrie | SuccinctRadixTrieView](
+    trie: T, id: uint32): string =
   ## Dictionary IDから元の文字列を復元します。
   trie.getStringInto(id, result)
 
-func packedBytes(values: PackedArray): int64 {.inline.} =
-  int64(values.data.len) * int64(sizeof(uint64))
+func packedBytes[P: PackedArray | PackedArrayView](values: P): int64 {.inline.} =
+  when P is PackedArray:
+    int64(values.data.len) * int64(sizeof(uint64))
+  else:
+    int64(values.dataWords) * int64(sizeof(uint64))
 
-func succinctBytes(values: SuccinctBitVector): int64 =
+func succinctBytes[B: SuccinctBitVector | SuccinctBitVectorView](values: B): int64 =
   int64(values.data.len + values.selectStorage.len) * int64(sizeof(uint64)) +
     int64(values.blockPairPrefix.len + values.wordPairPrefix.len) *
       int64(sizeof(uint32))
 
-func parentBytes(values: BlockPackedParents): int64 =
+func parentBytes[P: BlockPackedParents | BlockPackedParentsView](values: P): int64 =
   int64(values.bitWidths.len) + int64(values.wordOffsets.len) * 4 +
     int64(values.data.len) * 8
 
-func memoryUsage*(trie: SuccinctRadixTrie): RadixTrieMemoryUsage =
+func memoryUsage*[T: SuccinctRadixTrie | SuccinctRadixTrieView](
+    trie: T): RadixTrieMemoryUsage =
   ## Radix Trieが所有する各構造の論理的な格納容量を返します。
   result.topologyBytes = parentBytes(trie.parents)
   result.edgeFirstBytes = int64(trie.edgeFirstBytes.len)

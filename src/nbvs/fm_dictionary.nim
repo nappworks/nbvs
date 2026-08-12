@@ -68,6 +68,30 @@ type
     maxEncodedStringLength*: uint32 ## 最大文字列長（UTF-8 byte数）。
     radixTrie*: SuccinctRadixTrie   ## exact、prefix、ID復元用の補助索引。
 
+  FmDictionaryView* = object
+    ## 下位Viewを束ね、external memoryを所有しないread-only Dictionaryです。
+    bwt*: WaveletMatrixView
+    runLengthBwt*: RunLengthBwtView
+    backendKind*: FmBackendKind
+    bwtRunCount*, maximumBwtRunLength*: uint32
+    estimatedWaveletBytes*, estimatedRunLengthBytes*: uint64
+    cTable*, startAnchorToEncodedId*: PackedArrayView
+    dictionaryIdToEndAnchor*: PackedArrayView
+    dictionaryCount*, maxEncodedStringLength*: uint32
+    radixTrie*: SuccinctRadixTrieView
+
+  FmDictionaryViewParts* = object
+    ## `FmDictionaryView` を構成する下位Viewとscalar metadataです。
+    bwt*: WaveletMatrixView
+    runLengthBwt*: RunLengthBwtView
+    backendKind*: FmBackendKind
+    bwtRunCount*, maximumBwtRunLength*: uint32
+    estimatedWaveletBytes*, estimatedRunLengthBytes*: uint64
+    cTable*, startAnchorToEncodedId*: PackedArrayView
+    dictionaryIdToEndAnchor*: PackedArrayView
+    dictionaryCount*, maxEncodedStringLength*: uint32
+    radixTrie*: SuccinctRadixTrieView
+
   FmQueryWorkspace* = object
     ## substring検索の集約領域をクエリ間で再利用します。
     counts: seq[uint32]
@@ -97,6 +121,33 @@ const DefaultFmDictionaryBuildOptions* =
   FmDictionaryBuildOptions(validateDistinct: true, fmBackend: fbpAuto)
   ## 後方互換な既定の構築オプションです。
 
+func initFmDictionaryView*(parts: FmDictionaryViewParts): FmDictionaryView =
+  ## 既存の下位Viewから非所有のread-only Dictionaryを構築します。
+  ##
+  ## 下位Viewとそのbacking memoryは、このViewより長く有効でなければなりません。
+  if parts.cTable.len != AlphabetSize or
+      parts.startAnchorToEncodedId.len != int64(parts.dictionaryCount) + 1 or
+      parts.dictionaryIdToEndAnchor.len != int64(parts.dictionaryCount) or
+      parts.radixTrie.idToTerminal.len != int64(parts.dictionaryCount):
+    raise newException(ValueError, "invalid FM Dictionary view metadata")
+  if parts.backendKind == fbWavelet:
+    if parts.bwt.n <= 0 or parts.bwt.bitWidth != SymbolBitWidth:
+      raise newException(ValueError, "invalid Wavelet BWT view")
+  elif parts.runLengthBwt.n <= 0:
+    raise newException(ValueError, "invalid run-length BWT view")
+  result = FmDictionaryView(
+    bwt: parts.bwt, runLengthBwt: parts.runLengthBwt,
+    backendKind: parts.backendKind, bwtRunCount: parts.bwtRunCount,
+    maximumBwtRunLength: parts.maximumBwtRunLength,
+    estimatedWaveletBytes: parts.estimatedWaveletBytes,
+    estimatedRunLengthBytes: parts.estimatedRunLengthBytes,
+    cTable: parts.cTable,
+    startAnchorToEncodedId: parts.startAnchorToEncodedId,
+    dictionaryIdToEndAnchor: parts.dictionaryIdToEndAnchor,
+    dictionaryCount: parts.dictionaryCount,
+    maxEncodedStringLength: parts.maxEncodedStringLength,
+    radixTrie: parts.radixTrie)
+
 func requiredBitWidth(maximum: uint64): int {.inline.} =
   if maximum == 0: 0 else: 64 - countLeadingZeroBits(maximum)
 
@@ -104,19 +155,19 @@ func estimateWaveletMatrixBytes(length: int64): int64 =
   int64(SymbolBitWidth) * estimateSuccinctBitVectorBytes(length) +
     int64(SymbolBitWidth * sizeof(int64))
 
-func succinctBytes(bits: SuccinctBitVector): int64
+func succinctBytes[B: SuccinctBitVector | SuccinctBitVectorView](bits: B): int64
 
-func bwtLength(dict: FmDictionary): int64 {.inline.} =
+func bwtLength[D: FmDictionary | FmDictionaryView](dict: D): int64 {.inline.} =
   if dict.backendKind == fbRunLength: dict.runLengthBwt.n else: dict.bwt.n
 
-func bwtRankPair(dict: FmDictionary, symbol: FmSymbol, left,
+func bwtRankPair[D: FmDictionary | FmDictionaryView](dict: D, symbol: FmSymbol, left,
                  right: int64): tuple[leftRank, rightRank: int64] {.inline.} =
   if dict.backendKind == fbRunLength:
     dict.runLengthBwt.rankPair(symbol, left, right)
   else:
     dict.bwt.rankPair(uint64(symbol), left, right)
 
-func bwtAccessRank(dict: FmDictionary,
+func bwtAccessRank[D: FmDictionary | FmDictionaryView](dict: D,
                    position: int64): tuple[value: uint64,
                      rankBefore: int64] {.inline.} =
   if dict.backendKind == fbRunLength:
@@ -124,7 +175,7 @@ func bwtAccessRank(dict: FmDictionary,
   else:
     dict.bwt.accessRank(position)
 
-func bwtSelect(dict: FmDictionary, symbol: FmSymbol,
+func bwtSelect[D: FmDictionary | FmDictionaryView](dict: D, symbol: FmSymbol,
                ordinal: int64): int64 {.inline.} =
   if dict.backendKind == fbRunLength:
     dict.runLengthBwt.select(symbol, ordinal)
@@ -257,11 +308,11 @@ proc genFmDictionary*(strings: openArray[string],
     result.backendKind = fbWavelet
     result.bwt = genWaveletMatrix(bwtSymbols, SymbolBitWidth)
 
-func len*(dict: FmDictionary): int {.inline.} =
+func len*[D: FmDictionary | FmDictionaryView](dict: D): int {.inline.} =
   ## Dictionaryのエントリ数を返します。
   int(dict.dictionaryCount)
 
-func stats*(dict: FmDictionary): FmDictionaryStats =
+func stats*[D: FmDictionary | FmDictionaryView](dict: D): FmDictionaryStats =
   ## 選択済みbackendとBWT run統計を返します。
   result.fmBackendKind = dict.backendKind
   result.bwtLength = dict.bwtLength
@@ -274,8 +325,8 @@ func stats*(dict: FmDictionary): FmDictionaryStats =
   result.estimatedWaveletBytes = int64(dict.estimatedWaveletBytes)
   result.estimatedRleBytes = int64(dict.estimatedRunLengthBytes)
   if dict.backendKind == fbWavelet:
-    for level in dict.bwt.levels:
-      result.actualWaveletBytes += succinctBytes(level)
+    for level in 0..<dict.bwt.bitWidth:
+      result.actualWaveletBytes += succinctBytes(dict.bwt.levels[level])
     result.actualWaveletBytes += int64(dict.bwt.zeroCounts.len * sizeof(int64))
     if result.estimatedWaveletBytes > 0:
       result.waveletEstimateErrorRatio = result.actualWaveletBytes.float /
@@ -286,31 +337,38 @@ func stats*(dict: FmDictionary): FmDictionaryStats =
       result.rleEstimateErrorRatio = result.actualRleBytes.float /
         result.estimatedRleBytes.float
 
-func succinctBytes(bits: SuccinctBitVector): int64 =
+func succinctBytes[B: SuccinctBitVector | SuccinctBitVectorView](bits: B): int64 =
   int64(bits.data.len * sizeof(uint64) +
     bits.blockPairPrefix.len * sizeof(uint32) +
     bits.wordPairPrefix.len * sizeof(uint32) +
     bits.selectStorage.len * sizeof(uint64))
 
-func memoryUsage*(dict: FmDictionary): FmDictionaryMemoryUsage =
+func packedBytes[P: PackedArray | PackedArrayView](values: P): int64 {.inline.} =
+  when P is PackedArray:
+    int64(values.data.len * sizeof(uint64))
+  else:
+    int64(values.dataWords * sizeof(uint64))
+
+func memoryUsage*[D: FmDictionary | FmDictionaryView](dict: D): FmDictionaryMemoryUsage =
   ## Trie、FM backend、anchorを含む論理的な格納容量を返します。
   result.fmBackendKind = dict.backendKind
   result.radixTrieBytes = dict.radixTrie.memoryUsage.totalBytes
-  result.cTableBytes = int64(dict.cTable.data.len * sizeof(uint64))
-  result.anchorBytes = int64((dict.startAnchorToEncodedId.data.len +
-    dict.dictionaryIdToEndAnchor.data.len) * sizeof(uint64))
+  result.cTableBytes = packedBytes(dict.cTable)
+  result.anchorBytes = packedBytes(dict.startAnchorToEncodedId) +
+    packedBytes(dict.dictionaryIdToEndAnchor)
   if dict.backendKind == fbWavelet:
-    for level in dict.bwt.levels:
-      result.bwtBytes += succinctBytes(level)
+    for level in 0..<dict.bwt.bitWidth:
+      result.bwtBytes += succinctBytes(dict.bwt.levels[level])
     result.bwtBytes += int64(dict.bwt.zeroCounts.len * sizeof(int64))
   else:
     result.runSymbolsBytes = int64(dict.runLengthBwt.runSymbols.len *
       sizeof(FmSymbol))
     result.runBoundaryBytes = succinctBytes(dict.runLengthBwt.runStarts)
     result.runPrefixBytes = int64(dict.runLengthBwt.symbolPrefixes.len *
-      sizeof(uint32) + sizeof(dict.runLengthBwt.symbolOffsets))
-    for level in dict.runLengthBwt.runSymbolIndex.levels:
-      result.bwtBytes += succinctBytes(level)
+      sizeof(uint32) + (AlphabetSize + 1) * sizeof(uint32))
+    for level in 0..<dict.runLengthBwt.runSymbolIndex.bitWidth:
+      result.bwtBytes += succinctBytes(
+        dict.runLengthBwt.runSymbolIndex.levels[level])
     result.bwtBytes += int64(dict.runLengthBwt.runSymbolIndex.zeroCounts.len *
       sizeof(int64))
   result.fmTotalBytes = result.bwtBytes + result.runSymbolsBytes +
@@ -318,21 +376,21 @@ func memoryUsage*(dict: FmDictionary): FmDictionaryMemoryUsage =
     result.anchorBytes
   result.totalBytes = result.radixTrieBytes + result.fmTotalBytes
 
-func backwardStep(dict: FmDictionary, symbol: FmSymbol,
+func backwardStep[D: FmDictionary | FmDictionaryView](dict: D, symbol: FmSymbol,
                   interval: FmInterval): FmInterval {.inline.} =
   let base = int64(dict.cTable.getUnchecked(int(symbol)))
   let ranks = dict.bwtRankPair(symbol, interval.left, interval.right)
   result.left = base + ranks.leftRank
   result.right = base + ranks.rightRank
 
-func backwardStepWavelet(dict: FmDictionary, symbol: FmSymbol,
+func backwardStepWavelet[D: FmDictionary | FmDictionaryView](dict: D, symbol: FmSymbol,
                          interval: FmInterval): FmInterval {.inline.} =
   let base = int64(dict.cTable.getUnchecked(int(symbol)))
   let ranks = dict.bwt.rankPair(uint64(symbol), interval.left, interval.right)
   result.left = base + ranks.leftRank
   result.right = base + ranks.rightRank
 
-func backwardStepRunLength(dict: FmDictionary, symbol: FmSymbol,
+func backwardStepRunLength[D: FmDictionary | FmDictionaryView](dict: D, symbol: FmSymbol,
                            interval: FmInterval): FmInterval {.inline.} =
   let base = int64(dict.cTable.getUnchecked(int(symbol)))
   let ranks = dict.runLengthBwt.rankPair(symbol, interval.left,
@@ -340,7 +398,7 @@ func backwardStepRunLength(dict: FmDictionary, symbol: FmSymbol,
   result.left = base + ranks.leftRank
   result.right = base + ranks.rightRank
 
-func backwardSearchBytesWavelet(dict: FmDictionary,
+func backwardSearchBytesWavelet[D: FmDictionary | FmDictionaryView](dict: D,
                                 pattern: string): FmInterval =
   result = FmInterval(left: 0, right: dict.bwt.n)
   for index in countdown(pattern.high, 0):
@@ -348,7 +406,7 @@ func backwardSearchBytesWavelet(dict: FmDictionary,
     if result.left >= result.right:
       return
 
-func backwardSearchBytesRunLength(dict: FmDictionary,
+func backwardSearchBytesRunLength[D: FmDictionary | FmDictionaryView](dict: D,
                                   pattern: string): FmInterval =
   result = FmInterval(left: 0, right: dict.runLengthBwt.n)
   for index in countdown(pattern.high, 0):
@@ -356,13 +414,13 @@ func backwardSearchBytesRunLength(dict: FmDictionary,
     if result.left >= result.right:
       return
 
-func backwardSearchBytes(dict: FmDictionary, pattern: string): FmInterval =
+func backwardSearchBytes[D: FmDictionary | FmDictionaryView](dict: D, pattern: string): FmInterval =
   if dict.backendKind == fbRunLength:
     dict.backwardSearchBytesRunLength(pattern)
   else:
     dict.backwardSearchBytesWavelet(pattern)
 
-func backwardSearchExact(dict: FmDictionary, value: string): FmInterval =
+func backwardSearchExact[D: FmDictionary | FmDictionaryView](dict: D, value: string): FmInterval =
   result = FmInterval(left: 0, right: dict.bwtLength)
   result = dict.backwardStep(SeparatorSymbol, result)
   for index in countdown(value.high, 0):
@@ -371,12 +429,12 @@ func backwardSearchExact(dict: FmDictionary, value: string): FmInterval =
       return
   result = dict.backwardStep(SeparatorSymbol, result)
 
-func backwardSearchPrefix(dict: FmDictionary, prefix: string): FmInterval =
+func backwardSearchPrefix[D: FmDictionary | FmDictionaryView](dict: D, prefix: string): FmInterval =
   result = dict.backwardSearchBytes(prefix)
   if result.left < result.right:
     result = dict.backwardStep(SeparatorSymbol, result)
 
-func backwardSearchSuffix(dict: FmDictionary, suffix: string): FmInterval =
+func backwardSearchSuffix[D: FmDictionary | FmDictionaryView](dict: D, suffix: string): FmInterval =
   if dict.backendKind == fbRunLength:
     result = FmInterval(left: 0, right: dict.runLengthBwt.n)
     result = dict.backwardStepRunLength(SeparatorSymbol, result)
@@ -392,28 +450,28 @@ func backwardSearchSuffix(dict: FmDictionary, suffix: string): FmInterval =
       if result.left >= result.right:
         return
 
-func lfStep(dict: FmDictionary, row: int64): LfStepResult {.inline.} =
+func lfStep[D: FmDictionary | FmDictionaryView](dict: D, row: int64): LfStepResult {.inline.} =
   let item = dict.bwtAccessRank(row)
   result.symbol = FmSymbol(item.value)
   result.nextRow = int64(dict.cTable.getUnchecked(int(item.value))) +
     item.rankBefore
 
-func lfStepWavelet(dict: FmDictionary, row: int64): LfStepResult {.inline.} =
+func lfStepWavelet[D: FmDictionary | FmDictionaryView](dict: D, row: int64): LfStepResult {.inline.} =
   let item = dict.bwt.accessRankUnchecked(row)
   result.symbol = FmSymbol(item.value)
   result.nextRow = int64(dict.cTable.getUnchecked(int(item.value))) +
     item.rankBefore
 
-func lfStepRunLength(dict: FmDictionary, row: int64): LfStepResult {.inline.} =
+func lfStepRunLength[D: FmDictionary | FmDictionaryView](dict: D, row: int64): LfStepResult {.inline.} =
   let item = dict.runLengthBwt.accessRankUnchecked(row)
   result.symbol = FmSymbol(item.value)
   result.nextRow = int64(dict.cTable.getUnchecked(int(item.value))) +
     item.rankBefore
 
-func lf(dict: FmDictionary, row: int64): int64 {.inline.} =
+func lf[D: FmDictionary | FmDictionaryView](dict: D, row: int64): int64 {.inline.} =
   dict.lfStep(row).nextRow
 
-func idFromSeparatorFRow(dict: FmDictionary, row: int64): int64 {.inline.} =
+func idFromSeparatorFRow[D: FmDictionary | FmDictionaryView](dict: D, row: int64): int64 {.inline.} =
   let separatorBase =
     int64(dict.cTable.getUnchecked(int(SeparatorSymbol)))
   let ordinal = row - separatorBase
@@ -441,15 +499,15 @@ template dictionaryIdFromMatchRowImpl(stepCall: untyped): untyped =
     if steps > dict.maxEncodedStringLength:
       raise newException(ValueError, "invalid FM Dictionary anchor chain")
 
-func dictionaryIdFromMatchRowWavelet(dict: FmDictionary,
+func dictionaryIdFromMatchRowWavelet[D: FmDictionary | FmDictionaryView](dict: D,
                                      initialRow: int64): int64 =
   dictionaryIdFromMatchRowImpl(dict.lfStepWavelet(row))
 
-func dictionaryIdFromMatchRowRunLength(dict: FmDictionary,
+func dictionaryIdFromMatchRowRunLength[D: FmDictionary | FmDictionaryView](dict: D,
                                        initialRow: int64): int64 =
   dictionaryIdFromMatchRowImpl(dict.lfStepRunLength(row))
 
-func dictionaryIdFromMatchRow(dict: FmDictionary, initialRow: int64): int64 =
+func dictionaryIdFromMatchRow[D: FmDictionary | FmDictionaryView](dict: D, initialRow: int64): int64 =
   if dict.backendKind == fbRunLength:
     dict.dictionaryIdFromMatchRowRunLength(initialRow)
   else:
@@ -483,7 +541,7 @@ when defined(nbvsFmBenchmark):
     else:
       countedMatchRowImpl(dict.lfStepWavelet(row))
 
-func findExactFm*(dict: FmDictionary, value: string): int64 =
+func findExactFm*[D: FmDictionary | FmDictionaryView](dict: D, value: string): int64 =
   ## FM-indexで完全一致するDictionary IDを返します。
   let interval = dict.backwardSearchExact(value)
   for row in interval.left..<interval.right:
@@ -492,24 +550,24 @@ func findExactFm*(dict: FmDictionary, value: string): int64 =
       return dictionaryId
   -1
 
-func findExactRadix*(dict: FmDictionary, value: string): int64 =
+func findExactRadix*[D: FmDictionary | FmDictionaryView](dict: D, value: string): int64 =
   ## Radix Trieで完全一致するDictionary IDを返します。
   dict.radixTrie.findExact(value)
 
-func findExact*(dict: FmDictionary, value: string): int64 =
+func findExact*[D: FmDictionary | FmDictionaryView](dict: D, value: string): int64 =
   ## 完全一致するDictionary IDをRadix Trieで検索します。
   dict.findExactRadix(value)
 
-func contains*(dict: FmDictionary, value: string): bool =
+func contains*[D: FmDictionary | FmDictionaryView](dict: D, value: string): bool =
   ## 完全一致する文字列が存在するかを返します。
   dict.findExact(value) >= 0
 
-proc allIds(dict: FmDictionary): seq[DictionaryId] =
+proc allIds[D: FmDictionary | FmDictionaryView](dict: D): seq[DictionaryId] =
   result = newSeq[DictionaryId](dict.len)
   for index in 0..<result.len:
     result[index] = DictionaryId(index)
 
-proc findPrefixIntoFm*(dict: FmDictionary, prefix: string,
+proc findPrefixIntoFm*[D: FmDictionary | FmDictionaryView](dict: D, prefix: string,
                        output: var seq[DictionaryId]) =
   ## FM-indexで前方一致するIDを昇順で `output` へ格納します。
   output.setLen(0)
@@ -524,47 +582,53 @@ proc findPrefixIntoFm*(dict: FmDictionary, prefix: string,
       output.add DictionaryId(dictionaryId)
   output.sort()
 
-proc findPrefixIntoRadix*(dict: FmDictionary, prefix: string,
+proc findPrefixIntoRadix*[D: FmDictionary | FmDictionaryView](dict: D, prefix: string,
                           output: var seq[DictionaryId]) =
   ## Radix Trieで前方一致するIDを昇順で `output` へ格納します。
   dict.radixTrie.findPrefixInto(prefix, output)
 
-proc initPrefixQueryWorkspace*(dict: FmDictionary): PrefixQueryWorkspace =
+proc initPrefixQueryWorkspace*[D: FmDictionary | FmDictionaryView](dict: D): PrefixQueryWorkspace =
   ## `dict`向けprefix workspaceを初期化します。
   initPrefixQueryWorkspace(dict.len)
 
-proc findPrefixIntoRadix*(dict: FmDictionary, prefix: string,
+proc findPrefixIntoRadix*[D: FmDictionary | FmDictionaryView](dict: D, prefix: string,
                           workspace: var PrefixQueryWorkspace,
                           output: var seq[DictionaryId]) =
   ## bitmap workspaceを再利用して前方一致IDを昇順で格納します。
   dict.radixTrie.findPrefixInto(prefix, workspace, output)
 
-proc findPrefixInto*(dict: FmDictionary, prefix: string,
+proc findPrefixInto*[D: FmDictionary | FmDictionaryView](dict: D, prefix: string,
                      workspace: var PrefixQueryWorkspace,
                      output: var seq[DictionaryId]) =
   ## bitmap workspaceを再利用して前方一致IDを昇順で格納します。
   dict.findPrefixIntoRadix(prefix, workspace, output)
 
-proc findPrefixInto*(dict: FmDictionary, prefix: string,
+proc findPrefixInto*[D: FmDictionary | FmDictionaryView](dict: D, prefix: string,
                      output: var seq[DictionaryId]) =
   ## 前方一致するIDを既存の `output` 容量を再利用して昇順で格納します。
   dict.findPrefixIntoRadix(prefix, output)
 
-proc findPrefix*(dict: FmDictionary, prefix: string): seq[DictionaryId] =
+proc findPrefix*[D: FmDictionary | FmDictionaryView](dict: D, prefix: string): seq[DictionaryId] =
   ## byte単位で前方一致するDictionary IDを昇順で返します。
   dict.findPrefixInto(prefix, result)
 
-proc findSuffix*(dict: FmDictionary, suffix: string): seq[DictionaryId] =
-  ## byte単位で後方一致するDictionary IDを昇順で返します。
+proc findSuffixInto*[D: FmDictionary | FmDictionaryView](dict: D,
+    suffix: string, output: var seq[DictionaryId]) =
+  ## byte単位で後方一致するDictionary IDを昇順で `output` へ格納します。
+  output.setLen(0)
   if suffix.len == 0:
-    return dict.allIds()
+    output = dict.allIds()
+    return
   let interval = dict.backwardSearchSuffix(suffix)
-  result = newSeqOfCap[DictionaryId](int(interval.right - interval.left))
   for row in interval.left..<interval.right:
     let dictionaryId = dict.dictionaryIdFromMatchRow(row)
     if dictionaryId >= 0:
-      result.add DictionaryId(dictionaryId)
-  result.sort()
+      output.add DictionaryId(dictionaryId)
+  output.sort()
+
+proc findSuffix*[D: FmDictionary | FmDictionaryView](dict: D, suffix: string): seq[DictionaryId] =
+  ## byte単位で後方一致するDictionary IDを昇順で返します。
+  dict.findSuffixInto(suffix, result)
 
 proc initFmQueryWorkspace*(dictionaryCount: int): FmQueryWorkspace =
   ## 指定件数のDictionary向けworkspaceを初期化します。
@@ -573,7 +637,7 @@ proc initFmQueryWorkspace*(dictionaryCount: int): FmQueryWorkspace =
   result.counts = newSeq[uint32](dictionaryCount)
   result.generations = newSeq[uint32](dictionaryCount)
 
-proc initFmQueryWorkspace*(dict: FmDictionary): FmQueryWorkspace =
+proc initFmQueryWorkspace*[D: FmDictionary | FmDictionaryView](dict: D): FmQueryWorkspace =
   ## `dict`向けworkspaceを初期化します。
   initFmQueryWorkspace(dict.len)
 
@@ -600,7 +664,7 @@ proc recordMatch(workspace: var FmQueryWorkspace, id: DictionaryId,
 proc orderMatches(workspace: var FmQueryWorkspace) =
   workspace.touchedIds.sort()
 
-proc collectMatches(dict: FmDictionary, pattern: string,
+proc collectMatches[D: FmDictionary | FmDictionaryView](dict: D, pattern: string,
                     workspace: var FmQueryWorkspace,
                     countOccurrences: bool) =
   workspace.beginQuery(dict.len)
@@ -611,7 +675,7 @@ proc collectMatches(dict: FmDictionary, pattern: string,
       workspace.recordMatch(DictionaryId(dictionaryId), countOccurrences)
   workspace.orderMatches()
 
-proc getStringIntoFm*(dict: FmDictionary, id: DictionaryId,
+proc getStringIntoFm*[D: FmDictionary | FmDictionaryView](dict: D, id: DictionaryId,
                       output: var string) =
   ## FM-indexのLF traversalで復元した文字列を `output` へ格納します。
   ##
@@ -641,21 +705,21 @@ proc getStringIntoFm*(dict: FmDictionary, id: DictionaryId,
   for index in 0..<output.len div 2:
     swap(output[index], output[output.high - index])
 
-proc getStringIntoRadix*(dict: FmDictionary, id: DictionaryId,
+proc getStringIntoRadix*[D: FmDictionary | FmDictionaryView](dict: D, id: DictionaryId,
                          output: var string) =
   ## Radix Trieで復元した文字列を `output` へ格納します。
   dict.radixTrie.getStringInto(id, output)
 
-proc getStringInto*(dict: FmDictionary, id: DictionaryId,
+proc getStringInto*[D: FmDictionary | FmDictionaryView](dict: D, id: DictionaryId,
                     output: var string) =
   ## Dictionary IDから復元した文字列を `output` へ格納します。
   dict.getStringIntoRadix(id, output)
 
-proc getString*(dict: FmDictionary, id: DictionaryId): string =
+proc getString*[D: FmDictionary | FmDictionaryView](dict: D, id: DictionaryId): string =
   ## Dictionary IDから元の文字列を復元します。
   dict.getStringInto(id, result)
 
-proc findSubstringInto*(dict: FmDictionary, pattern: string,
+proc findSubstringInto*[D: FmDictionary | FmDictionaryView](dict: D, pattern: string,
                         workspace: var FmQueryWorkspace,
                         output: var seq[DictionaryId]) =
   ## workspaceと`output`を再利用して部分一致するIDを昇順で格納します。
@@ -668,18 +732,18 @@ proc findSubstringInto*(dict: FmDictionary, pattern: string,
   for dictionaryId in workspace.touchedIds:
     output.add dictionaryId
 
-proc findSubstring*(dict: FmDictionary, pattern: string,
+proc findSubstring*[D: FmDictionary | FmDictionaryView](dict: D, pattern: string,
                     workspace: var FmQueryWorkspace): seq[DictionaryId] =
   ## workspaceを再利用して部分一致するIDを重複なしの昇順で返します。
   dict.findSubstringInto(pattern, workspace, result)
 
-proc findSubstring*(dict: FmDictionary,
+proc findSubstring*[D: FmDictionary | FmDictionaryView](dict: D,
                     pattern: string): seq[DictionaryId] =
   ## byte単位で部分一致するDictionary IDを重複なしの昇順で返します。
   var workspace = initFmQueryWorkspace(dict)
   result = dict.findSubstring(pattern, workspace)
 
-proc findSubstringOccurrences*(dict: FmDictionary, pattern: string,
+proc findSubstringOccurrences*[D: FmDictionary | FmDictionaryView](dict: D, pattern: string,
     workspace: var FmQueryWorkspace): seq[tuple[
       id: DictionaryId, occurrences: uint32]] =
   ## workspaceを再利用し、IDごとの部分一致回数を昇順で返します。
@@ -697,14 +761,14 @@ proc findSubstringOccurrences*(dict: FmDictionary, pattern: string,
     result.add (id: dictionaryId,
       occurrences: workspace.counts[int(dictionaryId)])
 
-proc findSubstringOccurrences*(dict: FmDictionary,
+proc findSubstringOccurrences*[D: FmDictionary | FmDictionaryView](dict: D,
                                pattern: string): seq[tuple[
                                  id: DictionaryId, occurrences: uint32]] =
   ## byte単位の部分一致について、IDごとの出現回数を昇順で返します。
   var workspace = initFmQueryWorkspace(dict)
   result = dict.findSubstringOccurrences(pattern, workspace)
 
-iterator items*(dict: FmDictionary): string =
+iterator items*[D: FmDictionary | FmDictionaryView](dict: D): string =
   ## 文字列をDictionary ID順に復元して列挙します。
   for dictionaryId in 0..<dict.len:
     yield dict.getString(DictionaryId(dictionaryId))

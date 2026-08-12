@@ -128,6 +128,10 @@ Important API:
 ### PackedArray
 
 `PackedArray` stores unsigned integers using a fixed bit width from `0` to `64`.
+`PackedArrayView` provides the same value operations over caller-owned contiguous
+memory, including memory obtained with `std/memfiles`. The view does not own or
+release the memory; the caller must keep it alive and mapped while the view is in
+use. The memory must be aligned for `uint64` access.
 
 ```nim
 import nbvs/packed_array
@@ -142,11 +146,30 @@ doAssert a.maxValue == 8191
 doAssert a.toSeq == @[7'u64, 7, 7, 7, 7]
 ```
 
+```nim
+import std/memfiles
+import nbvs/packed_array
+
+var mappedFile = memfiles.open("values.bin", mode = fmReadWrite,
+  newFileSize = 1024)
+try:
+  var view = initPackedArrayView(mappedFile.mem, mappedFile.size,
+    len = 100, bitWidth = 13)
+  view[10] = 123
+  doAssert view.get(10) == 123
+finally:
+  mappedFile.close()
+```
+
+The file size and layout are application concerns. `PackedArrayView` adds no
+header, page size, or one-array-per-file convention.
+
 Important API:
 
 | API | Description |
 | --- | --- |
 | `genPackedArray(len, bitWidth)` | Creates a packed array. |
+| `initPackedArrayView(memory, memorySize, len, bitWidth)` | Creates a non-owning view over external memory. |
 | `maskForWidth(bitWidth)` | Returns the low-bit mask for a bit width. |
 | `maxValue()` | Returns the largest representable value. |
 | `get(i)` / `a[i]` | Reads a value. |
@@ -317,6 +340,17 @@ doAssert dict.findSubstring("ana") == @[2'u32, 3'u32]
 doAssert dict.getString(3) == "hana"
 ```
 
+`FmDictionaryView` exposes the same read-only query API over caller-owned
+external memory. It is assembled from `WaveletMatrixView` or
+`RunLengthBwtView`, three `PackedArrayView` values, and a
+`SuccinctRadixTrieView`; it does not own a `MemFile`, define a file format, or
+manage mapping lifetime. Construct those lower-level views from offsets and
+sizes maintained by the application, then pass them in
+`FmDictionaryViewParts` to `initFmDictionaryView`. All referenced memory and
+view descriptor arrays must remain valid while the dictionary view is used.
+`FmQueryWorkspace` and `PrefixQueryWorkspace` remain heap-owned scratch space
+and can be initialized for either dictionary type.
+
 For repeated substring queries, reuse an `FmQueryWorkspace`. The `Into` APIs
 also reuse caller-owned output capacity.
 
@@ -409,6 +443,28 @@ MSB-first `WaveletMatrix`.
 For RWM, `rankLessThan(value, pos)` traverses occupied LSB-first subtrees and
 prunes subtrees whose value bounds are already decided. Unlike the WM version,
 its cost depends on the value distribution rather than being `O(bitWidth)`.
+
+### External-memory views
+
+`BitVectorView`, `SuccinctBitVectorView`, `EliasFanoView`,
+`WaveletMatrixView`, and `ReversedWaveletMatrixView` provide the corresponding
+public operations without owning their backing memory. They can reference mmap
+regions, shared-memory segments, or application-managed buffers. The caller
+must keep every buffer and the Wavelet level-descriptor array alive and at a
+stable address while a view is in use.
+
+`requiredSuccinctBitVectorViewBytes(bitLength)` returns the required contiguous
+payload size. `initSuccinctBitVectorView(..., built = false)` creates a mutable
+view that can be populated and passed to `build()`. On reopening a persisted
+payload, pass `built = true`; totals are reconstructed from raw words while the
+persisted rank/select auxiliaries are reused. Composite initializers accept
+already initialized lower-level views, so nbvs does not impose a database
+header, page size, or whole-file layout.
+
+All pointer initializers validate capacity, nil pointers, alignment, and
+structural metadata. A view never closes an mmap or frees a supplied buffer.
+Using a view after its backing memory or descriptor array has been released or
+moved is invalid.
 
 ### Benchmarks
 
@@ -577,6 +633,10 @@ doAssert $bv == "1000000000000001"
 ### PackedArray
 
 `PackedArray` は、各値を `0 .. 64` bit の固定長で詰めて保持します。
+`PackedArrayView` は、`std/memfiles` で取得した領域を含む、呼び出し側所有の
+連続メモリに対して同じ値操作を提供します。Viewはメモリを所有・解放しないため、
+利用中は呼び出し側が領域の有効性とmap状態を維持する必要があります。メモリは
+`uint64` accessに必要なalignmentを満たす必要があります。
 
 ```nim
 import nbvs/packed_array
@@ -591,11 +651,30 @@ doAssert a.maxValue == 8191
 doAssert a.toSeq == @[7'u64, 7, 7, 7, 7]
 ```
 
+```nim
+import std/memfiles
+import nbvs/packed_array
+
+var mappedFile = memfiles.open("values.bin", mode = fmReadWrite,
+  newFileSize = 1024)
+try:
+  var view = initPackedArrayView(mappedFile.mem, mappedFile.size,
+    len = 100, bitWidth = 13)
+  view[10] = 123
+  doAssert view.get(10) == 123
+finally:
+  mappedFile.close()
+```
+
+ファイルサイズとlayoutはアプリケーション側の責務です。`PackedArrayView` はheader、
+page size、1配列1ファイルといった規約を追加しません。
+
 主な API です。
 
 | API | 説明 |
 | --- | --- |
 | `genPackedArray(len, bitWidth)` | packed array を作成します。 |
+| `initPackedArrayView(memory, memorySize, len, bitWidth)` | 外部メモリを参照する非所有Viewを作成します。 |
 | `maskForWidth(bitWidth)` | 指定 bit 幅の low-bit mask を返します。 |
 | `maxValue()` | 表現可能な最大値を返します。 |
 | `get(i)` / `a[i]` | 値を読みます。 |
@@ -766,6 +845,15 @@ doAssert dict.findSubstring("ana") == @[2'u32, 3'u32]
 doAssert dict.getString(3) == "hana"
 ```
 
+`FmDictionaryView`は、呼び出し側が所有するexternal memoryに対して同じread-only
+query APIを提供します。`WaveletMatrixView`または`RunLengthBwtView`、3つの
+`PackedArrayView`、`SuccinctRadixTrieView`を合成する型であり、`MemFile`を所有せず、
+file formatやmappingの寿命も管理しません。アプリケーションが管理するoffsetとsizeから
+各下位Viewを構築し、`FmDictionaryViewParts`として`initFmDictionaryView`へ渡します。
+参照するmemoryとView descriptor配列は、Dictionary Viewの使用中ずっと有効に保つ必要が
+あります。`FmQueryWorkspace`と`PrefixQueryWorkspace`は引き続きHeap上のscratch領域で、
+Heap版とView版のどちらからも初期化できます。
+
 substring検索を繰り返す場合は`FmQueryWorkspace`を再利用できます。`Into` APIでは、
 呼び出し側が所有する出力bufferのcapacityも再利用します。
 
@@ -854,6 +942,25 @@ LSB-firstの探索結果を値でsortします。
 RWMの `rankLessThan(value, pos)` は、LSB-firstの出現subtreeを走査し、
 値の上下限から結果が確定したsubtreeを枝刈りします。WM版の
 `O(bitWidth)` とは異なり、計算量は値の分布に依存します。
+
+### 外部メモリView
+
+`BitVectorView`、`SuccinctBitVectorView`、`EliasFanoView`、
+`WaveletMatrixView`、`ReversedWaveletMatrixView` は、backing memoryを
+所有せずに対応する公開操作を提供します。mmap領域、共有memory segment、
+アプリケーション管理bufferを参照できます。Viewの使用中は、すべてのbufferと
+Wavelet level descriptor配列を呼び出し側が有効かつ同じaddressに保つ必要があります。
+
+`requiredSuccinctBitVectorViewBytes(bitLength)` は連続payloadに必要な容量を
+返します。`initSuccinctBitVectorView(..., built = false)` で可変Viewを作り、
+bit設定後に `build()` を呼べます。永続化済みpayloadを再openする場合は
+`built = true` を指定します。raw wordから総数を再構成し、永続化された
+rank/select補助領域を再利用します。合成型の初期化関数は初期化済みの下位Viewを
+受け取るため、nbvsはdatabase header、page size、ファイル全体のlayoutを規定しません。
+
+pointer初期化関数は容量、nil、alignment、構造metadataを検証します。Viewがmmapを
+closeしたりbufferを解放したりすることはありません。backing memoryまたはdescriptor
+配列の解放・移動後にViewを使用してはいけません。
 
 ### ベンチマーク
 
