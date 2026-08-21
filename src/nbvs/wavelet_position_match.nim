@@ -1,9 +1,15 @@
-## Early-exit equality predicates for wavelet-matrix positions.
+## Early-exit position predicates for wavelet matrices.
 ##
 ## `matchesAt` tests whether the value stored at a physical position equals the
 ## requested value without reconstructing the full value first. Traversal stops
-## at the first mismatching bit. Both owning and non-owning View types are
-## supported for WaveletMatrix (MSB-first) and ReversedWaveletMatrix (LSB-first).
+## at the first mismatching bit. It is available for both the MSB-first
+## WaveletMatrix and the LSB-first ReversedWaveletMatrix.
+##
+## `valueInRangeAt` is intentionally provided only for the MSB-first
+## WaveletMatrix. Because each visited prefix represents one contiguous numeric
+## interval, the traversal can reject or accept a position before reconstructing
+## the full value. The LSB-first ReversedWaveletMatrix does not have the same
+## contiguous-prefix property and therefore does not expose this API.
 
 import wavelet_matrix
 import reversed_wavelet_matrix
@@ -15,6 +21,14 @@ func bitAtUnchecked[B: SuccinctBitVector | SuccinctBitVectorView](
 
 func valueFits(bitWidth: int, value: uint64): bool {.inline.} =
   bitWidth == 64 or (bitWidth > 0 and (value shr bitWidth) == 0)
+
+func lowBitsMask(bitCount: int): uint64 {.inline.} =
+  if bitCount <= 0:
+    0'u64
+  elif bitCount >= 64:
+    uint64.high
+  else:
+    (1'u64 shl bitCount) - 1'u64
 
 func matchesAtUnchecked*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, position: int64, value: uint64): bool =
@@ -49,6 +63,57 @@ func matchesAt*[W: WaveletMatrix | WaveletMatrixView](
   if position < 0 or position >= wm.n:
     raise newException(IndexDefect, "index out of bounds")
   wm.matchesAtUnchecked(position, value)
+
+func valueInRangeAtUnchecked*[W: WaveletMatrix | WaveletMatrixView](
+    wm: W, position: int64, low, high: uint64): bool =
+  ## Tests whether the value at `position` is in the inclusive range
+  ## `[low, high]` without bounds checks.
+  ##
+  ## The caller must guarantee `0 <= position < wm.n`. Since WaveletMatrix is
+  ## MSB-first, every visited prefix describes one contiguous interval. If that
+  ## interval becomes disjoint from `[low, high]`, the function returns false;
+  ## if the interval is fully contained by `[low, high]`, it returns true. Rank
+  ## is evaluated only when traversal to the next level is still necessary.
+  if low > high:
+    return false
+
+  let domainHigh = lowBitsMask(wm.bitWidth)
+  if low == 0 and high >= domainHigh:
+    return true
+
+  var pos = position
+  var prefix = 0'u64
+  for level in 0..<wm.bitWidth:
+    let shift = wm.bitWidth - level - 1
+    let actualOne = wm.levels[level].bitAtUnchecked(pos)
+    if actualOne:
+      prefix = prefix or (1'u64 shl shift)
+
+    let possibleLow = prefix
+    let possibleHigh = prefix or lowBitsMask(shift)
+    if possibleHigh < low or possibleLow > high:
+      return false
+    if low <= possibleLow and possibleHigh <= high:
+      return true
+
+    let ones = wm.levels[level].rank1Unchecked(pos)
+    if actualOne:
+      pos = wm.zeroCounts[level] + ones
+    else:
+      pos -= ones
+
+  true
+
+func valueInRangeAt*[W: WaveletMatrix | WaveletMatrixView](
+    wm: W, position: int64, low, high: uint64): bool =
+  ## Returns true iff the value at `position` is in the inclusive range
+  ## `[low, high]`.
+  ##
+  ## This API is specific to the MSB-first WaveletMatrix because its prefixes
+  ## map to contiguous numeric intervals and can therefore be pruned early.
+  if position < 0 or position >= wm.n:
+    raise newException(IndexDefect, "index out of bounds")
+  wm.valueInRangeAtUnchecked(position, low, high)
 
 func matchesAtUnchecked*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](
     rwm: W, position: int64, value: uint64): bool =
