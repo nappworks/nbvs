@@ -1,4 +1,4 @@
-## Early-exit position predicates for wavelet matrices.
+## Wavelet Matrix向けの早期終了付きposition predicateです。
 ##
 ## `matchesAt` tests whether the value stored at a physical position equals the
 ## requested value without reconstructing the full value first. Traversal stops
@@ -32,7 +32,7 @@ func lowBitsMask(bitCount: int): uint64 {.inline.} =
 
 func matchesAtUnchecked*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, position: int64, value: uint64): bool =
-  ## Tests equality at `position` without bounds checks.
+  ## 位置検証を省略し、`position` にある値との等値を判定します。
   ##
   ## The caller must guarantee `0 <= position < wm.n`. Unlike `access`, this
   ## exits as soon as a level bit differs from the requested value.
@@ -56,7 +56,7 @@ func matchesAtUnchecked*[W: WaveletMatrix | WaveletMatrixView](
 
 func matchesAt*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, position: int64, value: uint64): bool =
-  ## Returns true iff the value at `position` equals `value`.
+  ## `position` にある値が `value` と等しい場合にtrueを返します。
   ##
   ## Positions are 0-based. The traversal stops at the first mismatching bit,
   ## avoiding full-value reconstruction for most negative probes.
@@ -66,8 +66,8 @@ func matchesAt*[W: WaveletMatrix | WaveletMatrixView](
 
 func valueInRangeAtUnchecked*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, position: int64, low, high: uint64): bool =
-  ## Tests whether the value at `position` is in the inclusive range
-  ## `[low, high]` without bounds checks.
+  ## 位置検証を省略し、`position` の値がinclusive range `[low, high]` に
+  ## 含まれるかを判定します。
   ##
   ## The caller must guarantee `0 <= position < wm.n`. Since WaveletMatrix is
   ## MSB-first, every visited prefix describes one contiguous interval. If that
@@ -106,8 +106,8 @@ func valueInRangeAtUnchecked*[W: WaveletMatrix | WaveletMatrixView](
 
 func valueInRangeAt*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, position: int64, low, high: uint64): bool =
-  ## Returns true iff the value at `position` is in the inclusive range
-  ## `[low, high]`.
+  ## `position` の値がinclusive range `[low, high]` に含まれる場合に
+  ## trueを返します。
   ##
   ## This API is specific to the MSB-first WaveletMatrix because its prefixes
   ## map to contiguous numeric intervals and can therefore be pruned early.
@@ -117,7 +117,7 @@ func valueInRangeAt*[W: WaveletMatrix | WaveletMatrixView](
 
 func matchesAtUnchecked*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](
     rwm: W, position: int64, value: uint64): bool =
-  ## Tests equality at `position` without bounds checks for an LSB-first matrix.
+  ## LSB-first matrixで位置検証を省略して等値を判定します。
   ##
   ## The caller must guarantee `0 <= position < rwm.n`. Traversal stops at the
   ## first mismatching level.
@@ -140,7 +140,7 @@ func matchesAtUnchecked*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](
 
 func matchesAt*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](
     rwm: W, position: int64, value: uint64): bool =
-  ## Returns true iff the value at `position` equals `value`.
+  ## `position` にある値が `value` と等しい場合にtrueを返します。
   ##
   ## Positions are 0-based. For RWM the low-order bits are compared first, so
   ## negative probes whose low bits differ can return especially early.

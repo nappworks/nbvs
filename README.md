@@ -277,12 +277,16 @@ doAssert wm.select(1, 1) == 6
 doAssert wm.selectNth(1, 2) == 6
 doAssert wm.quantile(1, 6, 2) == 5
 doAssert wm.rangeFreq(0, 7, 2, 8) == 4
+doAssert wm.matchesAt(3, 5)
+doAssert wm.valueInRangeAt(4, 2, 8) # inclusive value range
 ```
 
 | API | Description |
 | --- | --- |
 | `genWaveletMatrix(xs)` | Builds an immutable index over `xs`. |
 | `wm[i]` / `access(i)` | Returns the original value at index `i`. |
+| `matchesAt(position, value)` | Tests equality and stops at the first mismatching bit. |
+| `valueInRangeAt(position, low, high)` | Tests the inclusive range `[low, high]` with prefix pruning. |
 | `rank(value, pos)` | Counts `value` in `[0, pos)`. |
 | `rank(value, left, right)` | Counts `value` in `[left, right)`. |
 | `rankIncl(value, pos)` | Counts `value` in `[0, pos]`. |
@@ -306,6 +310,8 @@ doAssert wm.rangeFreq(0, 7, 2, 8) == 4
 The four enumeration APIs also have whole-sequence overloads without
 `left, right`. All ranges are half-open. The `collect` variants do not guarantee
 an order, while the variants without `collect` guarantee ascending value order.
+`matchesAtUnchecked` and `valueInRangeAtUnchecked` omit position validation and
+require `0 <= position < n`. The same APIs are available on `WaveletMatrixView`.
 
 ```nim
 let values = genWaveletMatrix(@[1'u64, 3, 4, 1])
@@ -423,6 +429,7 @@ doAssert rwm.rankLessThan(5, 6) == 3
 doAssert rwm.occPosition(5, 4) == 5
 doAssert rwm.select(5, 1) == 3
 doAssert rwm.selectNth(5, 2) == 3
+doAssert rwm.matchesAt(3, 5)
 doAssert rwm.valueCounts == @[
   (value: 1'u64, frequency: 2'i64),
   (value: 2'u64, frequency: 1'i64),
@@ -439,6 +446,10 @@ complete sequence plus occurrences of `value` in `[0, pos)`. This is
 `C[value] + Occ(value, pos)` in FM-index terminology.
 Numeric-order queries such as `quantile` and `rangeFreq` remain APIs of the
 MSB-first `WaveletMatrix`.
+`matchesAt` and `matchesAtUnchecked` are also available for RWM and its View;
+the unchecked form requires `0 <= position < n`. RWM intentionally has no
+range-position predicate because an LSB-first prefix is not a contiguous
+numeric interval.
 
 For RWM, `rankLessThan(value, pos)` traverses occupied LSB-first subtrees and
 prunes subtrees whose value bounds are already decided. Unlike the WM version,
@@ -782,12 +793,16 @@ doAssert wm.select(1, 1) == 6
 doAssert wm.selectNth(1, 2) == 6
 doAssert wm.quantile(1, 6, 2) == 5
 doAssert wm.rangeFreq(0, 7, 2, 8) == 4
+doAssert wm.matchesAt(3, 5)
+doAssert wm.valueInRangeAt(4, 2, 8) # 値のinclusive range
 ```
 
 | API | 説明 |
 | --- | --- |
 | `genWaveletMatrix(xs)` | `xs` の不変 index を構築します。 |
 | `wm[i]` / `access(i)` | 元の列の index `i` の値を返します。 |
+| `matchesAt(position, value)` | 最初の不一致bitで終了して等値を判定します。 |
+| `valueInRangeAt(position, low, high)` | prefixを枝刈りしてinclusive range `[low, high]` を判定します。 |
 | `rank(value, pos)` | `[0, pos)` にある `value` の個数。 |
 | `rank(value, left, right)` | `[left, right)` にある `value` の個数。 |
 | `rankIncl(value, pos)` | `[0, pos]` にある `value` の個数。 |
@@ -811,6 +826,9 @@ doAssert wm.rangeFreq(0, 7, 2, 8) == 4
 4種類の列挙APIには、`left, right` を省略して列全体を対象にするoverloadも
 あります。すべての範囲は半開区間です。`collect` 系は順序を保証せず、
 非 `collect` 系は値の昇順を保証します。
+`matchesAtUnchecked` と `valueInRangeAtUnchecked` は位置検証を省くため、
+`0 <= position < n` を呼び出し側が保証します。同じAPIを
+`WaveletMatrixView`でも利用できます。
 
 ```nim
 let values = genWaveletMatrix(@[1'u64, 3, 4, 1])
@@ -923,6 +941,7 @@ doAssert rwm.rankLessThan(5, 6) == 3
 doAssert rwm.occPosition(5, 4) == 5
 doAssert rwm.select(5, 1) == 3
 doAssert rwm.selectNth(5, 2) == 3
+doAssert rwm.matchesAt(3, 5)
 doAssert rwm.valueCounts == @[
   (value: 1'u64, frequency: 2'i64),
   (value: 2'u64, frequency: 1'i64),
@@ -938,6 +957,10 @@ LSB-firstの探索結果を値でsortします。
 `value` の出現数の和を返します。FM-indexの `C[value] + Occ(value, pos)` に相当します。
 数値順に依存する `quantile` と `rangeFreq` は MSB-first の
 `WaveletMatrix` で利用できます。
+RWMとそのViewでも `matchesAt` / `matchesAtUnchecked` を利用できます。
+unchecked版では `0 <= position < n` を呼び出し側が保証します。LSB-firstの
+prefixは連続した数値区間にならないため、RWMにはrange position predicateを
+提供しません。
 
 RWMの `rankLessThan(value, pos)` は、LSB-firstの出現subtreeを走査し、
 値の上下限から結果が確定したsubtreeを枝刈りします。WM版の
