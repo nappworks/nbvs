@@ -8,6 +8,7 @@ import ./tsuccinct_bit_vector
 import ./telias_fano
 import ./twavelet_matrix
 import ./treversed_wavelet_matrix
+import ./twavelet_position_match
 import ./trun_length_bwt
 import ./test_fm_dictionary
 import ./test_fm_dictionary_view
