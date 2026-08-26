@@ -1,18 +1,18 @@
-## Wavelet Matrix same-value select cursor.
+## Wavelet Matrixで同じ値を繰り返しselectするためのcursorです。
 ##
-## Repeated `WaveletMatrix.select(value, k)` recomputes the value interval from
-## the root for every occurrence.  This module separates that fixed forward
-## traversal from the per-occurrence reverse select path.
+## `WaveletMatrix.select(value, k)`を繰り返すと、出現位置ごとに値区間をrootから
+## 再計算します。このmoduleは固定のforward traversalと、出現位置ごとのreverse
+## select pathを分離します。
 ##
-## The cursor is intentionally small and owning-free.  It can be reused with
-## `WaveletMatrix` and `WaveletMatrixView` as long as the matrix remains valid.
+## Cursorは小さな非所有型です。初期化に使用したmatrixが有効な間、
+## `WaveletMatrix`と`WaveletMatrixView`の双方で利用できます。
 
 import wavelet_matrix
 import succinct_bit_vector
 
 type
   WaveletSelectCursor* = object
-    ## Prepared occurrence interval for one value.
+    ## 1つの値について準備済みの出現区間を表します。
     value*: uint64
     intervalStart*: int64
     count*: int64
@@ -24,10 +24,10 @@ func valueFits(bitWidth: int, value: uint64): bool {.inline.} =
 
 func initWaveletSelectCursor*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, value: uint64): WaveletSelectCursor =
-  ## Prepares the final Wavelet interval for `value` once.
+  ## `value`の最終Wavelet区間を1回だけ準備します。
   ##
-  ## When the value is outside the matrix domain, or the matrix is empty,
-  ## `count == 0` and the cursor remains valid for iteration.
+  ## 値がmatrixのdomain外にある場合、またはmatrixが空の場合は`count == 0`と
+  ## なり、空のcursorとして反復できます。
   result.value = value
   result.valid = true
   if wm.n == 0 or not valueFits(wm.bitWidth, value):
@@ -49,10 +49,10 @@ func initWaveletSelectCursor*[W: WaveletMatrix | WaveletMatrixView](
 
 func selectPrepared*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, cursor: WaveletSelectCursor, occurrence: int64): int64 =
-  ## Selects one 0-based occurrence using a previously prepared value interval.
+  ## 準備済みの値区間を使用し、0-basedの出現位置を1つ選択します。
   ##
-  ## Returns `-1` when `occurrence` is outside the prepared interval.  The
-  ## cursor must have been prepared for the same matrix/value pair.
+  ## `occurrence`が準備済み区間外の場合は`-1`を返します。Cursorは呼び出し対象と
+  ## 同じmatrixと値の組み合わせで準備されている必要があります。
   if not cursor.valid or occurrence < 0 or occurrence >= cursor.count:
     return -1
 
@@ -67,12 +67,12 @@ func selectPrepared*[W: WaveletMatrix | WaveletMatrixView](
 
 proc nextSelect*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, cursor: var WaveletSelectCursor): int64 =
-  ## Returns the next occurrence position, or `-1` when exhausted.
+  ## 次の出現位置を返し、cursorを消費し終えた場合は`-1`を返します。
   if not cursor.valid or cursor.nextOccurrence >= cursor.count:
     return -1
   result = wm.selectPrepared(cursor, cursor.nextOccurrence)
   inc cursor.nextOccurrence
 
 func remaining*(cursor: WaveletSelectCursor): int64 {.inline.} =
-  ## Number of occurrences not yet consumed by `nextSelect`.
+  ## `nextSelect`がまだ消費していない出現数を返します。
   max(0'i64, cursor.count - cursor.nextOccurrence)

@@ -1,4 +1,4 @@
-import std/[algorithm, monotimes, os, parseutils, strformat]
+import std/[algorithm, monotimes, os, parseutils, strformat, times]
 import nbvs
 
 type Sample = object
@@ -38,7 +38,9 @@ proc measure(wm: WaveletMatrix, value: uint64, repeats: int): Sample =
 proc main() =
   let rows = max(10_000, envInt("NBVS_SELECT_CURSOR_ROWS", 1_000_000))
   let repeats = max(5, envInt("NBVS_SELECT_CURSOR_REPEATS", 21))
-  echo "rows,cardinality,occurrences,regular_p50_ns,cursor_p50_ns,speedup"
+  echo "rows,cardinality,occurrences,repeats,normal_select_p50_ns," &
+    "cursor_select_p50_ns,speedup,normal_ns_per_occurrence," &
+    "cursor_ns_per_occurrence"
   for cardinality in [4, 100, 1000, 10_000]:
     var values = newSeq[uint64](rows)
     for index in 0..<rows:
@@ -49,7 +51,11 @@ proc main() =
     let sample = measure(wm, target, repeats)
     let speedup = if sample.cursorNs == 0: 0.0 else:
       float(sample.regularNs) / float(sample.cursorNs)
-    echo &"{rows},{cardinality},{occurrences},{sample.regularNs},{sample.cursorNs},{speedup:.3f}"
+    let regularPerOccurrence = float(sample.regularNs) / float(occurrences)
+    let cursorPerOccurrence = float(sample.cursorNs) / float(occurrences)
+    echo &"{rows},{cardinality},{occurrences},{repeats},{sample.regularNs}," &
+      &"{sample.cursorNs},{speedup:.3f},{regularPerOccurrence:.3f}," &
+      &"{cursorPerOccurrence:.3f}"
 
 when isMainModule:
   main()

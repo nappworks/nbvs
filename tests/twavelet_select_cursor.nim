@@ -1,5 +1,25 @@
 import nbvs
 
+proc initWaveletView(wm: WaveletMatrix,
+    levelStorage: var seq[seq[uint64]],
+    levelViews: var seq[SuccinctBitVectorView],
+    zeroCounts: var seq[int64]): WaveletMatrixView =
+  levelStorage = newSeq[seq[uint64]](wm.bitWidth)
+  levelViews = newSeq[SuccinctBitVectorView](wm.bitWidth)
+  for level in 0..<wm.bitWidth:
+    let requiredBytes = requiredSuccinctBitVectorViewBytes(wm.n)
+    levelStorage[level] = newSeq[uint64]((requiredBytes + 7) div 8)
+    levelViews[level] = initSuccinctBitVectorView(
+      addr levelStorage[level][0], requiredBytes, wm.n)
+    for position in 0'i64..<wm.n:
+      if wm.levels[level][position]:
+        levelViews[level][position] = true
+    levelViews[level].build()
+  zeroCounts = wm.zeroCounts
+  initWaveletMatrixView(wm.n, wm.bitWidth,
+    cast[ptr UncheckedArray[SuccinctBitVectorView]](addr levelViews[0]),
+    levelViews.len, addr zeroCounts[0], zeroCounts.len * sizeof(int64))
+
 let values = @[3'u64, 1, 3, 2, 3, 1, 7, 3, 2, 3]
 let wm = genWaveletMatrix(values)
 
@@ -38,3 +58,18 @@ block outOfDomainValueIsEmpty:
   var cursor = narrow.initWaveletSelectCursor(4)
   doAssert cursor.count == 0
   doAssert narrow.nextSelect(cursor) == -1
+
+block viewCursorMatchesRegularSelect:
+  var levelStorage: seq[seq[uint64]]
+  var levelViews: seq[SuccinctBitVectorView]
+  var zeroCounts: seq[int64]
+  let view = wm.initWaveletView(levelStorage, levelViews, zeroCounts)
+  for value in [0'u64, 1, 2, 3, 6, 7, 8]:
+    var cursor = view.initWaveletSelectCursor(value)
+    var occurrence = 0'i64
+    while cursor.remaining > 0:
+      let position = view.nextSelect(cursor)
+      doAssert position == view.select(value, occurrence)
+      inc occurrence
+    doAssert occurrence == view.rank(value, 0, view.n)
+    doAssert view.nextSelect(cursor) == -1

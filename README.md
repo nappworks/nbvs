@@ -90,6 +90,7 @@ import nbvs/packed_array
 import nbvs/succinct_bit_vector
 import nbvs/elias_fano
 import nbvs/wavelet_matrix
+import nbvs/wavelet_select_cursor
 import nbvs/reversed_wavelet_matrix
 import nbvs/fm_dictionary
 ```
@@ -294,6 +295,8 @@ doAssert wm.valueInRangeAt(4, 2, 8) # inclusive value range
 | `occPosition(value, pos)` | Returns all values `< value` in the complete sequence plus occurrences of `value` in `[0, pos)`; equivalent to `C[value] + Occ(value, pos)` in an FM-index. |
 | `select(value, k)` | Position of the 0-based `k`-th occurrence, or `-1`. |
 | `selectNth(value, nth)` | Position of the 1-based `nth` occurrence, or `-1`. |
+| `initWaveletSelectCursor(value)` | Prepares the value interval for repeated `select` queries. |
+| `nextSelect(cursor)` | Returns the next occurrence from a prepared cursor, or `-1` when exhausted. |
 | `quantile(left, right, k)` | 0-based `k`-th smallest value in the position range. |
 | `countLessThan(left, right, value)` | Counts values `< value`. |
 | `rangeFreq(left, right, lower, upper)` | Counts values in `[lower, upper)`. |
@@ -312,6 +315,17 @@ The four enumeration APIs also have whole-sequence overloads without
 an order, while the variants without `collect` guarantee ascending value order.
 `matchesAtUnchecked` and `valueInRangeAtUnchecked` omit position validation and
 require `0 <= position < n`. The same APIs are available on `WaveletMatrixView`.
+
+For repeated selection of the same value, `WaveletSelectCursor` computes the
+value interval once and reuses it for each occurrence. The cursor does not own
+the matrix; keep the `WaveletMatrix` or backing storage of a
+`WaveletMatrixView` alive while using it.
+
+```nim
+var cursor = wm.initWaveletSelectCursor(5)
+while cursor.remaining > 0:
+  echo wm.nextSelect(cursor)
+```
 
 ```nim
 let values = genWaveletMatrix(@[1'u64, 3, 4, 1])
@@ -606,6 +620,7 @@ import nbvs/packed_array
 import nbvs/succinct_bit_vector
 import nbvs/elias_fano
 import nbvs/wavelet_matrix
+import nbvs/wavelet_select_cursor
 import nbvs/reversed_wavelet_matrix
 import nbvs/fm_dictionary
 ```
@@ -810,6 +825,8 @@ doAssert wm.valueInRangeAt(4, 2, 8) # 値のinclusive range
 | `occPosition(value, pos)` | 列全体の `value` 未満の個数と `[0, pos)` にある `value` の個数の和。FM-indexの `C[value] + Occ(value, pos)` に相当します。 |
 | `select(value, k)` | 0-based で `k` 番目の出現位置。なければ `-1`。 |
 | `selectNth(value, nth)` | 1-based で `nth` 番目の出現位置。なければ `-1`。 |
+| `initWaveletSelectCursor(value)` | 同じ値を繰り返し`select`するための値区間を準備します。 |
+| `nextSelect(cursor)` | 準備済みcursorから次の出現位置を返します。消費後は`-1`。 |
 | `quantile(left, right, k)` | 位置範囲内で `k` 番目に小さい値。 |
 | `countLessThan(left, right, value)` | 位置範囲内の `value` 未満の個数。 |
 | `rangeFreq(left, right, lower, upper)` | 値が `[lower, upper)` に入る個数。 |
@@ -829,6 +846,16 @@ doAssert wm.valueInRangeAt(4, 2, 8) # 値のinclusive range
 `matchesAtUnchecked` と `valueInRangeAtUnchecked` は位置検証を省くため、
 `0 <= position < n` を呼び出し側が保証します。同じAPIを
 `WaveletMatrixView`でも利用できます。
+
+同じ値を繰り返し選択する場合、`WaveletSelectCursor`は値区間を1回だけ計算し、
+各出現位置で再利用します。Cursorはmatrixを所有しないため、使用中は
+`WaveletMatrix`、または`WaveletMatrixView`のbacking storageを有効に保ってください。
+
+```nim
+var cursor = wm.initWaveletSelectCursor(5)
+while cursor.remaining > 0:
+  echo wm.nextSelect(cursor)
+```
 
 ```nim
 let values = genWaveletMatrix(@[1'u64, 3, 4, 1])
