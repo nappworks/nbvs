@@ -2,8 +2,8 @@
 
 ## Environment
 
-- nbvs SHA: `4d2a07eff257e7a72608a3a64ed40bd0b7ec29d0`
-- Working tree: dirty（PR #10の検証補完変更を含む）
+- nbvs SHA: `1e10ed2475c0bf5934f50857f28f8b4aadfacea8`
+- Working tree before measurement: `clean`
 - Nim: `2.2.10` (`bfeb3146d1638b39f69007a4ae5a23e23ae4e5ef`)
 - OS: `Linux 5.15.146.1-microsoft-standard-WSL2 x86_64`
 - CPU: `Intel(R) Core(TM) i5-8365U CPU @ 1.60GHz`
