@@ -10,6 +10,11 @@ type
   ValueCount* = tuple[value: uint64, frequency: int64]
     ## A distinct value and its number of occurrences.
 
+  ValueCountFinalInterval* = tuple[
+    value: uint64, frequency: int64, left, right: int64]
+    ## A distinct value, its frequency, and the terminal Wavelet interval
+    ## reached by the same traversal. The interval is half-open [left, right).
+
   TraversalNode = tuple[level: int, left, right: int64, value: uint64]
 
   WaveletMatrix* = object
@@ -464,6 +469,55 @@ iterator collectValueCountsItems*[W: WaveletMatrix | WaveletMatrixView](wm: W): 
   ## 列全体の異なる値と頻度を内部探索順で逐次返します。
   for item in wm.collectValueCountsItems(0, wm.n):
     yield item
+
+iterator collectValueCountFinalIntervalsItems*[
+    W: WaveletMatrix | WaveletMatrixView](wm: W,
+    left, right: int64): ValueCountFinalInterval =
+  ## `[left, right)` の異なる値・頻度と、同じWM探索で到達したterminal
+  ## intervalを逐次返します。
+  ##
+  ## `collectValueCountsItems` の後で値ごとに再度WMを辿る必要がある用途向けです。
+  ## terminal intervalは最終level後のWavelet permutation上のhalf-open rangeです。
+  wm.checkRange(left, right)
+  var stack: seq[TraversalNode] =
+    @[(level: 0, left: left, right: right, value: 0'u64)]
+  while stack.len > 0:
+    let node = stack.pop()
+    if node.left >= node.right:
+      continue
+    if node.level == wm.bitWidth:
+      yield (value: node.value, frequency: node.right - node.left,
+        left: node.left, right: node.right)
+      continue
+
+    let shift = wm.bitWidth - node.level - 1
+    let leftOnes = wm.levels[node.level].rank1Unchecked(node.left)
+    let rightOnes = wm.levels[node.level].rank1Unchecked(node.right)
+    let oneLeft = wm.zeroCounts[node.level] + leftOnes
+    let oneRight = wm.zeroCounts[node.level] + rightOnes
+    stack.add (level: node.level + 1, left: oneLeft, right: oneRight,
+      value: node.value or (1'u64 shl shift))
+    stack.add (level: node.level + 1, left: node.left - leftOnes,
+      right: node.right - rightOnes, value: node.value)
+
+iterator collectValueCountFinalIntervalsItems*[
+    W: WaveletMatrix | WaveletMatrixView](wm: W): ValueCountFinalInterval =
+  ## 列全体についてterminal interval付きの異なる値と頻度を逐次返します。
+  for item in wm.collectValueCountFinalIntervalsItems(0, wm.n):
+    yield item
+
+func collectValueCountFinalIntervals*[
+    W: WaveletMatrix | WaveletMatrixView](wm: W,
+    left, right: int64): seq[ValueCountFinalInterval] =
+  ## `[left, right)` のterminal interval付きvalue countsを収集します。
+  for item in wm.collectValueCountFinalIntervalsItems(left, right):
+    result.add item
+
+func collectValueCountFinalIntervals*[
+    W: WaveletMatrix | WaveletMatrixView](wm: W):
+    seq[ValueCountFinalInterval] =
+  ## 列全体のterminal interval付きvalue countsを収集します。
+  wm.collectValueCountFinalIntervals(0, wm.n)
 
 func collectValueCounts*[W: WaveletMatrix | WaveletMatrixView](wm: W,
                          left, right: int64): seq[ValueCount] =
