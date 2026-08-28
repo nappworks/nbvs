@@ -1,5 +1,5 @@
 import std/[algorithm, random]
-import nbvs/wavelet_matrix
+import nbvs/[succinct_bit_vector, wavelet_matrix]
 import nbvs/reversed_wavelet_matrix
 import ./test_common
 
@@ -14,6 +14,7 @@ block empty:
   doAssert wm.countLessThan(0, 0, 10) == 0
   doAssert wm.rangeFreq(0, 0, 0, 10) == 0
   doAssert wm.collectValueCounts.len == 0
+  doAssert wm.collectValueCountFinalIntervals.len == 0
   doAssert wm.valueCounts.len == 0
   doAssert wm.collectDistinctValues.len == 0
   doAssert wm.distinctValues.len == 0
@@ -137,6 +138,12 @@ block publicQueries:
   doAssert wm.valueCounts(3, 3).len == 0
   doAssert wm.collectValueCounts == wm.valueCounts
   doAssert wm.collectValueCounts(2, 8) == wm.valueCounts(2, 8)
+  let finalIntervals = wm.collectValueCountFinalIntervals()
+  doAssert finalIntervals.len == wm.valueCounts.len
+  for i, item in finalIntervals:
+    doAssert item.value == wm.valueCounts[i].value
+    doAssert item.frequency == wm.valueCounts[i].frequency
+    doAssert item.right - item.left == item.frequency
   doAssert wm.distinctValues == @[0'u64, 1, 2, 3, 5, 7, 9]
   doAssert wm.distinctValues(2, 8) == @[1'u64, 2, 5, 7, 9]
 
@@ -281,6 +288,56 @@ block valueEnumerations:
       counts.add item
     doAssert counts == wm.collectValueCounts
 
+    let intervals = wm.collectValueCountFinalIntervals
+    doAssert intervals.len == counts.len
+    for i, item in intervals:
+      doAssert item.value == counts[i].value
+      doAssert item.frequency == counts[i].frequency
+      doAssert item.right - item.left == item.frequency
+
+    var intervalItems: seq[ValueCountFinalInterval]
+    for item in wm.collectValueCountFinalIntervalsItems:
+      intervalItems.add item
+    doAssert intervalItems == intervals
+
+    let rangeLeft = min(1'i64, wm.n)
+    let rangeIntervals = wm.collectValueCountFinalIntervals(rangeLeft, wm.n)
+    let rangeCounts = wm.collectValueCounts(rangeLeft, wm.n)
+    doAssert rangeIntervals.len == rangeCounts.len
+    for i, item in rangeIntervals:
+      doAssert item.value == rangeCounts[i].value
+      doAssert item.frequency == rangeCounts[i].frequency
+      doAssert item.right - item.left == item.frequency
+
+    intervalItems.setLen(0)
+    for item in wm.collectValueCountFinalIntervalsItems(rangeLeft, wm.n):
+      intervalItems.add item
+    doAssert intervalItems == rangeIntervals
+
+block valueCountFinalIntervalPositions:
+  let xs = @[5'u64, 1, 7, 5, 2, 9, 1, 5, 0, 7, 3, 5]
+  let wm = genWaveletMatrix(xs)
+  let intervals = wm.collectValueCountFinalIntervals()
+  var finalPositions = newSeq[int64](xs.len)
+  for physical in 0..<xs.len:
+    var position = int64(physical)
+    for level in 0..<wm.bitWidth:
+      let ones = wm.levels[level].rank1Unchecked(position)
+      if wm.levels[level].access(position):
+        position = wm.zeroCounts[level] + ones
+      else:
+        position -= ones
+    finalPositions[physical] = position
+
+  for interval in intervals:
+    var seen = 0
+    for physical, value in xs:
+      if value == interval.value:
+        doAssert finalPositions[physical] >= interval.left
+        doAssert finalPositions[physical] < interval.right
+        inc seen
+    doAssert int64(seen) == interval.frequency
+
 block invalidBounds:
   let wm = genWaveletMatrix(@[1'u64, 2, 3])
   expectRaises(IndexDefect): discard wm[-1]
@@ -290,6 +347,10 @@ block invalidBounds:
   expectRaises(IndexDefect): discard wm.rankIncl(1, -1)
   expectRaises(IndexDefect): discard wm.rankIncl(1, 3)
   expectRaises(IndexDefect): discard wm.rankLessThan(1, 4)
+  expectRaises(IndexDefect):
+    discard wm.collectValueCountFinalIntervals(-1, 2)
+  expectRaises(IndexDefect):
+    discard wm.collectValueCountFinalIntervals(1, 4)
   expectRaises(IndexDefect): discard wm.occPosition(1, -1)
   expectRaises(IndexDefect): discard wm.occPosition(1, wm.n + 1)
   expectRaises(IndexDefect): discard wm.rank(1, 2, 1)

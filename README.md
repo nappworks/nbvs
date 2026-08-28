@@ -304,13 +304,15 @@ doAssert wm.valueInRangeAt(4, 2, 8) # inclusive value range
 | `successor(left, right, lower)` | Smallest value `>= lower`, or `ValueError`. |
 | `items` / `toSeq()` | Decodes values in original order. |
 | `collectValueCounts(left, right)` | Collects distinct `(value, frequency)` pairs in traversal order without sorting. |
+| `collectValueCountFinalIntervals(left, right)` | Collects `(value, frequency, left, right)` tuples, where `[left, right)` is the terminal interval in the final Wavelet permutation. |
 | `valueCounts(left, right)` | Distinct `(value, frequency)` pairs, sorted by value. |
 | `collectDistinctValues(left, right)` | Collects distinct values directly from occupied nodes in traversal order without computing frequencies. |
 | `distinctValues(left, right)` | Distinct values sorted in ascending order. |
 | `collectValueCountsItems` / `valueCountsItems` | Iterators for traversal-order or ascending `(value, frequency)` pairs. |
+| `collectValueCountFinalIntervalsItems` | Iterator form of `collectValueCountFinalIntervals`. |
 | `collectDistinctValuesItems` / `distinctValuesItems` | Iterators for traversal-order or ascending distinct values. |
 
-The four enumeration APIs also have whole-sequence overloads without
+The enumeration APIs also have whole-sequence overloads without
 `left, right`. All ranges are half-open. The `collect` variants do not guarantee
 an order, while the variants without `collect` guarantee ascending value order.
 `matchesAtUnchecked` and `valueInRangeAtUnchecked` omit position validation and
@@ -834,13 +836,15 @@ doAssert wm.valueInRangeAt(4, 2, 8) # 値のinclusive range
 | `successor(left, right, lower)` | `lower` 以上の最小値。なければ `ValueError`。 |
 | `items` / `toSeq()` | 元の順序で値を decode します。 |
 | `collectValueCounts(left, right)` | sortせず走査順で `(value, frequency)` を収集します。 |
+| `collectValueCountFinalIntervals(left, right)` | `(value, frequency, left, right)` を収集します。`[left, right)` は最終Wavelet permutation上のterminal intervalです。 |
 | `valueCounts(left, right)` | 値で昇順の `(value, frequency)` 一覧。 |
 | `collectDistinctValues(left, right)` | 頻度を計算せず、存在するnodeから異なる値を走査順で直接収集します。 |
 | `distinctValues(left, right)` | 異なる値を昇順で返します。 |
 | `collectValueCountsItems` / `valueCountsItems` | 走査順または昇順の `(value, frequency)` を逐次返すiterator。 |
+| `collectValueCountFinalIntervalsItems` | `collectValueCountFinalIntervals` のiterator版。 |
 | `collectDistinctValuesItems` / `distinctValuesItems` | 走査順または昇順の異なる値を逐次返すiterator。 |
 
-4種類の列挙APIには、`left, right` を省略して列全体を対象にするoverloadも
+列挙APIには、`left, right` を省略して列全体を対象にするoverloadも
 あります。すべての範囲は半開区間です。`collect` 系は順序を保証せず、
 非 `collect` 系は値の昇順を保証します。
 `matchesAtUnchecked` と `valueInRangeAtUnchecked` は位置検証を省くため、
