@@ -14,6 +14,7 @@ block empty:
   doAssert wm.countLessThan(0, 0, 10) == 0
   doAssert wm.rangeFreq(0, 0, 0, 10) == 0
   doAssert wm.collectValueCounts.len == 0
+  doAssert wm.collectValueCountFinalIntervals.len == 0
   doAssert wm.valueCounts.len == 0
   doAssert wm.collectDistinctValues.len == 0
   doAssert wm.distinctValues.len == 0
@@ -137,6 +138,12 @@ block publicQueries:
   doAssert wm.valueCounts(3, 3).len == 0
   doAssert wm.collectValueCounts == wm.valueCounts
   doAssert wm.collectValueCounts(2, 8) == wm.valueCounts(2, 8)
+  let finalIntervals = wm.collectValueCountFinalIntervals()
+  doAssert finalIntervals.len == wm.valueCounts.len
+  for i, item in finalIntervals:
+    doAssert item.value == wm.valueCounts[i].value
+    doAssert item.frequency == wm.valueCounts[i].frequency
+    doAssert item.right - item.left == item.frequency
   doAssert wm.distinctValues == @[0'u64, 1, 2, 3, 5, 7, 9]
   doAssert wm.distinctValues(2, 8) == @[1'u64, 2, 5, 7, 9]
 
@@ -280,6 +287,18 @@ block valueEnumerations:
     for item in wm.collectValueCountsItems:
       counts.add item
     doAssert counts == wm.collectValueCounts
+
+    let intervals = wm.collectValueCountFinalIntervals
+    doAssert intervals.len == counts.len
+    for i, item in intervals:
+      doAssert item.value == counts[i].value
+      doAssert item.frequency == counts[i].frequency
+      doAssert item.right - item.left == item.frequency
+
+    var intervalItems: seq[ValueCountFinalInterval]
+    for item in wm.collectValueCountFinalIntervalsItems:
+      intervalItems.add item
+    doAssert intervalItems == intervals
 
 block invalidBounds:
   let wm = genWaveletMatrix(@[1'u64, 2, 3])
