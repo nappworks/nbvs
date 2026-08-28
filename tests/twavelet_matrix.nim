@@ -1,5 +1,5 @@
 import std/[algorithm, random]
-import nbvs/wavelet_matrix
+import nbvs/[succinct_bit_vector, wavelet_matrix]
 import nbvs/reversed_wavelet_matrix
 import ./test_common
 
@@ -300,6 +300,20 @@ block valueEnumerations:
       intervalItems.add item
     doAssert intervalItems == intervals
 
+    let rangeLeft = min(1'i64, wm.n)
+    let rangeIntervals = wm.collectValueCountFinalIntervals(rangeLeft, wm.n)
+    let rangeCounts = wm.collectValueCounts(rangeLeft, wm.n)
+    doAssert rangeIntervals.len == rangeCounts.len
+    for i, item in rangeIntervals:
+      doAssert item.value == rangeCounts[i].value
+      doAssert item.frequency == rangeCounts[i].frequency
+      doAssert item.right - item.left == item.frequency
+
+    intervalItems.setLen(0)
+    for item in wm.collectValueCountFinalIntervalsItems(rangeLeft, wm.n):
+      intervalItems.add item
+    doAssert intervalItems == rangeIntervals
+
 block valueCountFinalIntervalPositions:
   let xs = @[5'u64, 1, 7, 5, 2, 9, 1, 5, 0, 7, 3, 5]
   let wm = genWaveletMatrix(xs)
@@ -333,6 +347,10 @@ block invalidBounds:
   expectRaises(IndexDefect): discard wm.rankIncl(1, -1)
   expectRaises(IndexDefect): discard wm.rankIncl(1, 3)
   expectRaises(IndexDefect): discard wm.rankLessThan(1, 4)
+  expectRaises(IndexDefect):
+    discard wm.collectValueCountFinalIntervals(-1, 2)
+  expectRaises(IndexDefect):
+    discard wm.collectValueCountFinalIntervals(1, 4)
   expectRaises(IndexDefect): discard wm.occPosition(1, -1)
   expectRaises(IndexDefect): discard wm.occPosition(1, wm.n + 1)
   expectRaises(IndexDefect): discard wm.rank(1, 2, 1)

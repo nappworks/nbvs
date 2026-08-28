@@ -12,8 +12,8 @@ type
 
   ValueCountFinalInterval* = tuple[
     value: uint64, frequency: int64, left, right: int64]
-    ## A distinct value, its frequency, and the terminal Wavelet interval
-    ## reached by the same traversal. The interval is half-open [left, right).
+    ## 異なる値、出現頻度、および同じ探索で到達した最終Wavelet区間です。
+    ## 区間は半開区間 `[left, right)` です。
 
   TraversalNode = tuple[level: int, left, right: int64, value: uint64]
 

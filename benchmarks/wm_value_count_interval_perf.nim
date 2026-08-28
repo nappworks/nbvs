@@ -1,4 +1,4 @@
-import std/[monotimes, strformat, times]
+import std/[algorithm, monotimes, strformat, times]
 import nbvs/wavelet_matrix
 
 type BenchCase = object
