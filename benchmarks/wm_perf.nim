@@ -75,7 +75,7 @@ proc storageBytes(rwm: ReversedWaveletMatrix): int64 =
 
 proc emit(kind: string, c: BenchCase, bitWidth: int, storage: int64,
           buildNs, accessNs, rankNs, selectNs, collectCountsNs,
-          sortedCountsNs: int64) =
+          collectFinalIntervalsNs, sortedCountsNs: int64) =
   echo &"{kind},{c.n},{c.alphabet},{bitWidth}," &
     &"{float(storage) / 1024.0 / 1024.0:.3f}," &
     &"{float(buildNs) / float(buildIters) / 1_000_000.0:.6f}," &
@@ -83,6 +83,7 @@ proc emit(kind: string, c: BenchCase, bitWidth: int, storage: int64,
     &"{float(rankNs) / float(queryIters):.3f}," &
     &"{float(selectNs) / float(queryIters):.3f}," &
     &"{float(collectCountsNs) / float(valueCountsIters) / 1_000_000.0:.6f}," &
+    &"{float(collectFinalIntervalsNs) / float(valueCountsIters) / 1_000_000.0:.6f}," &
     &"{float(sortedCountsNs) / float(valueCountsIters) / 1_000_000.0:.6f}"
 
 proc runWm(c: BenchCase, xs: seq[uint64], positions: seq[int64],
@@ -117,11 +118,17 @@ proc runWm(c: BenchCase, xs: seq[uint64], positions: seq[int64],
 
   started = getMonoTime()
   for _ in 0..<valueCountsIters:
+    let intervals = wm.collectValueCountFinalIntervals()
+    sink = sink xor uint64(intervals.len)
+  let collectFinalIntervalsNs = elapsedNs(started)
+
+  started = getMonoTime()
+  for _ in 0..<valueCountsIters:
     let counts = wm.valueCounts()
     sink = sink xor uint64(counts.len)
   let sortedCountsNs = elapsedNs(started)
   emit("WM", c, wm.bitWidth, storageBytes(wm), buildNs, accessNs, rankNs,
-    selectNs, collectCountsNs, sortedCountsNs)
+    selectNs, collectCountsNs, collectFinalIntervalsNs, sortedCountsNs)
 
 proc runRwm(c: BenchCase, xs: seq[uint64], positions: seq[int64],
             rankValues, selectValues: seq[uint64], selectKs: seq[int64]) =
@@ -159,7 +166,7 @@ proc runRwm(c: BenchCase, xs: seq[uint64], positions: seq[int64],
     sink = sink xor uint64(counts.len)
   let sortedCountsNs = elapsedNs(started)
   emit("RWM", c, rwm.bitWidth, storageBytes(rwm), buildNs, accessNs, rankNs,
-    selectNs, collectCountsNs, sortedCountsNs)
+    selectNs, collectCountsNs, -1, sortedCountsNs)
 
 proc runCase(c: BenchCase) =
   let xs = makeValues(c)
@@ -171,7 +178,7 @@ proc runCase(c: BenchCase) =
 
 when isMainModule:
   echo "kind,n,alphabet,bit_width,storage_mib,build_ms,access_ns,rank_ns," &
-    "select_ns,collect_value_counts_ms,sorted_value_counts_ms"
+    "select_ns,collect_value_counts_ms,collect_final_intervals_ms,sorted_value_counts_ms"
   for c in cases:
     runCase(c)
   stderr.writeLine("sink=", sink)
