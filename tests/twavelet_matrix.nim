@@ -300,6 +300,30 @@ block valueEnumerations:
       intervalItems.add item
     doAssert intervalItems == intervals
 
+block valueCountFinalIntervalPositions:
+  let xs = @[5'u64, 1, 7, 5, 2, 9, 1, 5, 0, 7, 3, 5]
+  let wm = genWaveletMatrix(xs)
+  let intervals = wm.collectValueCountFinalIntervals()
+  var finalPositions = newSeq[int64](xs.len)
+  for physical in 0..<xs.len:
+    var position = int64(physical)
+    for level in 0..<wm.bitWidth:
+      let ones = wm.levels[level].rank1Unchecked(position)
+      if wm.levels[level].access(position):
+        position = wm.zeroCounts[level] + ones
+      else:
+        position -= ones
+    finalPositions[physical] = position
+
+  for interval in intervals:
+    var seen = 0
+    for physical, value in xs:
+      if value == interval.value:
+        doAssert finalPositions[physical] >= interval.left
+        doAssert finalPositions[physical] < interval.right
+        inc seen
+    doAssert int64(seen) == interval.frequency
+
 block invalidBounds:
   let wm = genWaveletMatrix(@[1'u64, 2, 3])
   expectRaises(IndexDefect): discard wm[-1]
