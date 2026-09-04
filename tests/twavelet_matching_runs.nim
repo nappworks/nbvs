@@ -17,7 +17,7 @@ func naiveRuns(xs: openArray[uint64], value: uint64,
 block bitRunsApi:
   var bits = genSuccinctBitVector(8)
   for pos in [1'i64, 2, 3, 5, 6]:
-    bits.set1(pos)
+    bits[pos] = true
   bits.build()
 
   let expectedOnes = @[

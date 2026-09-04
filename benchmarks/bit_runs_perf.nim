@@ -20,7 +20,7 @@ proc makeBits(rows, runLength: int): SuccinctBitVector =
   let period = runLength * 2
   for index in 0..<rows:
     if (index mod period) < runLength:
-      result.set1(int64(index))
+      result[int64(index)] = true
   result.build()
 
 proc consumeItems(bits: SuccinctBitVector): int64 =

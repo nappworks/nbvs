@@ -33,41 +33,39 @@ iterator bitRunsItems*[B: SuccinctBitVector | SuccinctBitVectorView](
   ## 混在区間だけを再帰的に分割します。
   if left < 0 or left > right or right > bits.lenOfBits:
     raise newException(IndexDefect, "range out of bounds")
-  if left == right:
-    return
+  if left < right:
+    var stack: seq[MatchingRun] = @[(left: left, right: right)]
+    var pending = false
+    var pendingLeft = 0'i64
+    var pendingRight = 0'i64
 
-  var stack: seq[MatchingRun] = @[(left: left, right: right)]
-  var pending = false
-  var pendingLeft = 0'i64
-  var pendingRight = 0'i64
+    while stack.len > 0:
+      let node = stack.pop()
+      let ones = bits.rank1Unchecked(node.right) - bits.rank1Unchecked(node.left)
+      let length = node.right - node.left
+      let matching = if targetOne: ones else: length - ones
 
-  while stack.len > 0:
-    let node = stack.pop()
-    let ones = bits.rank1Unchecked(node.right) - bits.rank1Unchecked(node.left)
-    let length = node.right - node.left
-    let matching = if targetOne: ones else: length - ones
+      if matching == 0:
+        continue
 
-    if matching == 0:
-      continue
+      if matching == length:
+        if pending and pendingRight == node.left:
+          pendingRight = node.right
+        else:
+          if pending:
+            yield (left: pendingLeft, right: pendingRight)
+          pending = true
+          pendingLeft = node.left
+          pendingRight = node.right
+        continue
 
-    if matching == length:
-      if pending and pendingRight == node.left:
-        pendingRight = node.right
-      else:
-        if pending:
-          yield (left: pendingLeft, right: pendingRight)
-        pending = true
-        pendingLeft = node.left
-        pendingRight = node.right
-      continue
+      let middle = node.left + (length shr 1)
+      # LIFO のため右側を先に積み、一致区間を左から右の順で処理します。
+      stack.add (left: middle, right: node.right)
+      stack.add (left: node.left, right: middle)
 
-    let middle = node.left + (length shr 1)
-    # LIFO のため右側を先に積み、一致区間を左から右の順で処理します。
-    stack.add (left: middle, right: node.right)
-    stack.add (left: node.left, right: middle)
-
-  if pending:
-    yield (left: pendingLeft, right: pendingRight)
+    if pending:
+      yield (left: pendingLeft, right: pendingRight)
 
 iterator bitRunsItems*[B: SuccinctBitVector | SuccinctBitVectorView](
     bits: B, targetOne: bool): MatchingRun =
@@ -96,51 +94,49 @@ iterator matchingRunsItems*[W: WaveletMatrix | WaveletMatrixView](
   ## 候補区間を絞り込みます。
   if left < 0 or left > right or right > wm.n:
     raise newException(IndexDefect, "range out of bounds")
-  if left == right or wm.n == 0 or not valueFits(wm.bitWidth, value):
-    return
-
-  if wm.bitWidth == 0:
+  if left < right and wm.n > 0 and valueFits(wm.bitWidth, value) and
+      wm.bitWidth == 0:
     yield (left: left, right: right)
-    return
+  elif left < right and wm.n > 0 and valueFits(wm.bitWidth, value):
+    var candidates: seq[MatchingRunCandidate] = @[
+      (physicalLeft: left, currentLeft: left, currentRight: right)]
 
-  var candidates: seq[MatchingRunCandidate] = @[
-    (physicalLeft: left, currentLeft: left, currentRight: right)]
+    for level in 0..<wm.bitWidth:
+      let shift = wm.bitWidth - level - 1
+      let targetOne = ((value shr shift) and 1'u64) != 0
+      var next: seq[MatchingRunCandidate]
 
-  for level in 0..<wm.bitWidth:
-    let shift = wm.bitWidth - level - 1
-    let targetOne = ((value shr shift) and 1'u64) != 0
-    var next: seq[MatchingRunCandidate]
+      for candidate in candidates:
+        for run in wm.levels[level].bitRunsItems(targetOne,
+            candidate.currentLeft, candidate.currentRight):
+          let physicalLeft = candidate.physicalLeft +
+            (run.left - candidate.currentLeft)
+          let leftOnes = wm.levels[level].rank1Unchecked(run.left)
+          let rightOnes = wm.levels[level].rank1Unchecked(run.right)
 
-    for candidate in candidates:
-      for run in wm.levels[level].bitRunsItems(targetOne,
-          candidate.currentLeft, candidate.currentRight):
-        let physicalLeft = candidate.physicalLeft +
-          (run.left - candidate.currentLeft)
-        let leftOnes = wm.levels[level].rank1Unchecked(run.left)
-        let rightOnes = wm.levels[level].rank1Unchecked(run.right)
+          var mappedLeft, mappedRight: int64
+          if targetOne:
+            mappedLeft = wm.zeroCounts[level] + leftOnes
+            mappedRight = wm.zeroCounts[level] + rightOnes
+          else:
+            mappedLeft = run.left - leftOnes
+            mappedRight = run.right - rightOnes
 
-        var mappedLeft, mappedRight: int64
-        if targetOne:
-          mappedLeft = wm.zeroCounts[level] + leftOnes
-          mappedRight = wm.zeroCounts[level] + rightOnes
-        else:
-          mappedLeft = run.left - leftOnes
-          mappedRight = run.right - rightOnes
+          next.add (
+            physicalLeft: physicalLeft,
+            currentLeft: mappedLeft,
+            currentRight: mappedRight)
 
-        next.add (
-          physicalLeft: physicalLeft,
-          currentLeft: mappedLeft,
-          currentRight: mappedRight)
+      candidates = move(next)
+      if candidates.len == 0:
+        break
 
-    candidates = move(next)
-    if candidates.len == 0:
-      return
-
-  for candidate in candidates:
-    yield (
-      left: candidate.physicalLeft,
-      right: candidate.physicalLeft +
-        (candidate.currentRight - candidate.currentLeft))
+    if candidates.len > 0:
+      for candidate in candidates:
+        yield (
+          left: candidate.physicalLeft,
+          right: candidate.physicalLeft +
+            (candidate.currentRight - candidate.currentLeft))
 
 iterator matchingRunsItems*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, value: uint64): MatchingRun =
