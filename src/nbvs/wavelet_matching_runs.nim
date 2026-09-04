@@ -1,18 +1,17 @@
-## Contiguous physical-position runs for equality predicates on Wavelet Matrix.
+## Wavelet Matrix の等値条件に一致する物理位置の連続区間を列挙します。
 ##
-## `matchingRuns` follows the known target value from the most-significant
-## Wavelet level downward. At each level, rank is used to reject ranges with no
-## matching target bits and to accept homogeneous ranges without enumerating
-## positions. Only mixed ranges are split. Accepted ranges are then mapped to
-## the next Wavelet level with the same rank transform used by equality rank.
+## `matchingRuns` は、既知の検索値を最上位ビット側の Wavelet level から
+## 下位へ向かって辿ります。各 level では rank を使い、対象ビットを含まない
+## 区間を除外し、全ビットが一致する区間は位置を個別列挙せずそのまま採用します。
+## ビットが混在する区間だけを分割し、採用した区間は等値 rank と同じ変換で
+## 次の Wavelet level 上の区間へ写像します。
 
 import wavelet_matrix
 import succinct_bit_vector
 
 type
   MatchingRun* = tuple[left, right: int64]
-    ## A maximal half-open physical-position interval `[left, right)` whose
-    ## values equal the requested target.
+    ## 指定値と等しい要素が連続する、極大な半開物理位置区間 `[left, right)` です。
 
   MatchingRunCandidate = tuple[
     physicalLeft: int64,
@@ -29,9 +28,9 @@ func valueFits(bitWidth: int, value: uint64): bool {.inline.} =
 
 iterator matchingBitRuns[B: SuccinctBitVector | SuccinctBitVectorView](
     bits: B, targetOne: bool, left, right: int64): MatchingRun =
-  ## Emits maximal sub-ranges in `[left, right)` whose bits all equal
-  ## `targetOne`. Rank rejects or accepts whole ranges; only mixed ranges are
-  ## recursively subdivided.
+  ## `[left, right)` のうち、全ビットが `targetOne` と一致する極大な部分区間を
+  ## 列挙します。rank により区間全体の不一致・一致を判定し、混在区間だけを
+  ## 再帰的に分割します。
   if left >= right:
     return
 
@@ -61,7 +60,7 @@ iterator matchingBitRuns[B: SuccinctBitVector | SuccinctBitVectorView](
       continue
 
     let middle = node.left + (length shr 1)
-    # LIFO: push right first so matching intervals are observed left-to-right.
+    # LIFO のため右側を先に積み、一致区間を左から右の順で処理します。
     stack.add (left: middle, right: node.right)
     stack.add (left: node.left, right: middle)
 
@@ -70,12 +69,12 @@ iterator matchingBitRuns[B: SuccinctBitVector | SuccinctBitVectorView](
 
 iterator matchingRuns*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, value: uint64, left, right: int64): MatchingRun =
-  ## Emits maximal physical-position runs equal to `value` inside
-  ## `[left, right)`.
+  ## `[left, right)` 内で `value` と等しい要素が連続する極大な物理位置区間を
+  ## 列挙します。
   ##
-  ## The traversal never calls Wavelet `select`. Candidate intervals are
-  ## narrowed top-down by the known target bits, using rank both for homogeneous
-  ## interval detection and for mapping surviving intervals to the next level.
+  ## Wavelet の `select` は使用しません。既知の検索値のビットに従い、rank で
+  ## 区間全体の一致判定と次 level への写像を行いながら、上位 level から
+  ## 候補区間を絞り込みます。
   if left < 0 or left > right or right > wm.n:
     raise newException(IndexDefect, "range out of bounds")
   if left == right or wm.n == 0 or not valueFits(wm.bitWidth, value):
@@ -126,17 +125,18 @@ iterator matchingRuns*[W: WaveletMatrix | WaveletMatrixView](
 
 iterator matchingRuns*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, value: uint64): MatchingRun =
-  ## Emits maximal physical-position runs equal to `value` over the full matrix.
+  ## Wavelet Matrix 全体から `value` と等しい要素の極大な連続物理位置区間を
+  ## 列挙します。
   for run in wm.matchingRuns(value, 0, wm.n):
     yield run
 
 func collectMatchingRuns*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, value: uint64, left, right: int64): seq[MatchingRun] =
-  ## Collects `matchingRuns(value, left, right)` into a sequence.
+  ## `matchingRuns(value, left, right)` の結果を sequence として収集します。
   for run in wm.matchingRuns(value, left, right):
     result.add run
 
 func collectMatchingRuns*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, value: uint64): seq[MatchingRun] =
-  ## Collects full-range `matchingRuns(value)` into a sequence.
+  ## 全範囲に対する `matchingRuns(value)` の結果を sequence として収集します。
   wm.collectMatchingRuns(value, 0, wm.n)
