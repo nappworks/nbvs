@@ -1,6 +1,6 @@
 ## Wavelet Matrix の等値条件に一致する物理位置の連続区間を列挙します。
 ##
-## `matchingRuns` は、既知の検索値を最上位ビット側の Wavelet level から
+## `matchingRunsItems` は、既知の検索値を最上位ビット側の Wavelet level から
 ## 下位へ向かって辿ります。各 level では rank を使い、対象ビットを含まない
 ## 区間を除外し、全ビットが一致する区間は位置を個別列挙せずそのまま採用します。
 ## ビットが混在する区間だけを分割し、採用した区間は等値 rank と同じ変換で
@@ -11,7 +11,7 @@ import succinct_bit_vector
 
 type
   MatchingRun* = tuple[left, right: int64]
-    ## 指定値と等しい要素が連続する、極大な半開物理位置区間 `[left, right)` です。
+    ## 条件に一致する要素が連続する、極大な半開物理位置区間 `[left, right)` です。
 
   MatchingRunCandidate = tuple[
     physicalLeft: int64,
@@ -26,12 +26,14 @@ func valueFits(bitWidth: int, value: uint64): bool {.inline.} =
   else:
     (value shr bitWidth) == 0
 
-iterator matchingBitRuns[B: SuccinctBitVector | SuccinctBitVectorView](
+iterator bitRunsItems*[B: SuccinctBitVector | SuccinctBitVectorView](
     bits: B, targetOne: bool, left, right: int64): MatchingRun =
   ## `[left, right)` のうち、全ビットが `targetOne` と一致する極大な部分区間を
-  ## 列挙します。rank により区間全体の不一致・一致を判定し、混在区間だけを
-  ## 再帰的に分割します。
-  if left >= right:
+  ## 左から右の順で列挙します。rank により区間全体の不一致・一致を判定し、
+  ## 混在区間だけを再帰的に分割します。
+  if left < 0 or left > right or right > bits.lenOfBits:
+    raise newException(IndexDefect, "range out of bounds")
+  if left == right:
     return
 
   var stack: seq[MatchingRun] = @[(left: left, right: right)]
@@ -67,10 +69,27 @@ iterator matchingBitRuns[B: SuccinctBitVector | SuccinctBitVectorView](
   if pending:
     yield (left: pendingLeft, right: pendingRight)
 
-iterator matchingRuns*[W: WaveletMatrix | WaveletMatrixView](
+iterator bitRunsItems*[B: SuccinctBitVector | SuccinctBitVectorView](
+    bits: B, targetOne: bool): MatchingRun =
+  ## BitVector 全体から `targetOne` と一致する極大な連続区間を列挙します。
+  for run in bits.bitRunsItems(targetOne, 0, bits.lenOfBits):
+    yield run
+
+func bitRuns*[B: SuccinctBitVector | SuccinctBitVectorView](
+    bits: B, targetOne: bool, left, right: int64): seq[MatchingRun] =
+  ## `bitRunsItems(targetOne, left, right)` の結果を sequence として返します。
+  for run in bits.bitRunsItems(targetOne, left, right):
+    result.add run
+
+func bitRuns*[B: SuccinctBitVector | SuccinctBitVectorView](
+    bits: B, targetOne: bool): seq[MatchingRun] =
+  ## BitVector 全体の `bitRunsItems(targetOne)` の結果を sequence として返します。
+  bits.bitRuns(targetOne, 0, bits.lenOfBits)
+
+iterator matchingRunsItems*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, value: uint64, left, right: int64): MatchingRun =
   ## `[left, right)` 内で `value` と等しい要素が連続する極大な物理位置区間を
-  ## 列挙します。
+  ## 左から右の順で列挙します。
   ##
   ## Wavelet の `select` は使用しません。既知の検索値のビットに従い、rank で
   ## 区間全体の一致判定と次 level への写像を行いながら、上位 level から
@@ -93,7 +112,7 @@ iterator matchingRuns*[W: WaveletMatrix | WaveletMatrixView](
     var next: seq[MatchingRunCandidate]
 
     for candidate in candidates:
-      for run in matchingBitRuns(wm.levels[level], targetOne,
+      for run in wm.levels[level].bitRunsItems(targetOne,
           candidate.currentLeft, candidate.currentRight):
         let physicalLeft = candidate.physicalLeft +
           (run.left - candidate.currentLeft)
@@ -123,20 +142,31 @@ iterator matchingRuns*[W: WaveletMatrix | WaveletMatrixView](
       right: candidate.physicalLeft +
         (candidate.currentRight - candidate.currentLeft))
 
-iterator matchingRuns*[W: WaveletMatrix | WaveletMatrixView](
+iterator matchingRunsItems*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, value: uint64): MatchingRun =
   ## Wavelet Matrix 全体から `value` と等しい要素の極大な連続物理位置区間を
   ## 列挙します。
-  for run in wm.matchingRuns(value, 0, wm.n):
+  for run in wm.matchingRunsItems(value, 0, wm.n):
     yield run
+
+func matchingRuns*[W: WaveletMatrix | WaveletMatrixView](
+    wm: W, value: uint64, left, right: int64): seq[MatchingRun] =
+  ## `matchingRunsItems(value, left, right)` の結果を sequence として返します。
+  for run in wm.matchingRunsItems(value, left, right):
+    result.add run
+
+func matchingRuns*[W: WaveletMatrix | WaveletMatrixView](
+    wm: W, value: uint64): seq[MatchingRun] =
+  ## Wavelet Matrix 全体の `matchingRunsItems(value)` の結果を sequence として
+  ## 返します。
+  wm.matchingRuns(value, 0, wm.n)
 
 func collectMatchingRuns*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, value: uint64, left, right: int64): seq[MatchingRun] =
-  ## `matchingRuns(value, left, right)` の結果を sequence として収集します。
-  for run in wm.matchingRuns(value, left, right):
-    result.add run
+  ## `matchingRuns(value, left, right)` の互換用別名です。
+  wm.matchingRuns(value, left, right)
 
 func collectMatchingRuns*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, value: uint64): seq[MatchingRun] =
-  ## 全範囲に対する `matchingRuns(value)` の結果を sequence として収集します。
-  wm.collectMatchingRuns(value, 0, wm.n)
+  ## `matchingRuns(value)` の互換用別名です。
+  wm.matchingRuns(value)
