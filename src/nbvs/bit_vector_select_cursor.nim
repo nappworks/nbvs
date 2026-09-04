@@ -4,9 +4,14 @@
 ## avoid descending the select prefix tree for every query. The first lookup is
 ## resolved with the regular select implementation; subsequent lookups scan
 ## forward from the previously selected bit and therefore reuse traversal state.
+##
+## To avoid regressions on sparse bit distributions, the cursor scans at most one
+## 512-bit block worth of words before falling back to the regular select tree.
 
 import std/bitops
 import succinct_bit_vector
+
+const SelectCursorMaxScanWords = 8
 
 type
   BitVectorSelectCursor* = object
@@ -42,49 +47,56 @@ func matchingWord[S: SuccinctBitVector | SuccinctBitVectorView](
   else:
     (not sbv.data[wordIdx]) and valid
 
-func selectMonotonic*[S: SuccinctBitVector | SuccinctBitVectorView](
+func resetWithRegularSelect[S: SuccinctBitVector | SuccinctBitVectorView](
+    sbv: S, cursor: var BitVectorSelectCursor, occurrence: int64): int64 {.inline.} =
+  result = if cursor.targetOne: sbv.select1(occurrence) else: sbv.select0(occurrence)
+  cursor.lastOccurrence = occurrence
+  cursor.lastPosition = result
+  cursor.initialized = result >= 0
+
+func selectMonotonicUnchecked*[S: SuccinctBitVector | SuccinctBitVectorView](
     sbv: S, cursor: var BitVectorSelectCursor, occurrence: int64): int64 =
-  ## Selects the 0-based occurrence while reusing the previous result.
+  ## Selects an in-range occurrence while reusing the previous result.
   ##
-  ## The fast path requires strictly increasing `occurrence` values. A first
-  ## lookup, or a non-increasing lookup, falls back to the regular select and
-  ## resets the cursor state. This keeps the API safe for general callers while
-  ## making sequential Wavelet traversal allocation-free and monotonic.
-  if not sbv.isCalced:
-    raise newException(ValueError, "rank dictionary is not built")
-
-  let total = if cursor.targetOne: sbv.totalOnes else: sbv.totalZeros
-  if occurrence < 0 or occurrence >= total:
-    return -1
-
+  ## `sbv` must be built and `occurrence` must be in range for the selected bit.
+  ## Non-increasing targets are supported by resetting through regular select.
   if not cursor.initialized or occurrence <= cursor.lastOccurrence:
-    result = if cursor.targetOne: sbv.select1(occurrence) else: sbv.select0(occurrence)
-    cursor.lastOccurrence = occurrence
-    cursor.lastPosition = result
-    cursor.initialized = result >= 0
-    return
+    return sbv.resetWithRegularSelect(cursor, occurrence)
 
   var remaining = occurrence - cursor.lastOccurrence
   var position = cursor.lastPosition + 1
   var wordIdx = int(position shr 6)
   var bitOffset = int(position and 63)
+  var scannedWords = 0
 
-  while wordIdx < sbv.dataWords:
+  while wordIdx < sbv.dataWords and scannedWords < SelectCursorMaxScanWords:
     var word = sbv.matchingWord(wordIdx, cursor.targetOne)
     if bitOffset > 0:
       word = word and (uint64.high shl bitOffset)
 
     let count = int64(countSetBits(word))
-    if remaining > count:
-      remaining -= count
-      inc wordIdx
-      bitOffset = 0
-      continue
+    if remaining <= count:
+      let bit = selectInWord64Pdep(word, int(remaining))
+      result = int64(wordIdx) * 64 + int64(bit)
+      cursor.lastOccurrence = occurrence
+      cursor.lastPosition = result
+      return
 
-    let bit = selectInWord64Pdep(word, int(remaining))
-    result = int64(wordIdx) * 64 + int64(bit)
-    cursor.lastOccurrence = occurrence
-    cursor.lastPosition = result
-    return
+    remaining -= count
+    inc wordIdx
+    bitOffset = 0
+    inc scannedWords
 
-  result = -1
+  # Sparse or widely separated targets are better served by the existing
+  # logarithmic select tree than by an unbounded forward scan.
+  result = sbv.resetWithRegularSelect(cursor, occurrence)
+
+func selectMonotonic*[S: SuccinctBitVector | SuccinctBitVectorView](
+    sbv: S, cursor: var BitVectorSelectCursor, occurrence: int64): int64 =
+  ## Safe monotonic select wrapper.
+  if not sbv.isCalced:
+    raise newException(ValueError, "rank dictionary is not built")
+  let total = if cursor.targetOne: sbv.totalOnes else: sbv.totalZeros
+  if occurrence < 0 or occurrence >= total:
+    return -1
+  result = sbv.selectMonotonicUnchecked(cursor, occurrence)
