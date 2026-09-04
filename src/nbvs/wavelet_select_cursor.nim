@@ -81,10 +81,11 @@ proc nextSelectUnchecked*[W: WaveletMatrix | WaveletMatrixView](
   var pos = cursor.intervalStart + cursor.nextOccurrence
   for level in countdown(wm.bitWidth - 1, 0):
     if cursor.targetOnes[level]:
-      pos = wm.levels[level].selectMonotonic(
+      pos = wm.levels[level].selectMonotonicUnchecked(
         cursor.levelCursors[level], pos - wm.zeroCounts[level])
     else:
-      pos = wm.levels[level].selectMonotonic(cursor.levelCursors[level], pos)
+      pos = wm.levels[level].selectMonotonicUnchecked(
+        cursor.levelCursors[level], pos)
   inc cursor.nextOccurrence
   result = pos
 
