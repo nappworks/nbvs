@@ -13,7 +13,8 @@ type
   MatchingRun* = tuple[left, right: int64]
     ## 条件に一致する要素が連続する、極大な半開物理位置区間 `[left, right)` です。
 
-  MatchingRunCandidate = tuple[
+  MatchingRunNode = tuple[
+    level: int,
     physicalLeft: int64,
     currentLeft: int64,
     currentRight: int64]
@@ -90,53 +91,82 @@ iterator matchingRunsItems*[W: WaveletMatrix | WaveletMatrixView](
   ## 左から右の順で列挙します。
   ##
   ## Wavelet の `select` は使用しません。既知の検索値のビットに従い、rank で
-  ## 区間全体の一致判定と次 level への写像を行いながら、上位 level から
-  ## 候補区間を絞り込みます。
+  ## 区間全体の一致判定と次 level への写像を行います。混在区間だけを同じ
+  ## level で二分し、全一致区間はそのまま次 level へ進める depth-first
+  ## traversal により、中間候補 sequence の再構築を避けます。
   if left < 0 or left > right or right > wm.n:
     raise newException(IndexDefect, "range out of bounds")
-  if left < right and wm.n > 0 and valueFits(wm.bitWidth, value) and
-      wm.bitWidth == 0:
-    yield (left: left, right: right)
-  elif left < right and wm.n > 0 and valueFits(wm.bitWidth, value):
-    var candidates: seq[MatchingRunCandidate] = @[
-      (physicalLeft: left, currentLeft: left, currentRight: right)]
+  var stack: seq[MatchingRunNode]
+  if left < right and wm.n > 0 and valueFits(wm.bitWidth, value):
+    stack.add (
+      level: 0,
+      physicalLeft: left,
+      currentLeft: left,
+      currentRight: right)
+  var pending = false
+  var pendingLeft = 0'i64
+  var pendingRight = 0'i64
 
-    for level in 0..<wm.bitWidth:
-      let shift = wm.bitWidth - level - 1
+  while stack.len > 0:
+    var node = stack.pop()
+    var survives = true
+
+    while node.level < wm.bitWidth:
+      let bits = wm.levels[node.level]
+      let shift = wm.bitWidth - node.level - 1
       let targetOne = ((value shr shift) and 1'u64) != 0
-      var next: seq[MatchingRunCandidate]
+      let leftOnes = bits.rank1Unchecked(node.currentLeft)
+      let rightOnes = bits.rank1Unchecked(node.currentRight)
+      let ones = rightOnes - leftOnes
+      let length = node.currentRight - node.currentLeft
+      let matching = if targetOne: ones else: length - ones
 
-      for candidate in candidates:
-        for run in wm.levels[level].bitRunsItems(targetOne,
-            candidate.currentLeft, candidate.currentRight):
-          let physicalLeft = candidate.physicalLeft +
-            (run.left - candidate.currentLeft)
-          let leftOnes = wm.levels[level].rank1Unchecked(run.left)
-          let rightOnes = wm.levels[level].rank1Unchecked(run.right)
-
-          var mappedLeft, mappedRight: int64
-          if targetOne:
-            mappedLeft = wm.zeroCounts[level] + leftOnes
-            mappedRight = wm.zeroCounts[level] + rightOnes
-          else:
-            mappedLeft = run.left - leftOnes
-            mappedRight = run.right - rightOnes
-
-          next.add (
-            physicalLeft: physicalLeft,
-            currentLeft: mappedLeft,
-            currentRight: mappedRight)
-
-      candidates = move(next)
-      if candidates.len == 0:
+      if matching == 0:
+        survives = false
         break
 
-    if candidates.len > 0:
-      for candidate in candidates:
-        yield (
-          left: candidate.physicalLeft,
-          right: candidate.physicalLeft +
-            (candidate.currentRight - candidate.currentLeft))
+      if matching != length:
+        let middle = node.currentLeft + (length shr 1)
+        let rightPhysicalLeft = node.physicalLeft +
+          (middle - node.currentLeft)
+
+        # LIFO のため右側を先に積み、元の物理位置順に探索します。
+        stack.add (
+          level: node.level,
+          physicalLeft: rightPhysicalLeft,
+          currentLeft: middle,
+          currentRight: node.currentRight)
+        stack.add (
+          level: node.level,
+          physicalLeft: node.physicalLeft,
+          currentLeft: node.currentLeft,
+          currentRight: middle)
+        survives = false
+        break
+
+      if targetOne:
+        node.currentLeft = wm.zeroCounts[node.level] + leftOnes
+        node.currentRight = wm.zeroCounts[node.level] + rightOnes
+      else:
+        node.currentLeft -= leftOnes
+        node.currentRight -= rightOnes
+      inc node.level
+
+    if survives:
+      let terminalLeft = node.physicalLeft
+      let terminalRight = node.physicalLeft +
+        (node.currentRight - node.currentLeft)
+      if pending and pendingRight == terminalLeft:
+        pendingRight = terminalRight
+      else:
+        if pending:
+          yield (left: pendingLeft, right: pendingRight)
+        pending = true
+        pendingLeft = terminalLeft
+        pendingRight = terminalRight
+
+  if pending:
+    yield (left: pendingLeft, right: pendingRight)
 
 iterator matchingRunsItems*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, value: uint64): MatchingRun =
