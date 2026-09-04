@@ -10,6 +10,7 @@ import ./twavelet_matrix
 import ./treversed_wavelet_matrix
 import ./twavelet_position_match
 import ./twavelet_select_cursor
+import ./twavelet_matching_runs
 import ./trun_length_bwt
 import ./test_fm_dictionary
 import ./test_fm_dictionary_view
