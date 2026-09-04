@@ -96,14 +96,13 @@ iterator matchingRunsItems*[W: WaveletMatrix | WaveletMatrixView](
   ## traversal により、中間候補 sequence の再構築を避けます。
   if left < 0 or left > right or right > wm.n:
     raise newException(IndexDefect, "range out of bounds")
-  if left >= right or wm.n == 0 or not valueFits(wm.bitWidth, value):
-    return
-  if wm.bitWidth == 0:
-    yield (left: left, right: right)
-    return
-
-  var stack: seq[MatchingRunNode] = @[
-    (level: 0, physicalLeft: left, currentLeft: left, currentRight: right)]
+  var stack: seq[MatchingRunNode]
+  if left < right and wm.n > 0 and valueFits(wm.bitWidth, value):
+    stack.add (
+      level: 0,
+      physicalLeft: left,
+      currentLeft: left,
+      currentRight: right)
   var pending = false
   var pendingLeft = 0'i64
   var pendingRight = 0'i64
