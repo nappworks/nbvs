@@ -12,6 +12,106 @@ AVX2 + BMI2 backend is available with `-d:nbvsSimd`.
 デフォルト実装はportable scalar backendを使います。`-d:nbvsSimd` を指定すると、
 x86/x86_64向けのAVX2 + BMI2 backendを利用できます。
 
+### API quick usage
+
+For the recently added run and repeated-select APIs, the main choices are:
+
+```nim
+import nbvs
+
+let wm = genWaveletMatrix(@[1'u64, 7, 7, 7, 1, 7, 7])
+
+# Stream contiguous physical ranges for one value.
+for run in wm.matchingRunsItems(7):
+  echo run.left, "..<", run.right
+
+# Or collect the ranges as a sequence.
+doAssert wm.matchingRuns(7) == @[
+  (left: 1'i64, right: 4'i64),
+  (left: 5'i64, right: 7'i64)]
+
+# Enumerate every matching physical position individually.
+var cursor = wm.initWaveletSelectCursor(7)
+while cursor.remaining > 0:
+  echo wm.nextSelect(cursor)
+```
+
+For bit vectors, `bitRunsItems` / `bitRuns` enumerate maximal `0` or `1` runs:
+
+```nim
+var bits = genSuccinctBitVector(8)
+for pos in [1'i64, 2, 3, 5, 6]:
+  bits[pos] = true
+bits.build()
+
+doAssert bits.bitRuns(true) == @[
+  (left: 1'i64, right: 4'i64),
+  (left: 5'i64, right: 7'i64)]
+```
+
+| Goal | Recommended API |
+| --- | --- |
+| Count occurrences | `rank` |
+| Get one arbitrary occurrence | `select` |
+| Enumerate every occurrence position | `WaveletSelectCursor` + `nextSelect` |
+| Stream contiguous matching ranges | `matchingRunsItems` |
+| Collect contiguous matching ranges | `matchingRuns` |
+| Enumerate bit runs | `bitRunsItems` / `bitRuns` |
+
+Advanced hot-path APIs such as `nextSelectUnchecked`, `selectPrepared`,
+`BitVectorSelectCursor`, `selectMonotonic`, and `selectMonotonicUnchecked` are
+documented in [docs/api_guide.md](docs/api_guide.md).
+
+### APIクイック利用例
+
+run列挙と同一値の repeated select では、主に次のAPIを使います。
+
+```nim
+import nbvs
+
+let wm = genWaveletMatrix(@[1'u64, 7, 7, 7, 1, 7, 7])
+
+# 1つの値に一致する連続物理区間をiteratorで取得します。
+for run in wm.matchingRunsItems(7):
+  echo run.left, "..<", run.right
+
+# sequenceとしてまとめて取得することもできます。
+doAssert wm.matchingRuns(7) == @[
+  (left: 1'i64, right: 4'i64),
+  (left: 5'i64, right: 7'i64)]
+
+# 一致する全物理positionを1件ずつ取得します。
+var cursor = wm.initWaveletSelectCursor(7)
+while cursor.remaining > 0:
+  echo wm.nextSelect(cursor)
+```
+
+BitVectorでは `bitRunsItems` / `bitRuns` で `0` または `1` の極大runを列挙できます。
+
+```nim
+var bits = genSuccinctBitVector(8)
+for pos in [1'i64, 2, 3, 5, 6]:
+  bits[pos] = true
+bits.build()
+
+doAssert bits.bitRuns(true) == @[
+  (left: 1'i64, right: 4'i64),
+  (left: 5'i64, right: 7'i64)]
+```
+
+| 目的 | 推奨API |
+| --- | --- |
+| occurrence数を数える | `rank` |
+| 任意の1 occurrenceを取得する | `select` |
+| 全occurrence positionを列挙する | `WaveletSelectCursor` + `nextSelect` |
+| 一致する連続物理区間をiteratorで列挙する | `matchingRunsItems` |
+| 一致する連続物理区間をsequenceで取得する | `matchingRuns` |
+| BitVectorのrunを列挙する | `bitRunsItems` / `bitRuns` |
+
+`nextSelectUnchecked`、`selectPrepared`、`BitVectorSelectCursor`、
+`selectMonotonic`、`selectMonotonicUnchecked` などのadvanced hot-path APIは
+[docs/api_guide.md](docs/api_guide.md) にまとめています。
+
 ---
 
 ## English
@@ -321,11 +421,13 @@ require `0 <= position < n`. The same APIs are available on `WaveletMatrixView`.
 `matchingRunsItems(value, left, right)` enumerates maximal matching physical
 intervals in ascending position order. `matchingRuns` collects them into a
 sequence; `collectMatchingRuns` is an alias with the same ordering. All three
-support whole-sequence overloads and `WaveletMatrixView`. Terminal-to-root
-interval lifting restores contiguous groups using endpoint selects, with only
-a query-local DFS stack and no persistent auxiliary index. Long runs benefit;
-short runs can be slower than sequential selection. See the
-[PR #16 measurements](benchmarks/results/wm_matching_runs_pr16_validation.md).
+support whole-sequence overloads and `WaveletMatrixView`. A bounded probe (up to
+96 endpoint-select checks) chooses sequential selection for fragmented runs or
+terminal-to-root interval lifting when it finds a physical span of at least 32
+elements. Both paths use only query-local state, with no persistent auxiliary
+index. The heuristic preserves results and ordering but does not guarantee the
+fastest path for every input. See the
+[PR #17 measurements](benchmarks/results/wm_matching_runs_pr17_validation.md).
 
 For repeated selection of the same value, `WaveletSelectCursor` computes the
 value interval once and reuses it for each occurrence. The cursor does not own
@@ -863,10 +965,11 @@ doAssert wm.valueInRangeAt(4, 2, 8) # 値のinclusive range
 `matchingRunsItems(value, left, right)`は一致する極大な物理位置区間を位置の
 昇順で列挙します。`matchingRuns`はsequenceとして収集し、`collectMatchingRuns`は
 同じ順序を保証する別名です。いずれも列全体のoverloadと`WaveletMatrixView`に
-対応します。terminal-to-root interval liftingにより、両端のselectで連続区間を
-復元します。query内のDFS stackのみを使い、永続補助indexは追加しません。
-長いrunでは有利ですが、短いrunでは逐次selectより遅くなることがあります。
-[PR #16の測定結果](benchmarks/results/wm_matching_runs_pr16_validation.md)を参照してください。
+対応します。最大96回の両端select判定によるprobeで、細分化されたrunでは逐次select、
+32要素以上の物理区間が見つかる場合はterminal-to-root interval liftingを選択します。
+両経路ともquery内の一時状態のみを使い、永続補助indexは追加しません。
+このheuristicは結果と順序を維持しますが、すべての入力で最速の経路を保証しません。
+[PR #17の測定結果](benchmarks/results/wm_matching_runs_pr17_validation.md)を参照してください。
 
 同じ値を繰り返し選択する場合、`WaveletSelectCursor`は値区間を1回だけ計算し、
 各出現位置で再利用します。Cursorはmatrixを所有しないため、使用中は
