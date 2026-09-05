@@ -1,0 +1,5 @@
+rows,cardinality,occurrences,repeats,normal_select_p50_ns,prepared_select_p50_ns,sequential_cursor_p50_ns,prepared_vs_normal_speedup,cursor_vs_normal_speedup,cursor_vs_prepared_speedup,normal_ns_per_occurrence,prepared_ns_per_occurrence,cursor_ns_per_occurrence
+1000000,4,250000,21,26656577,19703310,7794937,1.353,3.420,2.528,106.626,78.813,31.180
+1000000,100,10000,21,5017510,3424280,1021483,1.465,4.912,3.352,501.751,342.428,102.148
+1000000,1000,1000,21,663754,503141,357429,1.319,1.857,1.408,663.754,503.141,357.429
+1000000,10000,100,21,85907,61205,62205,1.404,1.381,0.984,859.070,612.050,622.050
