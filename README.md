@@ -12,6 +12,106 @@ AVX2 + BMI2 backend is available with `-d:nbvsSimd`.
 デフォルト実装はportable scalar backendを使います。`-d:nbvsSimd` を指定すると、
 x86/x86_64向けのAVX2 + BMI2 backendを利用できます。
 
+### API quick usage
+
+For the recently added run and repeated-select APIs, the main choices are:
+
+```nim
+import nbvs
+
+let wm = genWaveletMatrix(@[1'u64, 7, 7, 7, 1, 7, 7])
+
+# Stream contiguous physical ranges for one value.
+for run in wm.matchingRunsItems(7):
+  echo run.left, "..<", run.right
+
+# Or collect the ranges as a sequence.
+doAssert wm.matchingRuns(7) == @[
+  (left: 1'i64, right: 4'i64),
+  (left: 5'i64, right: 7'i64)]
+
+# Enumerate every matching physical position individually.
+var cursor = wm.initWaveletSelectCursor(7)
+while cursor.remaining > 0:
+  echo wm.nextSelect(cursor)
+```
+
+For bit vectors, `bitRunsItems` / `bitRuns` enumerate maximal `0` or `1` runs:
+
+```nim
+var bits = genSuccinctBitVector(8)
+for pos in [1'i64, 2, 3, 5, 6]:
+  bits[pos] = true
+bits.build()
+
+doAssert bits.bitRuns(true) == @[
+  (left: 1'i64, right: 4'i64),
+  (left: 5'i64, right: 7'i64)]
+```
+
+| Goal | Recommended API |
+| --- | --- |
+| Count occurrences | `rank` |
+| Get one arbitrary occurrence | `select` |
+| Enumerate every occurrence position | `WaveletSelectCursor` + `nextSelect` |
+| Stream contiguous matching ranges | `matchingRunsItems` |
+| Collect contiguous matching ranges | `matchingRuns` |
+| Enumerate bit runs | `bitRunsItems` / `bitRuns` |
+
+Advanced hot-path APIs such as `nextSelectUnchecked`, `selectPrepared`,
+`BitVectorSelectCursor`, `selectMonotonic`, and `selectMonotonicUnchecked` are
+documented in [docs/api_guide.md](docs/api_guide.md).
+
+### APIクイック利用例
+
+run列挙と同一値の repeated select では、主に次のAPIを使います。
+
+```nim
+import nbvs
+
+let wm = genWaveletMatrix(@[1'u64, 7, 7, 7, 1, 7, 7])
+
+# 1つの値に一致する連続物理区間をiteratorで取得します。
+for run in wm.matchingRunsItems(7):
+  echo run.left, "..<", run.right
+
+# sequenceとしてまとめて取得することもできます。
+doAssert wm.matchingRuns(7) == @[
+  (left: 1'i64, right: 4'i64),
+  (left: 5'i64, right: 7'i64)]
+
+# 一致する全物理positionを1件ずつ取得します。
+var cursor = wm.initWaveletSelectCursor(7)
+while cursor.remaining > 0:
+  echo wm.nextSelect(cursor)
+```
+
+BitVectorでは `bitRunsItems` / `bitRuns` で `0` または `1` の極大runを列挙できます。
+
+```nim
+var bits = genSuccinctBitVector(8)
+for pos in [1'i64, 2, 3, 5, 6]:
+  bits[pos] = true
+bits.build()
+
+doAssert bits.bitRuns(true) == @[
+  (left: 1'i64, right: 4'i64),
+  (left: 5'i64, right: 7'i64)]
+```
+
+| 目的 | 推奨API |
+| --- | --- |
+| occurrence数を数える | `rank` |
+| 任意の1 occurrenceを取得する | `select` |
+| 全occurrence positionを列挙する | `WaveletSelectCursor` + `nextSelect` |
+| 一致する連続物理区間をiteratorで列挙する | `matchingRunsItems` |
+| 一致する連続物理区間をsequenceで取得する | `matchingRuns` |
+| BitVectorのrunを列挙する | `bitRunsItems` / `bitRuns` |
+
+`nextSelectUnchecked`、`selectPrepared`、`BitVectorSelectCursor`、
+`selectMonotonic`、`selectMonotonicUnchecked` などのadvanced hot-path APIは
+[docs/api_guide.md](docs/api_guide.md) にまとめています。
+
 ---
 
 ## English
