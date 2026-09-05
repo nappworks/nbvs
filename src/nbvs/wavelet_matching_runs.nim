@@ -7,6 +7,7 @@
 ## 次の Wavelet level 上の区間へ写像します。
 
 import wavelet_matrix
+import wavelet_select_cursor
 import succinct_bit_vector
 
 type
@@ -175,6 +176,31 @@ iterator matchingRunsItems*[W: WaveletMatrix | WaveletMatrixView](
   for run in wm.matchingRunsItems(value, 0, wm.n):
     yield run
 
+iterator matchingRunsCursorItems*[W: WaveletMatrix | WaveletMatrixView](
+    wm: W, value: uint64): MatchingRun =
+  ## Sequential Wavelet select cursor を使い、`value` の全出現位置を昇順に
+  ## 復元しながら隣接位置を極大runへまとめます。
+  ##
+  ## `matchingRunsItems` と同じ結果を返しますが、アルゴリズム比較用に独立した
+  ## API としています。処理量は一致件数を K とすると O(K * bitWidth) です。
+  var cursor = wm.initWaveletSelectCursor(value)
+  var hasRun = false
+  var runLeft = 0'i64
+  var previous = -2'i64
+
+  while cursor.remaining > 0:
+    let position = wm.nextSelectUnchecked(cursor)
+    if not hasRun:
+      hasRun = true
+      runLeft = position
+    elif position != previous + 1:
+      yield (left: runLeft, right: previous + 1)
+      runLeft = position
+    previous = position
+
+  if hasRun:
+    yield (left: runLeft, right: previous + 1)
+
 func matchingRuns*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, value: uint64, left, right: int64): seq[MatchingRun] =
   ## `matchingRunsItems(value, left, right)` の結果を sequence として返します。
@@ -186,6 +212,12 @@ func matchingRuns*[W: WaveletMatrix | WaveletMatrixView](
   ## Wavelet Matrix 全体の `matchingRunsItems(value)` の結果を sequence として
   ## 返します。
   wm.matchingRuns(value, 0, wm.n)
+
+func matchingRunsCursor*[W: WaveletMatrix | WaveletMatrixView](
+    wm: W, value: uint64): seq[MatchingRun] =
+  ## `matchingRunsCursorItems(value)` の結果を sequence として返します。
+  for run in wm.matchingRunsCursorItems(value):
+    result.add run
 
 func collectMatchingRuns*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, value: uint64, left, right: int64): seq[MatchingRun] =
