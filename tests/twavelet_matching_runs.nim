@@ -71,6 +71,8 @@ block edgeCases:
   let zeros = genWaveletMatrix(@[0'u64, 0, 0, 0])
   doAssert zeros.matchingRuns(0) == @[
     (left: 0'i64, right: 4'i64)]
+  doAssert zeros.matchingRuns(0, 1, 3) == @[
+    (left: 1'i64, right: 3'i64)]
   doAssert zeros.matchingRuns(1).len == 0
 
   let wm = genWaveletMatrix(@[1'u64, 2, 3])
@@ -84,6 +86,47 @@ block prefixSplits:
   let xs = @[7'u64, 6, 7, 7, 4, 7, 6, 7]
   let wm = genWaveletMatrix(xs, 3)
   doAssert wm.matchingRuns(7) == naiveRuns(xs, 7, 0, xs.len)
+
+block explicitBitWidths:
+  # 自動推定では全ゼロ入力も1bitになるため、0bitを明示する。
+  let zeros = genWaveletMatrix(@[0'u64, 0, 0, 0], 0)
+  doAssert zeros.bitWidth == 0
+  doAssert zeros.matchingRuns(0, 1, 3) == @[(left: 1'i64, right: 3'i64)]
+  doAssert zeros.matchingRuns(1).len == 0
+  let view = initWaveletMatrixView(4, 0, nil, 0, nil, 0)
+  doAssert view.matchingRuns(0, 1, 3) == zeros.matchingRuns(0, 1, 3)
+  doAssert view.matchingRuns(1).len == 0
+
+  let xs = @[uint64.high, uint64.high, 0'u64, 1'u64 shl 63,
+    uint64.high, uint64.high]
+  let wm = genWaveletMatrix(xs, 64)
+  for value in [0'u64, 1'u64 shl 63, uint64.high]:
+    for left in 0..xs.len:
+      for right in left..xs.len:
+        doAssert wm.matchingRuns(value, int64(left), int64(right)) ==
+          naiveRuns(xs, value, left, right)
+  for run in wm.matchingRunsItems(uint64.high):
+    doAssert run == (left: 0'i64, right: 2'i64)
+    break
+
+block alternatingRuns:
+  var xs = newSeq[uint64](257)
+  for i in 0..<xs.len:
+    xs[i] = if (i and 1) == 0: 7'u64 else: uint64(i mod 7)
+  let wm = genWaveletMatrix(xs, 3)
+  doAssert wm.matchingRuns(7) == naiveRuns(xs, 7, 0, xs.len)
+  doAssert wm.matchingRuns(7, 31, 224) == naiveRuns(xs, 7, 31, 224)
+
+block longPhysicalRuns:
+  var xs = newSeq[uint64](4096)
+  for i in 0..<xs.len:
+    if i in 127..1022 or i in 2049..3900:
+      xs[i] = 7
+    else:
+      xs[i] = uint64(i mod 7)
+  let wm = genWaveletMatrix(xs, 3)
+  doAssert wm.matchingRuns(7) == naiveRuns(xs, 7, 0, xs.len)
+  doAssert wm.matchingRuns(7, 512, 3072) == naiveRuns(xs, 7, 512, 3072)
 
 block wordBoundaries:
   var xs = newSeq[uint64](140)

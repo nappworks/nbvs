@@ -318,6 +318,15 @@ an order, while the variants without `collect` guarantee ascending value order.
 `matchesAtUnchecked` and `valueInRangeAtUnchecked` omit position validation and
 require `0 <= position < n`. The same APIs are available on `WaveletMatrixView`.
 
+`matchingRunsItems(value, left, right)` enumerates maximal matching physical
+intervals in ascending position order. `matchingRuns` collects them into a
+sequence; `collectMatchingRuns` is an alias with the same ordering. All three
+support whole-sequence overloads and `WaveletMatrixView`. Terminal-to-root
+interval lifting restores contiguous groups using endpoint selects, with only
+a query-local DFS stack and no persistent auxiliary index. Long runs benefit;
+short runs can be slower than sequential selection. See the
+[PR #16 measurements](benchmarks/results/wm_matching_runs_pr16_validation.md).
+
 For repeated selection of the same value, `WaveletSelectCursor` computes the
 value interval once and reuses it for each occurrence. The cursor does not own
 the matrix; keep the `WaveletMatrix` or backing storage of a
@@ -850,6 +859,14 @@ doAssert wm.valueInRangeAt(4, 2, 8) # 値のinclusive range
 `matchesAtUnchecked` と `valueInRangeAtUnchecked` は位置検証を省くため、
 `0 <= position < n` を呼び出し側が保証します。同じAPIを
 `WaveletMatrixView`でも利用できます。
+
+`matchingRunsItems(value, left, right)`は一致する極大な物理位置区間を位置の
+昇順で列挙します。`matchingRuns`はsequenceとして収集し、`collectMatchingRuns`は
+同じ順序を保証する別名です。いずれも列全体のoverloadと`WaveletMatrixView`に
+対応します。terminal-to-root interval liftingにより、両端のselectで連続区間を
+復元します。query内のDFS stackのみを使い、永続補助indexは追加しません。
+長いrunでは有利ですが、短いrunでは逐次selectより遅くなることがあります。
+[PR #16の測定結果](benchmarks/results/wm_matching_runs_pr16_validation.md)を参照してください。
 
 同じ値を繰り返し選択する場合、`WaveletSelectCursor`は値区間を1回だけ計算し、
 各出現位置で再利用します。Cursorはmatrixを所有しないため、使用中は

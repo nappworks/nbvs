@@ -1,6 +1,6 @@
 import std/[memfiles, os, strutils, tempfiles]
 import nbvs/[bit_vector, packed_array, succinct_bit_vector, elias_fano,
-  wavelet_matrix, reversed_wavelet_matrix]
+  wavelet_matrix, reversed_wavelet_matrix, wavelet_matching_runs]
 import ./test_common
 
 proc storageForSuccinct(bitLength: int64): seq[uint64] =
@@ -125,6 +125,14 @@ block waveletViewsCompatibility:
   doAssert view.rank(5, 0, view.n) == heap.rank(5, 0, heap.n)
   doAssert view.quantile(0, view.n, 3) == heap.quantile(0, heap.n, 3)
   doAssert view.collectValueCounts == heap.collectValueCounts
+
+  for value in [0'u64, 1, 5, 7, 9, uint64.high]:
+    for left in 0'i64..heap.n:
+      for right in left..heap.n:
+        doAssert view.matchingRuns(value, left, right) ==
+          heap.matchingRuns(value, left, right)
+        doAssert view.collectMatchingRuns(value, left, right) ==
+          heap.matchingRuns(value, left, right)
 
   let reversedHeap = genReversedWaveletMatrix(values)
   for level in 0..<reversedHeap.bitWidth:

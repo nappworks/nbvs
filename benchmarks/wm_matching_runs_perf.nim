@@ -5,7 +5,6 @@ type
   Sample = object
     iteratorNs: int64
     seqNs: int64
-    regularSelectNs: int64
     cursorSelectNs: int64
 
 proc envInt(name: string, fallback: int): int =
@@ -25,20 +24,6 @@ proc consumeMatchingRunsSeq(wm: WaveletMatrix, target: uint64): int64 =
   for run in wm.matchingRuns(target):
     result = result xor run.left xor run.right
 
-proc consumeRegularSelect(wm: WaveletMatrix, target: uint64,
-    occurrences: int64): int64 =
-  var previous = -2'i64
-  var runLeft = -1'i64
-  for occurrence in 0'i64..<occurrences:
-    let position = wm.select(target, occurrence)
-    if position != previous + 1:
-      if runLeft >= 0:
-        result = result xor runLeft xor (previous + 1)
-      runLeft = position
-    previous = position
-  if runLeft >= 0:
-    result = result xor runLeft xor (previous + 1)
-
 proc consumeCursorSelect(wm: WaveletMatrix, target: uint64): int64 =
   var cursor = wm.initWaveletSelectCursor(target)
   var previous = -2'i64
@@ -54,9 +39,7 @@ proc consumeCursorSelect(wm: WaveletMatrix, target: uint64): int64 =
     result = result xor runLeft xor (previous + 1)
 
 proc measure(wm: WaveletMatrix, target: uint64, repeats: int): Sample =
-  let occurrences = wm.rank(target, 0, wm.n)
-  var iteratorSamples, seqSamples: seq[int64]
-  var regularSelectSamples, cursorSelectSamples: seq[int64]
+  var iteratorSamples, seqSamples, cursorSelectSamples: seq[int64]
   var sink = 0'i64
 
   for _ in 0..<repeats:
@@ -69,10 +52,6 @@ proc measure(wm: WaveletMatrix, target: uint64, repeats: int): Sample =
     seqSamples.add (getMonoTime() - started).inNanoseconds
 
     started = getMonoTime()
-    sink = sink xor consumeRegularSelect(wm, target, occurrences)
-    regularSelectSamples.add (getMonoTime() - started).inNanoseconds
-
-    started = getMonoTime()
     sink = sink xor consumeCursorSelect(wm, target)
     cursorSelectSamples.add (getMonoTime() - started).inNanoseconds
 
@@ -81,7 +60,6 @@ proc measure(wm: WaveletMatrix, target: uint64, repeats: int): Sample =
 
   result.iteratorNs = percentile(iteratorSamples, 0.50)
   result.seqNs = percentile(seqSamples, 0.50)
-  result.regularSelectNs = percentile(regularSelectSamples, 0.50)
   result.cursorSelectNs = percentile(cursorSelectSamples, 0.50)
 
 proc makeValues(rows, runLength: int, target: uint64): seq[uint64] =
@@ -101,9 +79,9 @@ proc main() =
   let repeats = max(5, envInt("NBVS_MATCHING_RUNS_REPEATS", 21))
   let target = 7'u64
 
-  echo "rows,run_length,occurrences,runs,repeats,matching_runs_items_p50_ns," &
-    "matching_runs_seq_p50_ns,regular_select_p50_ns,cursor_select_p50_ns," &
-    "matching_items_vs_regular_speedup,matching_items_vs_cursor_speedup"
+  echo "rows,run_length,occurrences,runs,repeats,terminal_lifting_items_p50_ns," &
+    "terminal_lifting_seq_p50_ns,sequential_cursor_p50_ns," &
+    "lifting_vs_cursor_speedup"
 
   for runLength in [1, 4, 16, 64, 256, 1024, 4096]:
     let values = makeValues(rows, runLength, target)
@@ -112,14 +90,12 @@ proc main() =
     let runCount = wm.matchingRuns(target).len
     let sample = measure(wm, target, repeats)
 
-    let vsRegular = if sample.iteratorNs == 0: 0.0 else:
-      float(sample.regularSelectNs) / float(sample.iteratorNs)
     let vsCursor = if sample.iteratorNs == 0: 0.0 else:
       float(sample.cursorSelectNs) / float(sample.iteratorNs)
 
     echo &"{rows},{runLength},{occurrences},{runCount},{repeats}," &
-      &"{sample.iteratorNs},{sample.seqNs},{sample.regularSelectNs}," &
-      &"{sample.cursorSelectNs},{vsRegular:.3f},{vsCursor:.3f}"
+      &"{sample.iteratorNs},{sample.seqNs},{sample.cursorSelectNs}," &
+      &"{vsCursor:.3f}"
 
 when isMainModule:
   main()
