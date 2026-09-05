@@ -1,10 +1,7 @@
 ## Wavelet Matrix の等値条件に一致する物理位置の連続区間を列挙します。
 ##
-## `matchingRunsItems` は、既知の検索値を最上位ビット側の Wavelet level から
-## 下位へ向かって辿ります。各 level では rank を使い、対象ビットを含まない
-## 区間を除外し、全ビットが一致する区間は位置を個別列挙せずそのまま採用します。
-## ビットが混在する区間だけを分割し、採用した区間は等値 rank と同じ変換で
-## 次の Wavelet level 上の区間へ写像します。
+## Wavelet Matrix の `matchingRunsItems` は `WaveletSelectCursor` を使って一致位置を
+## 昇順に復元し、隣接する位置を極大な物理runへまとめます。
 
 import wavelet_matrix
 import wavelet_select_cursor
@@ -13,20 +10,6 @@ import succinct_bit_vector
 type
   MatchingRun* = tuple[left, right: int64]
     ## 条件に一致する要素が連続する、極大な半開物理位置区間 `[left, right)` です。
-
-  MatchingRunNode = tuple[
-    level: int,
-    physicalLeft: int64,
-    currentLeft: int64,
-    currentRight: int64]
-
-func valueFits(bitWidth: int, value: uint64): bool {.inline.} =
-  if bitWidth == 0:
-    value == 0
-  elif bitWidth == 64:
-    true
-  else:
-    (value shr bitWidth) == 0
 
 iterator bitRunsItems*[B: SuccinctBitVector | SuccinctBitVectorView](
     bits: B, targetOne: bool, left, right: int64): MatchingRun =
@@ -62,7 +45,6 @@ iterator bitRunsItems*[B: SuccinctBitVector | SuccinctBitVectorView](
         continue
 
       let middle = node.left + (length shr 1)
-      # LIFO のため右側を先に積み、一致区間を左から右の順で処理します。
       stack.add (left: middle, right: node.right)
       stack.add (left: node.left, right: middle)
 
@@ -91,83 +73,35 @@ iterator matchingRunsItems*[W: WaveletMatrix | WaveletMatrixView](
   ## `[left, right)` 内で `value` と等しい要素が連続する極大な物理位置区間を
   ## 左から右の順で列挙します。
   ##
-  ## Wavelet の `select` は使用しません。既知の検索値のビットに従い、rank で
-  ## 区間全体の一致判定と次 level への写像を行います。混在区間だけを同じ
-  ## level で二分し、全一致区間はそのまま次 level へ進める depth-first
-  ## traversal により、中間候補 sequence の再構築を避けます。
+  ## #14 の sequential select cursor を使い、一致する occurrence だけを昇順に
+  ## 復元します。範囲指定時は `rank` で `[left, right)` に対応する occurrence
+  ## 範囲を先に求めるため、範囲外の occurrence は列挙しません。
   if left < 0 or left > right or right > wm.n:
     raise newException(IndexDefect, "range out of bounds")
-  var stack: seq[MatchingRunNode]
-  if left < right and wm.n > 0 and valueFits(wm.bitWidth, value):
-    stack.add (
-      level: 0,
-      physicalLeft: left,
-      currentLeft: left,
-      currentRight: right)
-  var pending = false
-  var pendingLeft = 0'i64
-  var pendingRight = 0'i64
 
-  while stack.len > 0:
-    var node = stack.pop()
-    var survives = true
+  if left < right and wm.n > 0:
+    var cursor = wm.initWaveletSelectCursor(value)
+    if cursor.count > 0:
+      let firstOccurrence = wm.rank(value, 0, left)
+      let endOccurrence = wm.rank(value, 0, right)
+      cursor.nextOccurrence = firstOccurrence
 
-    while node.level < wm.bitWidth:
-      let bits = wm.levels[node.level]
-      let shift = wm.bitWidth - node.level - 1
-      let targetOne = ((value shr shift) and 1'u64) != 0
-      let leftOnes = bits.rank1Unchecked(node.currentLeft)
-      let rightOnes = bits.rank1Unchecked(node.currentRight)
-      let ones = rightOnes - leftOnes
-      let length = node.currentRight - node.currentLeft
-      let matching = if targetOne: ones else: length - ones
+      var hasRun = false
+      var runLeft = 0'i64
+      var previous = -2'i64
 
-      if matching == 0:
-        survives = false
-        break
+      while cursor.nextOccurrence < endOccurrence:
+        let position = wm.nextSelectUnchecked(cursor)
+        if not hasRun:
+          hasRun = true
+          runLeft = position
+        elif position != previous + 1:
+          yield (left: runLeft, right: previous + 1)
+          runLeft = position
+        previous = position
 
-      if matching != length:
-        let middle = node.currentLeft + (length shr 1)
-        let rightPhysicalLeft = node.physicalLeft +
-          (middle - node.currentLeft)
-
-        # LIFO のため右側を先に積み、元の物理位置順に探索します。
-        stack.add (
-          level: node.level,
-          physicalLeft: rightPhysicalLeft,
-          currentLeft: middle,
-          currentRight: node.currentRight)
-        stack.add (
-          level: node.level,
-          physicalLeft: node.physicalLeft,
-          currentLeft: node.currentLeft,
-          currentRight: middle)
-        survives = false
-        break
-
-      if targetOne:
-        node.currentLeft = wm.zeroCounts[node.level] + leftOnes
-        node.currentRight = wm.zeroCounts[node.level] + rightOnes
-      else:
-        node.currentLeft -= leftOnes
-        node.currentRight -= rightOnes
-      inc node.level
-
-    if survives:
-      let terminalLeft = node.physicalLeft
-      let terminalRight = node.physicalLeft +
-        (node.currentRight - node.currentLeft)
-      if pending and pendingRight == terminalLeft:
-        pendingRight = terminalRight
-      else:
-        if pending:
-          yield (left: pendingLeft, right: pendingRight)
-        pending = true
-        pendingLeft = terminalLeft
-        pendingRight = terminalRight
-
-  if pending:
-    yield (left: pendingLeft, right: pendingRight)
+      if hasRun:
+        yield (left: runLeft, right: previous + 1)
 
 iterator matchingRunsItems*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, value: uint64): MatchingRun =
@@ -175,31 +109,6 @@ iterator matchingRunsItems*[W: WaveletMatrix | WaveletMatrixView](
   ## 列挙します。
   for run in wm.matchingRunsItems(value, 0, wm.n):
     yield run
-
-iterator matchingRunsCursorItems*[W: WaveletMatrix | WaveletMatrixView](
-    wm: W, value: uint64): MatchingRun =
-  ## Sequential Wavelet select cursor を使い、`value` の全出現位置を昇順に
-  ## 復元しながら隣接位置を極大runへまとめます。
-  ##
-  ## `matchingRunsItems` と同じ結果を返しますが、アルゴリズム比較用に独立した
-  ## API としています。処理量は一致件数を K とすると O(K * bitWidth) です。
-  var cursor = wm.initWaveletSelectCursor(value)
-  var hasRun = false
-  var runLeft = 0'i64
-  var previous = -2'i64
-
-  while cursor.remaining > 0:
-    let position = wm.nextSelectUnchecked(cursor)
-    if not hasRun:
-      hasRun = true
-      runLeft = position
-    elif position != previous + 1:
-      yield (left: runLeft, right: previous + 1)
-      runLeft = position
-    previous = position
-
-  if hasRun:
-    yield (left: runLeft, right: previous + 1)
 
 func matchingRuns*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, value: uint64, left, right: int64): seq[MatchingRun] =
@@ -212,12 +121,6 @@ func matchingRuns*[W: WaveletMatrix | WaveletMatrixView](
   ## Wavelet Matrix 全体の `matchingRunsItems(value)` の結果を sequence として
   ## 返します。
   wm.matchingRuns(value, 0, wm.n)
-
-func matchingRunsCursor*[W: WaveletMatrix | WaveletMatrixView](
-    wm: W, value: uint64): seq[MatchingRun] =
-  ## `matchingRunsCursorItems(value)` の結果を sequence として返します。
-  for run in wm.matchingRunsCursorItems(value):
-    result.add run
 
 func collectMatchingRuns*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, value: uint64, left, right: int64): seq[MatchingRun] =
