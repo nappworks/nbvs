@@ -94,6 +94,7 @@ block wordBoundaries:
       xs[i] = uint64(i mod 5)
   let wm = genWaveletMatrix(xs)
   doAssert wm.matchingRuns(7) == naiveRuns(xs, 7, 0, xs.len)
+  doAssert wm.matchingRuns(7, 63, 131) == naiveRuns(xs, 7, 63, 131)
 
 block randomRuns:
   var rng = initRand(0x52554e53)

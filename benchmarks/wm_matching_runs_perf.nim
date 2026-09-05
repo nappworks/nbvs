@@ -44,7 +44,7 @@ proc consumeCursorSelect(wm: WaveletMatrix, target: uint64): int64 =
   var previous = -2'i64
   var runLeft = -1'i64
   while cursor.remaining > 0:
-    let position = wm.nextSelect(cursor)
+    let position = wm.nextSelectUnchecked(cursor)
     if position != previous + 1:
       if runLeft >= 0:
         result = result xor runLeft xor (previous + 1)
@@ -101,10 +101,9 @@ proc main() =
   let repeats = max(5, envInt("NBVS_MATCHING_RUNS_REPEATS", 21))
   let target = 7'u64
 
-  echo "rows,run_length,occurrences,runs,repeats,iterator_p50_ns,seq_p50_ns," &
-    "regular_select_p50_ns,cursor_select_p50_ns," &
-    "iterator_vs_regular_speedup,iterator_vs_cursor_speedup," &
-    "seq_vs_regular_speedup,seq_vs_cursor_speedup"
+  echo "rows,run_length,occurrences,runs,repeats,matching_runs_items_p50_ns," &
+    "matching_runs_seq_p50_ns,regular_select_p50_ns,cursor_select_p50_ns," &
+    "matching_items_vs_regular_speedup,matching_items_vs_cursor_speedup"
 
   for runLength in [1, 4, 16, 64, 256, 1024, 4096]:
     let values = makeValues(rows, runLength, target)
@@ -113,19 +112,14 @@ proc main() =
     let runCount = wm.matchingRuns(target).len
     let sample = measure(wm, target, repeats)
 
-    let iteratorRegular = if sample.iteratorNs == 0: 0.0 else:
+    let vsRegular = if sample.iteratorNs == 0: 0.0 else:
       float(sample.regularSelectNs) / float(sample.iteratorNs)
-    let iteratorCursor = if sample.iteratorNs == 0: 0.0 else:
+    let vsCursor = if sample.iteratorNs == 0: 0.0 else:
       float(sample.cursorSelectNs) / float(sample.iteratorNs)
-    let seqRegular = if sample.seqNs == 0: 0.0 else:
-      float(sample.regularSelectNs) / float(sample.seqNs)
-    let seqCursor = if sample.seqNs == 0: 0.0 else:
-      float(sample.cursorSelectNs) / float(sample.seqNs)
 
     echo &"{rows},{runLength},{occurrences},{runCount},{repeats}," &
       &"{sample.iteratorNs},{sample.seqNs},{sample.regularSelectNs}," &
-      &"{sample.cursorSelectNs},{iteratorRegular:.3f},{iteratorCursor:.3f}," &
-      &"{seqRegular:.3f},{seqCursor:.3f}"
+      &"{sample.cursorSelectNs},{vsRegular:.3f},{vsCursor:.3f}"
 
 when isMainModule:
   main()
