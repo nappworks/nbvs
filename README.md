@@ -321,11 +321,13 @@ require `0 <= position < n`. The same APIs are available on `WaveletMatrixView`.
 `matchingRunsItems(value, left, right)` enumerates maximal matching physical
 intervals in ascending position order. `matchingRuns` collects them into a
 sequence; `collectMatchingRuns` is an alias with the same ordering. All three
-support whole-sequence overloads and `WaveletMatrixView`. Terminal-to-root
-interval lifting restores contiguous groups using endpoint selects, with only
-a query-local DFS stack and no persistent auxiliary index. Long runs benefit;
-short runs can be slower than sequential selection. See the
-[PR #16 measurements](benchmarks/results/wm_matching_runs_pr16_validation.md).
+support whole-sequence overloads and `WaveletMatrixView`. A bounded probe (up to
+96 endpoint-select checks) chooses sequential selection for fragmented runs or
+terminal-to-root interval lifting when it finds a physical span of at least 32
+elements. Both paths use only query-local state, with no persistent auxiliary
+index. The heuristic preserves results and ordering but does not guarantee the
+fastest path for every input. See the
+[PR #17 measurements](benchmarks/results/wm_matching_runs_pr17_validation.md).
 
 For repeated selection of the same value, `WaveletSelectCursor` computes the
 value interval once and reuses it for each occurrence. The cursor does not own
@@ -863,10 +865,11 @@ doAssert wm.valueInRangeAt(4, 2, 8) # 値のinclusive range
 `matchingRunsItems(value, left, right)`は一致する極大な物理位置区間を位置の
 昇順で列挙します。`matchingRuns`はsequenceとして収集し、`collectMatchingRuns`は
 同じ順序を保証する別名です。いずれも列全体のoverloadと`WaveletMatrixView`に
-対応します。terminal-to-root interval liftingにより、両端のselectで連続区間を
-復元します。query内のDFS stackのみを使い、永続補助indexは追加しません。
-長いrunでは有利ですが、短いrunでは逐次selectより遅くなることがあります。
-[PR #16の測定結果](benchmarks/results/wm_matching_runs_pr16_validation.md)を参照してください。
+対応します。最大96回の両端select判定によるprobeで、細分化されたrunでは逐次select、
+32要素以上の物理区間が見つかる場合はterminal-to-root interval liftingを選択します。
+両経路ともquery内の一時状態のみを使い、永続補助indexは追加しません。
+このheuristicは結果と順序を維持しますが、すべての入力で最速の経路を保証しません。
+[PR #17の測定結果](benchmarks/results/wm_matching_runs_pr17_validation.md)を参照してください。
 
 同じ値を繰り返し選択する場合、`WaveletSelectCursor`は値区間を1回だけ計算し、
 各出現位置で再利用します。Cursorはmatrixを所有しないため、使用中は

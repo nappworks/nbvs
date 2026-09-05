@@ -157,3 +157,45 @@ block randomRuns:
 
     for value in 0'u64..20'u64:
       doAssert wm.matchingRuns(value) == naiveRuns(xs, value, 0, xs.len)
+
+block hybridRangesAndViews:
+  # 短run・長runと64bitの深い経路で、範囲外の出現をcursorが列挙しないことを確認する。
+  for bitWidth in [3, 64]:
+    let target = if bitWidth == 64: uint64.high else: 7'u64
+    for runLength in [1, 4, 16, 31, 32, 64, 256]:
+      var xs = newSeq[uint64](4096)
+      for i in 0..<xs.len:
+        xs[i] = if i mod (runLength * 4) < runLength: target else: uint64(i mod 7)
+      let wm = genWaveletMatrix(xs, bitWidth)
+      var storage = newSeq[seq[uint64]](bitWidth)
+      var levels = newSeq[SuccinctBitVectorView](bitWidth)
+      var zeros = wm.zeroCounts
+      for level in 0..<bitWidth:
+        storage[level] = newSeq[uint64](
+          (requiredSuccinctBitVectorViewBytes(wm.n) + 7) div 8)
+        levels[level] = initSuccinctBitVectorView(addr storage[level][0],
+          storage[level].len * sizeof(uint64), wm.n)
+        for position in 0'i64..<wm.n:
+          if wm.levels[level][position]: levels[level][position] = true
+        levels[level].build()
+      # backing storageと配列は検証中に再確保せず、viewより長く保持する。
+      let view = initWaveletMatrixView(wm.n, bitWidth,
+        cast[ptr UncheckedArray[SuccinctBitVectorView]](addr levels[0]),
+        levels.len, addr zeros[0], zeros.len * sizeof(int64))
+      for bounds in [(0, 4096), (17, 4011), (127, 2049), (4000, 4096),
+                     (31, 32), (32, 32)]:
+        let (left, right) = bounds
+        let expected = naiveRuns(xs, target, left, right)
+        doAssert wm.matchingRuns(target, int64(left), int64(right)) == expected
+        doAssert view.matchingRuns(target, int64(left), int64(right)) == expected
+        doAssert view.collectMatchingRuns(target, int64(left), int64(right)) == expected
+        var iterated: seq[MatchingRun]
+        for run in view.matchingRunsItems(target, int64(left), int64(right)):
+          iterated.add run
+        doAssert iterated == expected
+        for run in wm.matchingRunsItems(target, int64(left), int64(right)):
+          doAssert run == expected[0]
+          break
+        for run in view.matchingRunsItems(target, int64(left), int64(right)):
+          doAssert run == expected[0]
+          break

@@ -146,16 +146,19 @@ iterator bitRunsItems*[B: SuccinctBitVector | SuccinctBitVectorView](
 
 iterator bitRunsItems*[B: SuccinctBitVector | SuccinctBitVectorView](
     bits: B, targetOne: bool): MatchingRun =
+  ## BitVector 全体から `targetOne` と一致する極大な連続区間を列挙します。
   for run in bits.bitRunsItems(targetOne, 0, bits.lenOfBits):
     yield run
 
 func bitRuns*[B: SuccinctBitVector | SuccinctBitVectorView](
     bits: B, targetOne: bool, left, right: int64): seq[MatchingRun] =
+  ## `bitRunsItems(targetOne, left, right)` の結果を sequence として返します。
   for run in bits.bitRunsItems(targetOne, left, right):
     result.add run
 
 func bitRuns*[B: SuccinctBitVector | SuccinctBitVectorView](
     bits: B, targetOne: bool): seq[MatchingRun] =
+  ## BitVector 全体の `bitRunsItems(targetOne)` の結果を sequence として返します。
   bits.bitRuns(targetOne, 0, bits.lenOfBits)
 
 iterator matchingRunsItems*[W: WaveletMatrix | WaveletMatrixView](
@@ -165,9 +168,12 @@ iterator matchingRunsItems*[W: WaveletMatrix | WaveletMatrixView](
   ##
   ## まず `[left, right)` を対象値のbitに沿って terminal interval へ写像します。
   ## その後、bounded probeで長い連続区間が早期に見つかるかを調べます。
-  ## 細かく分断された入力では #14 の sequential select cursor を使用し、
+  ## 細かく分断された入力では sequential select cursor を使用し、
   ## 長いrunが見つかる入力では terminal-to-root interval lifting を使用します。
   ## 判定は性能heuristicのみで、公開APIの結果・順序には影響しません。
+  ## bit幅をB、一致数をMとするとrankはO(B)回、selectは最悪O(B * M)回です。
+  ## 各rank/selectの実行コストは別途掛かります。補助空間は
+  ## O(B + log(M + 1))で、sequence版は返却run数に比例する領域も必要です。
   if left < 0 or left > right or right > wm.n:
     raise newException(IndexDefect, "range out of bounds")
 
@@ -175,6 +181,7 @@ iterator matchingRunsItems*[W: WaveletMatrix | WaveletMatrixView](
     var terminalLeft = left
     var terminalRight = right
 
+    # 所有型のlevelをletへコピーせず、内部seqの複製を避ける。
     for level in 0..<wm.bitWidth:
       let shift = wm.bitWidth - level - 1
       let targetOne = ((value shr shift) and 1'u64) != 0
@@ -253,22 +260,29 @@ iterator matchingRunsItems*[W: WaveletMatrix | WaveletMatrixView](
 
 iterator matchingRunsItems*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, value: uint64): MatchingRun =
+  ## Wavelet Matrix 全体から `value` と等しい要素の極大な連続物理位置区間を
+  ## 列挙します。
   for run in wm.matchingRunsItems(value, 0, wm.n):
     yield run
 
 func matchingRuns*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, value: uint64, left, right: int64): seq[MatchingRun] =
+  ## `matchingRunsItems(value, left, right)` の結果を sequence として返します。
   for run in wm.matchingRunsItems(value, left, right):
     result.add run
 
 func matchingRuns*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, value: uint64): seq[MatchingRun] =
+  ## Wavelet Matrix 全体の `matchingRunsItems(value)` の結果を sequence として
+  ## 返します。
   wm.matchingRuns(value, 0, wm.n)
 
 func collectMatchingRuns*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, value: uint64, left, right: int64): seq[MatchingRun] =
+  ## `matchingRuns(value, left, right)` の互換用別名です。
   wm.matchingRuns(value, left, right)
 
 func collectMatchingRuns*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, value: uint64): seq[MatchingRun] =
+  ## `matchingRuns(value)` の互換用別名です。
   wm.matchingRuns(value)
