@@ -94,6 +94,11 @@ iterator matchingRunsItems*[W: WaveletMatrix | WaveletMatrixView](
   ##
   ## したがって全 occurrence を個別selectせず、runが長いデータでは少数の区間を
   ## まとめて元の物理位置へ復元できます。永続的なrun境界indexは追加しません。
+  ##
+  ## bit幅を B、一致数を M とすると、rank呼び出しは O(B)、select呼び出しは
+  ## 最悪 O(B * M) です。実行時間には各rank/selectのコストが掛かります。
+  ## 二分時だけstackが増えるため、補助空間は O(1 + log(M + 1)) です。
+  ## 短いrunでは区間分割と両端selectの負担により逐次selectより遅くなり得ます。
   if left < 0 or left > right or right > wm.n:
     raise newException(IndexDefect, "range out of bounds")
 
@@ -102,12 +107,12 @@ iterator matchingRunsItems*[W: WaveletMatrix | WaveletMatrixView](
     var terminalRight = right
 
     # 対象値に一致する `[left, right)` 内の要素だけを terminal 座標へ写像する。
+    # levelをletへ取り出すと所有型のseqが複製されるため、rank/selectは直接参照する。
     for level in 0..<wm.bitWidth:
-      let bits = wm.levels[level]
       let shift = wm.bitWidth - level - 1
       let targetOne = ((value shr shift) and 1'u64) != 0
-      let leftOnes = bits.rank1Unchecked(terminalLeft)
-      let rightOnes = bits.rank1Unchecked(terminalRight)
+      let leftOnes = wm.levels[level].rank1Unchecked(terminalLeft)
+      let rightOnes = wm.levels[level].rank1Unchecked(terminalRight)
       if targetOne:
         terminalLeft = wm.zeroCounts[level] + leftOnes
         terminalRight = wm.zeroCounts[level] + rightOnes
@@ -133,7 +138,6 @@ iterator matchingRunsItems*[W: WaveletMatrix | WaveletMatrixView](
         while node.level >= 0:
           let length = node.right - node.left
           let level = node.level
-          let bits = wm.levels[level]
           let shift = wm.bitWidth - level - 1
           let targetOne = ((value shr shift) and 1'u64) != 0
 
@@ -141,17 +145,17 @@ iterator matchingRunsItems*[W: WaveletMatrix | WaveletMatrixView](
           var parentLast: int64
           if targetOne:
             let offset = wm.zeroCounts[level]
-            parentLeft = bits.select1(node.left - offset)
+            parentLeft = wm.levels[level].select1(node.left - offset)
             if length == 1:
               parentLast = parentLeft
             else:
-              parentLast = bits.select1(node.right - 1 - offset)
+              parentLast = wm.levels[level].select1(node.right - 1 - offset)
           else:
-            parentLeft = bits.select0(node.left)
+            parentLeft = wm.levels[level].select0(node.left)
             if length == 1:
               parentLast = parentLeft
             else:
-              parentLast = bits.select0(node.right - 1)
+              parentLast = wm.levels[level].select0(node.right - 1)
 
           if length == 1 or parentLast - parentLeft + 1 == length:
             node.left = parentLeft
