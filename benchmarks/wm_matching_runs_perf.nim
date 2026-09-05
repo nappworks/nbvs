@@ -79,9 +79,8 @@ proc main() =
   let repeats = max(5, envInt("NBVS_MATCHING_RUNS_REPEATS", 21))
   let target = 7'u64
 
-  echo "rows,run_length,occurrences,runs,repeats,terminal_lifting_items_p50_ns," &
-    "terminal_lifting_seq_p50_ns,sequential_cursor_p50_ns," &
-    "lifting_vs_cursor_speedup"
+  echo "rows,run_length,occurrences,runs,repeats,hybrid_items_p50_ns," &
+    "hybrid_seq_p50_ns,sequential_cursor_p50_ns,hybrid_vs_cursor_speedup"
 
   for runLength in [1, 4, 16, 64, 256, 1024, 4096]:
     let values = makeValues(rows, runLength, target)
