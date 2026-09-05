@@ -47,6 +47,14 @@ block sequentialCursorProducesOrderedPositions:
   doAssert cursor.remaining == 0
   doAssert wm.nextSelect(cursor) == -1
 
+block uncheckedCursorMatchesRegularSelect:
+  var cursor = wm.initWaveletSelectCursor(3)
+  var occurrence = 0'i64
+  while cursor.remaining > 0:
+    doAssert wm.nextSelectUnchecked(cursor) == wm.select(3, occurrence)
+    inc occurrence
+  doAssert occurrence == wm.rank(3, 0, wm.n)
+
 block missingValueIsEmpty:
   var cursor = wm.initWaveletSelectCursor(6)
   doAssert cursor.count == 0
@@ -73,3 +81,20 @@ block viewCursorMatchesRegularSelect:
       inc occurrence
     doAssert occurrence == view.rank(value, 0, view.n)
     doAssert view.nextSelect(cursor) == -1
+
+block largerMatrixAllValuesMatchRegularSelect:
+  var larger = newSeq[uint64](4096)
+  var state = 0x1234_5678_9abc_def0'u64
+  for i in 0..<larger.len:
+    state = state * 6364136223846793005'u64 + 1442695040888963407'u64
+    larger[i] = (state shr 32) and 63'u64
+  let largeWm = genWaveletMatrix(larger)
+
+  for value in 0'u64..<64'u64:
+    var cursor = largeWm.initWaveletSelectCursor(value)
+    var occurrence = 0'i64
+    while cursor.remaining > 0:
+      doAssert largeWm.nextSelectUnchecked(cursor) ==
+        largeWm.select(value, occurrence)
+      inc occurrence
+    doAssert occurrence == largeWm.rank(value, 0, largeWm.n)
