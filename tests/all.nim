@@ -5,6 +5,7 @@ import ./tpacked_array
 import ./tpacked_array_view
 import ./tstructure_views
 import ./tsuccinct_bit_vector
+import ./tsbv_scalar_no_word_pair_prefix
 import ./tquad_vector
 import ./tbit_vector_select_cursor
 import ./telias_fano
