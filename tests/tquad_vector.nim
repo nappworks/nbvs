@@ -94,6 +94,16 @@ block blockAndSuperBlockBoundaries:
     values[pos] = uint8(pos mod 4)
   checkAgainstNaive(values)
 
+block selectAcrossEmptyBlocks:
+  # symbol 3 が存在しない512-symbol blockを連続させ、block prefixが同値になるケースを作ります。
+  # selectの二分探索が空blockを正しく飛ばせることを確認します。
+  var values = newSeq[uint8](4096)
+  for i in 0..<values.len:
+    values[i] = 0
+  for pos in [1536, 1600, 2047, 3584, 4095]:
+    values[pos] = 3
+  checkAgainstNaive(values)
+
 block selectSamplingBoundaries:
   var values = newSeq[uint8](20_000)
   for i in 0..<values.len:
