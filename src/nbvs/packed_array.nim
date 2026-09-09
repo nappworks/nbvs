@@ -273,44 +273,78 @@ func fillImpl(data: ptr UncheckedArray[uint64], dataWords: int, len: int64,
   for i in 0..<initialWords:
     data[i] = pattern[i]
 
-  var copiedWords = initialWords
-  while copiedWords < dataWords:
-    let copyWords = min(copiedWords, dataWords - copiedWords)
-    copyMem(addr data[copiedWords], addr data[0], copyWords * sizeof(uint64))
-    copiedWords += copyWords
+  var filledWords = initialWords
+  while filledWords < dataWords:
+    let copiedWords = min(filledWords, dataWords - filledWords)
+    # sourceとdestinationは有効な非重複範囲で、copy長は残りword数以下です。
+    copyMem(addr data[filledWords], addr data[0],
+      copiedWords * sizeof(uint64))
+    filledWords += copiedWords
 
-  # 末尾wordのunused bitは必ず0へ戻す。
-  let usedBits = (len * int64(bitWidth)) and 63
-  if usedBits != 0:
-    data[dataWords - 1] = data[dataWords - 1] and
-      ((1'u64 shl int(usedBits)) - 1'u64)
+  let tailBits = int((len * int64(bitWidth)) mod 64)
+  if tailBits != 0:
+    data[dataWords - 1] = data[dataWords - 1] and maskForWidth(tailBits)
 
 func fill*(pa: var PackedArray, value: uint64) =
   ## 全要素を `value` で埋めます。
+  ##
+  ## 値が `pa.bitWidth` で表現できない場合は `ValueError` を送出します。
   fillImpl(dataPointer(pa), pa.data.len, pa.len, pa.bitWidth, value)
 
 func fill*(pa: var PackedArrayView, value: uint64) =
   ## 全要素を `value` で埋めます。
+  ##
+  ## 値が `pa.bitWidth` で表現できない場合は `ValueError` を送出します。
   fillImpl(pa.data, pa.dataWords, pa.len, pa.bitWidth, value)
 
 func toSeqImpl(data: ptr UncheckedArray[uint64], len: int64,
                bitWidth: int): seq[uint64] =
   result = newSeq[uint64](int(len))
-  for i in 0..<int(len):
-    result[i] = getImpl(data, bitWidth, int64(i))
+  if bitWidth == 0 or len == 0:
+    return
+  if bitWidth == 64:
+    # sourceとdestinationは別領域で、len個のuint64が双方で有効です。
+    copyMem(addr result[0], addr data[0], result.len * sizeof(uint64))
+    return
+
+  let mask = maskForWidth(bitWidth)
+  var wordIdx = 0
+  var bitOff = 0
+  for i in 0..<result.len:
+    if bitOff + bitWidth <= 64:
+      result[i] = (data[wordIdx] shr bitOff) and mask
+    else:
+      let loBits = 64 - bitOff
+      let lo = data[wordIdx] shr bitOff
+      let hi = data[wordIdx + 1] shl loBits
+      result[i] = (hi or lo) and mask
+
+    bitOff += bitWidth
+    if bitOff >= 64:
+      bitOff -= 64
+      inc wordIdx
 
 func toSeq*(pa: PackedArray): seq[uint64] =
-  ## `seq[uint64]` へ展開して返します。
+  ## unpackedな `seq[uint64]` へ変換します。
   result = toSeqImpl(dataPointer(pa), pa.len, pa.bitWidth)
 
 func toSeq*(pa: PackedArrayView): seq[uint64] =
-  ## `seq[uint64]` へ展開して返します。
+  ## unpackedな `seq[uint64]` へ変換します。
   result = toSeqImpl(pa.data, pa.len, pa.bitWidth)
 
+func toStringImpl(data: ptr UncheckedArray[uint64], len: int64,
+                  bitWidth: int): string =
+  result = "@["
+  for i in 0'i64..<len:
+    if i > 0:
+      result.add ", "
+    result.add $getImpl(data, bitWidth, i)
+  result.add "]"
+
 func `$`*(pa: PackedArray): string =
-  ## 配列を `@[...]` 形式の文字列へ変換します。
-  result = $pa.toSeq()
+  ## Nimのsequence literal形式の文字列表現を返します。
+  result = toStringImpl(dataPointer(pa), pa.len, pa.bitWidth)
 
 func `$`*(pa: PackedArrayView): string =
-  ## 配列を `@[...]` 形式の文字列へ変換します。
-  result = $pa.toSeq()
+  ## Nimのsequence literal形式の文字列表現を返します。
+  result = toStringImpl(pa.data, pa.len, pa.bitWidth)
