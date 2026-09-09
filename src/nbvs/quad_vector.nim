@@ -15,9 +15,22 @@
 ## Rank semantics match `SuccinctBitVector`: `rank(symbol, pos)` counts symbols
 ## in `[0, pos)`. Select is 0-based and returns `-1` when the occurrence index
 ## is out of range.
+##
+## The portable backend uses 64-bit SWAR masks plus popcount/bit clearing.
+## With `-d:nbvsSimd`, block-local rank/select switches to AVX2/BMI2 while the
+## public API, packed payload, and rank/select metadata remain identical.
 
 import std/bitops
 import ./packed_array
+
+when defined(nbvsSimd):
+  when defined(gcc) or defined(clang):
+    {.localPassc: "-mavx2".}
+    {.localPassc: "-mbmi2".}
+  when defined(vcc):
+    {.localPassc: "/arch:AVX2".}
+
+  import ./internal/x86_intrinsics
 
 const
   QuadRankBlockSize* = 512'i64
@@ -31,6 +44,18 @@ const
   SelectSampleWidth = 32
   RankBlockPrefixesPerSuper = 7'i64 * 4'i64
   QuadLaneMask = 0x5555_5555_5555_5555'u64
+
+when defined(nbvsSimd):
+  const
+    # Number of zero-valued 2-bit lanes in a 4-bit nibble. XORing packed data
+    # with the requested symbol repeated in every 2-bit lane turns matches into
+    # zero lanes, so the same table handles all four symbols.
+    QuadZeroPairNibbleLookup = [
+      2'i8, 1'i8, 1'i8, 1'i8, 1'i8, 0'i8, 0'i8, 0'i8,
+      1'i8, 0'i8, 0'i8, 0'i8, 1'i8, 0'i8, 0'i8, 0'i8,
+      2'i8, 1'i8, 1'i8, 1'i8, 1'i8, 0'i8, 0'i8, 0'i8,
+      1'i8, 0'i8, 0'i8, 0'i8, 1'i8, 0'i8, 0'i8, 0'i8
+    ]
 
 type
   QuadVector* = object
@@ -90,16 +115,17 @@ func validLaneMask(symbolCount: int): uint64 {.inline.} =
   else:
     QuadLaneMask and ((1'u64 shl (symbolCount * 2)) - 1'u64)
 
-func countSymbolRange(qv: QuadVector, symbol: int,
-                      startPos, endPos: int64): int64 {.inline.} =
-  ## Counts `symbol` in a word-aligned range. Rank block starts are 512-aligned.
+func countSymbolRangeScalar(qv: QuadVector, symbol: int,
+                            startPos, endPos: int64): int64 {.inline.} =
+  ## Portable SWAR/popcount implementation. `startPos` must be word-aligned.
   if endPos <= startPos:
     return 0
 
   var wordIndex = int(startPos shr 5)
   var remaining = endPos - startPos
   while remaining >= 32:
-    result += int64(countSetBits(matchingLaneMask(qv.data.data[wordIndex], symbol)))
+    result += int64(countSetBits(
+      matchingLaneMask(qv.data.data[wordIndex], symbol)))
     inc wordIndex
     remaining -= 32
 
@@ -108,9 +134,9 @@ func countSymbolRange(qv: QuadVector, symbol: int,
       validLaneMask(int(remaining))
     result += int64(countSetBits(mask))
 
-func selectSymbolRange(qv: QuadVector, symbol: int, startPos, endPos: int64,
-                       occurrence: int64): int64 {.inline.} =
-  ## Returns the `occurrence`-th matching symbol in the word-aligned range.
+func selectSymbolRangeScalar(qv: QuadVector, symbol: int,
+                             startPos, endPos, occurrence: int64): int64 {.inline.} =
+  ## Portable word scan using SWAR equality masks and bit clearing.
   var wanted = occurrence
   var wordPos = startPos
   var wordIndex = int(startPos shr 5)
@@ -131,6 +157,89 @@ func selectSymbolRange(qv: QuadVector, symbol: int, startPos, endPos: int64,
     inc wordIndex
 
   -1
+
+when defined(nbvsSimd):
+  func countSymbol128Avx2(qv: QuadVector, symbol, wordIndex: int): int64 {.inline.} =
+    ## Counts one symbol in 128 packed symbols (32 bytes) with AVX2.
+    let packed = mm256_loadu_si256(
+      cast[ptr M256i](unsafeAddr qv.data.data[wordIndex]))
+    let repeated = cast[int8](uint8(symbol * 0x55))
+    let normalized = mm256_xor_si256(packed, mm256_set1_epi8(repeated))
+    let nibbleMask = mm256_set1_epi8(0x0f'i8)
+    let lookup = mm256_loadu_si256(
+      cast[ptr M256i](unsafeAddr QuadZeroPairNibbleLookup[0]))
+
+    let lo = mm256_and_si256(normalized, nibbleMask)
+    let hi = mm256_and_si256(mm256_srli_epi16(normalized, 4), nibbleMask)
+    let loCounts = mm256_shuffle_epi8(lookup, lo)
+    let hiCounts = mm256_shuffle_epi8(lookup, hi)
+    let byteCounts = mm256_add_epi8(loCounts, hiCounts)
+    let sums = mm256_sad_epu8(byteCounts, mm256_set1_epi8(0'i8))
+
+    var laneSums: array[4, uint64]
+    mm256_storeu_si256(cast[ptr M256i](addr laneSums[0]), sums)
+    result = int64(laneSums[0] + laneSums[1] + laneSums[2] + laneSums[3])
+
+  func selectSymbolRangeBmi2(qv: QuadVector, symbol: int,
+                             startPos, endPos, occurrence: int64): int64 {.inline.} =
+    ## Locates an occurrence after AVX2 has narrowed the search to a small range.
+    var wanted = occurrence
+    var wordPos = startPos
+    var wordIndex = int(startPos shr 5)
+
+    while wordPos < endPos:
+      let symbolsInWord = int(min(32'i64, endPos - wordPos))
+      let matches = matchingLaneMask(qv.data.data[wordIndex], symbol) and
+        validLaneMask(symbolsInWord)
+      let count = int64(countSetBits(matches))
+      if wanted < count:
+        let deposited = pdepU64(1'u64 shl int(wanted), matches)
+        return wordPos + int64(countTrailingZeroBits(deposited) shr 1)
+      wanted -= count
+      wordPos += int64(symbolsInWord)
+      inc wordIndex
+
+    -1
+
+  func countSymbolRange(qv: QuadVector, symbol: int,
+                        startPos, endPos: int64): int64 {.inline.} =
+    ## AVX2 scans 128 symbols at a time; the final short tail uses scalar SWAR.
+    if endPos <= startPos:
+      return 0
+
+    var wordPos = startPos
+    var wordIndex = int(startPos shr 5)
+    while endPos - wordPos >= 128:
+      result += qv.countSymbol128Avx2(symbol, wordIndex)
+      wordPos += 128
+      wordIndex += 4
+
+    result += qv.countSymbolRangeScalar(symbol, wordPos, endPos)
+
+  func selectSymbolRange(qv: QuadVector, symbol: int,
+                         startPos, endPos, occurrence: int64): int64 {.inline.} =
+    ## AVX2 skips 128-symbol chunks; BMI2 PDEP selects the final matching lane.
+    var wanted = occurrence
+    var wordPos = startPos
+    var wordIndex = int(startPos shr 5)
+
+    while endPos - wordPos >= 128:
+      let count = qv.countSymbol128Avx2(symbol, wordIndex)
+      if wanted < count:
+        return qv.selectSymbolRangeBmi2(symbol, wordPos, wordPos + 128, wanted)
+      wanted -= count
+      wordPos += 128
+      wordIndex += 4
+
+    qv.selectSymbolRangeBmi2(symbol, wordPos, endPos, wanted)
+else:
+  func countSymbolRange(qv: QuadVector, symbol: int,
+                        startPos, endPos: int64): int64 {.inline.} =
+    qv.countSymbolRangeScalar(symbol, startPos, endPos)
+
+  func selectSymbolRange(qv: QuadVector, symbol: int,
+                         startPos, endPos, occurrence: int64): int64 {.inline.} =
+    qv.selectSymbolRangeScalar(symbol, startPos, endPos, occurrence)
 
 func genQuadVector*(maxSymbols: int64): QuadVector =
   ## Creates a mutable quad vector with `maxSymbols` symbols initialized to 0.
@@ -177,7 +286,7 @@ func clearSymbol*(qv: var QuadVector, pos: int64) =
   qv.setSymbol(pos, 0'u8)
 
 func build*(qv: var QuadVector) =
-  ## Builds or rebuilds the rank/select dictionary.
+  ## Builds or rebuilds the common packed rank/select dictionary.
   qv.totalCounts = [0'i64, 0'i64, 0'i64, 0'i64]
 
   for pos in 0'i64..<qv.lenOfSymbols:
@@ -278,8 +387,6 @@ func select*(qv: QuadVector, symbol: int, k: int64): int64 =
     upperExclusive = min(upperExclusive,
       int64(qv.selectSamples[symbol][sampleIndex + 1]) + 1'i64)
 
-  # Find the first superblock whose end-prefix is greater than k. This stays
-  # correct across runs of superblocks that contain no occurrence of `symbol`.
   var lo = sampleBlock
   var hi = upperExclusive
   while lo < hi:
@@ -288,6 +395,7 @@ func select*(qv: QuadVector, symbol: int, k: int64): int64 =
       hi = mid
     else:
       lo = mid + 1
+
   let superBlock = lo
   let superStartPos = superBlock * QuadRankSuperBlockSize
   let superEndPos = min(qv.lenOfSymbols,
