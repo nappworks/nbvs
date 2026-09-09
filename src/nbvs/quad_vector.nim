@@ -1,24 +1,25 @@
-## Succinct quad vector with rank/select support.
+## rank/select をサポートする簡潔な Quad Vector 実装です。
 ##
-## `QuadVector` stores symbols in `0..3` using a 2-bit `PackedArray`. After
-## `build`, rank uses 4096-symbol superblocks subdivided into 512-symbol blocks,
-## and select uses one sampled superblock id per 1024 occurrences of each
-## symbol.
+## `QuadVector` は `0..3` のシンボルを 2-bit の `PackedArray` に格納します。
+## `build` 後、rank は 4096 シンボルの superblock と、その中を 512 シンボル単位に
+## 分割した block を使用します。select は各シンボルについて 1024 出現ごとに
+## superblock id をサンプリングします。
 ##
-## The asymptotic auxiliary-space budget is:
+## 補助構造の漸近的な容量増加は以下のとおりです。
 ##
-## * rank: 6.25% of the 2-bit payload (44-bit superblock counters plus seven
-##   12-bit block prefixes for each of four symbols per 4096-symbol superblock)
-## * select: 1.5625% of the payload (32-bit superblock id per 1024 occurrences)
-## * total: 7.8125%, excluding object headers and tail rounding.
+## * rank: 2-bit payload の 6.25%
+##   （各 4096-symbol superblock に 44-bit superblock counter と、
+##    4 シンボル分の 12-bit block prefix を 7 個保持）
+## * select: payload の 1.5625%（1024 出現ごとに 32-bit superblock id を保持）
+## * 合計: 7.8125%（object header と末尾の丸めによる増加は除く）
 ##
-## Rank semantics match `SuccinctBitVector`: `rank(symbol, pos)` counts symbols
-## in `[0, pos)`. Select is 0-based and returns `-1` when the occurrence index
-## is out of range.
+## Rank の意味は `SuccinctBitVector` と合わせています。
+## `rank(symbol, pos)` は `[0, pos)` に含まれる `symbol` の個数を返します。
+## Select は 0-based で、指定した出現が存在しない場合は `-1` を返します。
 ##
-## The portable backend uses 64-bit SWAR masks plus popcount/bit clearing.
-## With `-d:nbvsSimd`, block-local rank/select switches to AVX2/BMI2 while the
-## public API, packed payload, and rank/select metadata remain identical.
+## portable backend は 64-bit SWAR mask と popcount / bit clearing を使用します。
+## `-d:nbvsSimd` 指定時は block 内の rank/select を AVX2/BMI2 実装へ切り替えます。
+## public API、packed payload、rank/select metadata の表現は両 backend で共通です。
 
 import std/bitops
 import ./packed_array
@@ -47,9 +48,9 @@ const
 
 when defined(nbvsSimd):
   const
-    # Number of zero-valued 2-bit lanes in a 4-bit nibble. XORing packed data
-    # with the requested symbol repeated in every 2-bit lane turns matches into
-    # zero lanes, so the same table handles all four symbols.
+    # 4-bit nibble 内に含まれる値 0 の 2-bit lane 数です。
+    # packed data を対象シンボルの反復パターンと XOR すると、一致 lane が 0 になるため、
+    # 4 シンボルすべてを同じ lookup table で処理できます。
     QuadZeroPairNibbleLookup = [
       2'i8, 1'i8, 1'i8, 1'i8, 1'i8, 0'i8, 0'i8, 0'i8,
       1'i8, 0'i8, 0'i8, 0'i8, 1'i8, 0'i8, 0'i8, 0'i8,
@@ -59,7 +60,7 @@ when defined(nbvsSimd):
 
 type
   QuadVector* = object
-    ## Mutable 2-bit symbol vector. Call `build` after mutation before rank/select.
+    ## 2-bit シンボルを保持する可変長ベクタです。変更後は rank/select 前に `build` が必要です。
     maxOfSymbols*: int64
     lenOfSymbols*: int64
     data*: PackedArray
@@ -68,11 +69,11 @@ type
     totalCounts*: array[4, int64]
     superBlockCount*: int64
 
-    ## Four 44-bit absolute counters at each 4096-symbol superblock start.
+    ## 各 4096-symbol superblock の先頭時点における 4 個の 44-bit 絶対累積値です。
     rankSuperPrefix*: PackedArray
-    ## Seven 12-bit local block prefixes for each of four symbols per superblock.
+    ## 各 superblock 内で、先頭 block を除く 7 block × 4 symbol の 12-bit 局所累積値です。
     rankBlockPrefix*: PackedArray
-    ## Per-symbol sampled superblock ids, sampled every 1024 occurrences.
+    ## 各シンボルについて 1024 出現ごとに保持する sampled superblock id です。
     selectSamples*: array[4, PackedArray]
 
 func ceilDivPositive(x, y: int64): int64 {.inline.} =
@@ -98,11 +99,11 @@ func rankSuperIndex(superBlock, symbol: int64): int64 {.inline.} =
   superBlock * 4'i64 + symbol
 
 func rankBlockIndex(superBlock, block, symbol: int64): int64 {.inline.} =
-  ## `block` is 1..7 and stores the prefix at that block's start.
+  ## `block` は 1..7 で、その block の先頭位置までの prefix を保持します。
   superBlock * RankBlockPrefixesPerSuper + (block - 1'i64) * 4'i64 + symbol
 
 func matchingLaneMask(word: uint64, symbol: int): uint64 {.inline.} =
-  ## One bit at every matching 2-bit lane, in bit positions 0,2,...,62.
+  ## 一致した 2-bit lane ごとに bit 0,2,...,62 の位置へ 1 を立てます。
   let pattern = uint64(symbol) * QuadLaneMask
   let different = word xor pattern
   result = (not (different or (different shr 1))) and QuadLaneMask
@@ -117,7 +118,7 @@ func validLaneMask(symbolCount: int): uint64 {.inline.} =
 
 func countSymbolRangeScalar(qv: QuadVector, symbol: int,
                             startPos, endPos: int64): int64 {.inline.} =
-  ## Portable SWAR/popcount implementation. `startPos` must be word-aligned.
+  ## portable な SWAR/popcount 実装です。`startPos` は word 境界に揃っている必要があります。
   if endPos <= startPos:
     return 0
 
@@ -136,7 +137,7 @@ func countSymbolRangeScalar(qv: QuadVector, symbol: int,
 
 func selectSymbolRangeScalar(qv: QuadVector, symbol: int,
                              startPos, endPos, occurrence: int64): int64 {.inline.} =
-  ## Portable word scan using SWAR equality masks and bit clearing.
+  ## SWAR の一致 mask と bit clearing を使う portable な word scan です。
   var wanted = occurrence
   var wordPos = startPos
   var wordIndex = int(startPos shr 5)
@@ -160,7 +161,7 @@ func selectSymbolRangeScalar(qv: QuadVector, symbol: int,
 
 when defined(nbvsSimd):
   func countSymbol128Avx2(qv: QuadVector, symbol, wordIndex: int): int64 {.inline.} =
-    ## Counts one symbol in 128 packed symbols (32 bytes) with AVX2.
+    ## AVX2 を使い、packed された 128 シンボル（32 byte）内の対象シンボル数を数えます。
     let packed = mm256_loadu_si256(
       cast[ptr M256i](unsafeAddr qv.data.data[wordIndex]))
     let repeated = cast[int8](uint8(symbol * 0x55))
@@ -182,7 +183,7 @@ when defined(nbvsSimd):
 
   func selectSymbolRangeBmi2(qv: QuadVector, symbol: int,
                              startPos, endPos, occurrence: int64): int64 {.inline.} =
-    ## Locates an occurrence after AVX2 has narrowed the search to a small range.
+    ## AVX2 で探索範囲を狭めた後、BMI2 を使って対象 occurrence の位置を求めます。
     var wanted = occurrence
     var wordPos = startPos
     var wordIndex = int(startPos shr 5)
@@ -203,7 +204,7 @@ when defined(nbvsSimd):
 
   func countSymbolRange(qv: QuadVector, symbol: int,
                         startPos, endPos: int64): int64 {.inline.} =
-    ## AVX2 scans 128 symbols at a time; the final short tail uses scalar SWAR.
+    ## AVX2 で 128 シンボルずつ走査し、最後の短い tail は scalar SWAR で処理します。
     if endPos <= startPos:
       return 0
 
@@ -218,7 +219,7 @@ when defined(nbvsSimd):
 
   func selectSymbolRange(qv: QuadVector, symbol: int,
                          startPos, endPos, occurrence: int64): int64 {.inline.} =
-    ## AVX2 skips 128-symbol chunks; BMI2 PDEP selects the final matching lane.
+    ## AVX2 で 128-symbol chunk を飛ばし、最後の一致 lane を BMI2 PDEP で選択します。
     var wanted = occurrence
     var wordPos = startPos
     var wordIndex = int(startPos shr 5)
@@ -242,7 +243,7 @@ else:
     qv.selectSymbolRangeScalar(symbol, startPos, endPos, occurrence)
 
 func genQuadVector*(maxSymbols: int64): QuadVector =
-  ## Creates a mutable quad vector with `maxSymbols` symbols initialized to 0.
+  ## `maxSymbols` 個のシンボルを 0 で初期化した可変 QuadVector を作成します。
   if maxSymbols < 0:
     raise newException(ValueError, "maxSymbols must be non-negative")
   if maxSymbols > MaxQuadVectorSymbols:
@@ -261,16 +262,16 @@ func genQuadVector*(maxSymbols: int64): QuadVector =
     result.selectSamples[symbol] = genPackedArray(0, SelectSampleWidth)
 
 func access*(qv: QuadVector, pos: int64): uint8 =
-  ## Returns the symbol at `pos`.
+  ## `pos` に格納されているシンボルを返します。
   qv.checkAccessIndex(pos)
   result = uint8(qv.data[pos])
 
 func `[]`*(qv: QuadVector, pos: int64): uint8 =
-  ## Alias for `access`.
+  ## `access` の別名です。
   qv.access(pos)
 
 func setSymbol*(qv: var QuadVector, pos: int64, value: uint8) =
-  ## Stores a symbol in `0..3` and invalidates rank/select metadata.
+  ## `pos` に `0..3` のシンボルを格納し、rank/select metadata を無効化します。
   qv.checkAccessIndex(pos)
   if value > 3'u8:
     raise newException(ValueError, "QuadVector value must be in 0..3")
@@ -278,15 +279,15 @@ func setSymbol*(qv: var QuadVector, pos: int64, value: uint8) =
   qv.isCalced = false
 
 func `[]=`*(qv: var QuadVector, pos: int64, value: uint8) =
-  ## Alias for `setSymbol`.
+  ## `setSymbol` の別名です。
   qv.setSymbol(pos, value)
 
 func clearSymbol*(qv: var QuadVector, pos: int64) =
-  ## Sets the symbol at `pos` to 0 and invalidates rank/select metadata.
+  ## `pos` のシンボルを 0 に設定し、rank/select metadata を無効化します。
   qv.setSymbol(pos, 0'u8)
 
 func build*(qv: var QuadVector) =
-  ## Builds or rebuilds the common packed rank/select dictionary.
+  ## scalar/SIMD backend で共通の packed rank/select dictionary を構築または再構築します。
   qv.totalCounts = [0'i64, 0'i64, 0'i64, 0'i64]
 
   for pos in 0'i64..<qv.lenOfSymbols:
@@ -333,7 +334,8 @@ func build*(qv: var QuadVector) =
   qv.isCalced = true
 
 func rankUnchecked*(qv: QuadVector, symbol: int, pos: int64): int64 {.inline.} =
-  ## Unchecked rank. Requires built metadata, a symbol in 0..3, and 0<=pos<=len.
+  ## 境界検査を行わない rank です。
+  ## metadata が build 済みで、`symbol in 0..3` かつ `0 <= pos <= len` である必要があります。
   if pos == qv.lenOfSymbols:
     return qv.totalCounts[symbol]
 
@@ -352,14 +354,14 @@ func rankUnchecked*(qv: QuadVector, symbol: int, pos: int64): int64 {.inline.} =
   result += qv.countSymbolRange(symbol, blockStart, pos)
 
 func rank*(qv: QuadVector, symbol: int, pos: int64): int64 =
-  ## Counts `symbol` in `[0, pos)`.
+  ## `[0, pos)` に含まれる `symbol` の個数を返します。
   checkSymbol(symbol)
   qv.checkRankPosition(pos)
   qv.requireBuilt()
   result = qv.rankUnchecked(symbol, pos)
 
 func rankIncl*(qv: QuadVector, symbol: int, pos: int64): int64 =
-  ## Counts `symbol` in `[0, pos]`.
+  ## `[0, pos]` に含まれる `symbol` の個数を返します。
   checkSymbol(symbol)
   qv.checkAccessIndex(pos)
   qv.requireBuilt()
@@ -372,7 +374,7 @@ func superStartRank(qv: QuadVector, symbol: int, superBlock: int64): int64 {.inl
     int64(qv.rankSuperPrefix[rankSuperIndex(superBlock, int64(symbol))])
 
 func select*(qv: QuadVector, symbol: int, k: int64): int64 =
-  ## Returns the position of the 0-based `k`-th occurrence, or -1 if absent.
+  ## 0-based で `k` 番目に出現する `symbol` の位置を返します。存在しない場合は `-1` です。
   checkSymbol(symbol)
   qv.requireBuilt()
   if k < 0 or k >= qv.totalCounts[symbol]:
@@ -449,16 +451,16 @@ defineSelectWrappers(select2, 2)
 defineSelectWrappers(select3, 3)
 
 func rawBytes*(qv: QuadVector): int64 =
-  ## Allocated bytes in the 2-bit payload storage.
+  ## 2-bit payload storage に確保されている byte 数を返します。
   int64(qv.data.data.len * sizeof(uint64))
 
 func rankAuxiliaryBytes*(qv: QuadVector): int64 =
-  ## Allocated rank dictionary bytes.
+  ## rank dictionary に確保されている byte 数を返します。
   int64((qv.rankSuperPrefix.data.len + qv.rankBlockPrefix.data.len) *
         sizeof(uint64))
 
 func selectAuxiliaryBytes*(qv: QuadVector): int64 =
-  ## Allocated select-sample bytes.
+  ## select sample に確保されている byte 数を返します。
   for symbol in 0..3:
     result += int64(qv.selectSamples[symbol].data.len * sizeof(uint64))
 
@@ -466,11 +468,11 @@ func auxiliaryBytes*(qv: QuadVector): int64 =
   qv.rankAuxiliaryBytes + qv.selectAuxiliaryBytes
 
 func allocatedBytes*(qv: QuadVector): int64 =
-  ## Allocated packed storage bytes, excluding Nim object/seq headers.
+  ## Nim object/seq header を除いた packed storage の確保 byte 数を返します。
   qv.rawBytes + qv.auxiliaryBytes
 
 func `$`*(qv: QuadVector): string =
-  ## Returns the symbol sequence as digits `0`..`3`.
+  ## シンボル列を `0`..`3` の数字からなる文字列として返します。
   result = newStringOfCap(int(min(qv.lenOfSymbols, int64(int.high))))
   for pos in 0'i64..<qv.lenOfSymbols:
     result.add char(ord('0') + int(qv.data[pos]))
