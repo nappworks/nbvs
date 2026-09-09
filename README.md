@@ -126,6 +126,7 @@ including rank/select queries, Elias-Fano encoding, and wavelet matrices.
 - `BitVector`: simple mutable byte-backed bit vector.
 - `PackedArray`: fixed-width packed unsigned integer array.
 - `SuccinctBitVector`: portable bit vector with `rank` and `select`; an AVX2/BMI2 backend is available with `-d:nbvsSimd`.
+- `QuadVector`: 2-bit four-symbol vector with `access`, `rank`, and `select`; payload and auxiliary structures use `PackedArray`.
 - `EliasFano`: Elias-Fano encoding for nondecreasing `uint64` sequences.
 - `WaveletMatrix`: rank/select, quantile, and range-frequency index for `uint64` sequences.
 - `ReversedWaveletMatrix`: LSB-first wavelet matrix with access, rank, and select.
@@ -157,7 +158,7 @@ For GCC/Clang, the AVX2/BMI2 backend passes:
 -mbmi2
 ```
 
-For MSVC, the AVX2/BMI2 backend uses `/arch:AVX2`.  BMI2 intrinsics are available through `<immintrin.h>` on supported MSVC targets.
+For MSVC, the AVX2/BMI2 backend uses `/arch:AVX2`. BMI2 intrinsics are available through `<immintrin.h>` on supported MSVC targets.
 
 ### Installation
 
@@ -188,6 +189,7 @@ Or import individual modules:
 import nbvs/bit_vector
 import nbvs/packed_array
 import nbvs/succinct_bit_vector
+import nbvs/quad_vector
 import nbvs/elias_fano
 import nbvs/wavelet_matrix
 import nbvs/wavelet_select_cursor
@@ -197,7 +199,7 @@ import nbvs/fm_dictionary
 
 ### BitVector
 
-`BitVector` is a simple mutable byte-backed bit vector.  Its logical length grows to the highest written index plus one.
+`BitVector` is a simple mutable byte-backed bit vector. Its logical length grows to the highest written index plus one.
 
 ```nim
 import nbvs/bit_vector
@@ -280,7 +282,7 @@ Important API:
 
 ### SuccinctBitVector
 
-`SuccinctBitVector` provides `access`, `rank`, and `select` over bits.  You may mutate bits first, then call `build()` before rank/select queries.
+`SuccinctBitVector` provides `access`, `rank`, and `select` over bits. You may mutate bits first, then call `build()` before rank/select queries.
 
 ```nim
 import nbvs/succinct_bit_vector
@@ -316,9 +318,10 @@ Rank/select semantics:
 | `select0Nth(nth)` | Position of the 1-based `nth` `0`, or `-1`. |
 
 After any mutation through `setBit`, `clearBit`, or `[]=`, call `build()` again before `rank` or `select`.
-The scalar backend stores an additional word-pair rank prefix, increasing
-`SuccinctBitVector` storage by about 6.25% of the raw bit data. The SIMD
-backend keeps its existing AVX2-specific prefix layout.
+The scalar backend does not automatically create a word-pair rank prefix;
+rank inside a 512-bit block is computed directly with scalar popcount. The SIMD
+backend retains its AVX2-specific auxiliary prefix for large vectors where the
+implementation enables it.
 
 ```nim
 sbv[10] = false
@@ -326,9 +329,43 @@ sbv.build()
 doAssert sbv.rank1(1000) == 2
 ```
 
+### QuadVector
+
+`QuadVector` stores symbols `0..3` using 2 bits per symbol in a `PackedArray`.
+After mutation, call `build()` before `rank` or `select`.
+
+```nim
+import nbvs/quad_vector
+
+var qv = genQuadVector(8)
+for i, value in [0'u8, 1, 2, 3, 0, 1, 2, 3]:
+  qv[int64(i)] = value
+qv.build()
+
+doAssert qv.access(2) == 2
+doAssert qv.rank2(8) == 2
+doAssert qv.select3(1) == 7
+```
+
+`rank(symbol, pos)` counts the selected symbol in `[0, pos)`. `select(symbol, k)`
+returns the position of the 0-based `k`-th occurrence. Convenience wrappers
+`rank0`..`rank3`, `rank0Incl`..`rank3Incl`, and `select0`..`select3` are also
+available.
+
+The payload is a 2-bit `PackedArray`. Rank metadata uses 4096-symbol superblocks
+and 512-symbol blocks, and select stores one sampled superblock id per 1024
+occurrences of each symbol. The target auxiliary-space budget is 7.8125% of the
+2-bit payload: 6.25% for rank plus 1.5625% for select, excluding object/sequence
+headers and tail rounding.
+
+The portable backend uses SWAR equality masks and popcount. With `-d:nbvsSimd`,
+block-local scans use AVX2 on 128 packed symbols at a time and BMI2 `PDEP` for the
+final 2-bit lane selection. The public API and packed auxiliary representation
+are identical between backends.
+
 ### EliasFano
 
-`EliasFano` encodes a nondecreasing `uint64` sequence.  Duplicates are allowed.  `universe` is exclusive.
+`EliasFano` encodes a nondecreasing `uint64` sequence. Duplicates are allowed. `universe` is exclusive.
 
 ```nim
 import nbvs/elias_fano
@@ -358,12 +395,11 @@ Important API:
 | `countLessThan(v)` | Number of values `< v`. |
 | `countLessEqual(v)` | Number of values `<= v`. |
 | `items` | Iterates over values. |
-| `toSeq()` | Decodes to `seq[uint64]`. |
+| `toSeq()` | Decodes to an unpacked sequence. |
 
 ### WaveletMatrix
 
-`WaveletMatrix` indexes an arbitrary `uint64` sequence. Position and value
-ranges are half-open.
+`WaveletMatrix` indexes an arbitrary `uint64` sequence. Position and value ranges are half-open.
 
 ```nim
 import nbvs/wavelet_matrix
@@ -379,257 +415,43 @@ doAssert wm.selectNth(1, 2) == 6
 doAssert wm.quantile(1, 6, 2) == 5
 doAssert wm.rangeFreq(0, 7, 2, 8) == 4
 doAssert wm.matchesAt(3, 5)
-doAssert wm.valueInRangeAt(4, 2, 8) # inclusive value range
+doAssert wm.valueInRangeAt(4, 2, 8)
 ```
 
-| API | Description |
-| --- | --- |
-| `genWaveletMatrix(xs)` | Builds an immutable index over `xs`. |
-| `wm[i]` / `access(i)` | Returns the original value at index `i`. |
-| `matchesAt(position, value)` | Tests equality and stops at the first mismatching bit. |
-| `valueInRangeAt(position, low, high)` | Tests the inclusive range `[low, high]` with prefix pruning. |
-| `rank(value, pos)` | Counts `value` in `[0, pos)`. |
-| `rank(value, left, right)` | Counts `value` in `[left, right)`. |
-| `rankIncl(value, pos)` | Counts `value` in `[0, pos]`. |
-| `rankLessThan(value, pos)` | Counts values `< value` in `[0, pos)` in `O(bitWidth)`. |
-| `occPosition(value, pos)` | Returns all values `< value` in the complete sequence plus occurrences of `value` in `[0, pos)`; equivalent to `C[value] + Occ(value, pos)` in an FM-index. |
-| `select(value, k)` | Position of the 0-based `k`-th occurrence, or `-1`. |
-| `selectNth(value, nth)` | Position of the 1-based `nth` occurrence, or `-1`. |
-| `initWaveletSelectCursor(value)` | Prepares the value interval for repeated `select` queries. |
-| `nextSelect(cursor)` | Returns the next occurrence from a prepared cursor, or `-1` when exhausted. |
-| `quantile(left, right, k)` | 0-based `k`-th smallest value in the position range. |
-| `countLessThan(left, right, value)` | Counts values `< value`. |
-| `rangeFreq(left, right, lower, upper)` | Counts values in `[lower, upper)`. |
-| `predecessor(left, right, upper)` | Greatest value `< upper`, or `ValueError`. |
-| `successor(left, right, lower)` | Smallest value `>= lower`, or `ValueError`. |
-| `items` / `toSeq()` | Decodes values in original order. |
-| `collectValueCounts(left, right)` | Collects distinct `(value, frequency)` pairs in traversal order without sorting. |
-| `collectValueCountFinalIntervals(left, right)` | Collects `(value, frequency, left, right)` tuples, where `[left, right)` is the terminal interval in the final Wavelet permutation. |
-| `valueCounts(left, right)` | Distinct `(value, frequency)` pairs, sorted by value. |
-| `collectDistinctValues(left, right)` | Collects distinct values directly from occupied nodes in traversal order without computing frequencies. |
-| `distinctValues(left, right)` | Distinct values sorted in ascending order. |
-| `collectValueCountsItems` / `valueCountsItems` | Iterators for traversal-order or ascending `(value, frequency)` pairs. |
-| `collectValueCountFinalIntervalsItems` | Iterator form of `collectValueCountFinalIntervals`. |
-| `collectDistinctValuesItems` / `distinctValuesItems` | Iterators for traversal-order or ascending distinct values. |
-
-The enumeration APIs also have whole-sequence overloads without
-`left, right`. All ranges are half-open. The `collect` variants do not guarantee
-an order, while the variants without `collect` guarantee ascending value order.
-`matchesAtUnchecked` and `valueInRangeAtUnchecked` omit position validation and
-require `0 <= position < n`. The same APIs are available on `WaveletMatrixView`.
-
-`matchingRunsItems(value, left, right)` enumerates maximal matching physical
-intervals in ascending position order. `matchingRuns` collects them into a
-sequence; `collectMatchingRuns` is an alias with the same ordering. All three
-support whole-sequence overloads and `WaveletMatrixView`. A bounded probe (up to
-96 endpoint-select checks) chooses sequential selection for fragmented runs or
-terminal-to-root interval lifting when it finds a physical span of at least 32
-elements. Both paths use only query-local state, with no persistent auxiliary
-index. The heuristic preserves results and ordering but does not guarantee the
-fastest path for every input. See the
-[PR #17 measurements](benchmarks/results/wm_matching_runs_pr17_validation.md).
-
-For repeated selection of the same value, `WaveletSelectCursor` computes the
-value interval once and reuses it for each occurrence. The cursor does not own
-the matrix; keep the `WaveletMatrix` or backing storage of a
-`WaveletMatrixView` alive while using it.
-
-```nim
-var cursor = wm.initWaveletSelectCursor(5)
-while cursor.remaining > 0:
-  echo wm.nextSelect(cursor)
-```
-
-```nim
-let values = genWaveletMatrix(@[1'u64, 3, 4, 1])
-doAssert values.distinctValues == @[1'u64, 3, 4]
-
-for item in values.valueCountsItems:
-  echo item.value, ": ", item.frequency
-```
+`WaveletMatrix` provides access, rank/select, quantile, range-frequency,
+predecessor/successor, distinct-value enumeration, matching-run enumeration,
+and repeated-select cursor APIs. Position and value ranges are half-open unless
+an API explicitly documents an inclusive endpoint.
 
 ### FmDictionary
 
-`FmDictionary` combines an adaptively selected Wavelet or run-length BWT
-FM backend with a compact, path-compressed Radix Trie. Exact and prefix searches and Dictionary ID
-restoration use the trie; suffix and substring searches continue to use the
-FM-index. Edge labels are stored in shared byte arrays rather than retaining
-the original string pool. UTF-8 strings are searched byte by byte; Unicode
-normalization is the caller's responsibility. Input strings must be distinct.
+`FmDictionary` combines an adaptively selected Wavelet or run-length BWT FM
+backend with a compact, path-compressed Radix Trie. Exact and prefix searches and
+Dictionary ID restoration use the trie; suffix and substring searches use the
+FM-index. UTF-8 strings are searched byte by byte; Unicode normalization is the
+caller's responsibility. Input strings must be distinct.
 
-```nim
-import nbvs/fm_dictionary
-
-let dict = genFmDictionary(@[
-  "apple",
-  "application",
-  "banana",
-  "hana"
-])
-
-doAssert dict.findExact("banana") == 2
-doAssert dict.findPrefix("app") == @[0'u32, 1'u32]
-doAssert dict.findSubstring("ana") == @[2'u32, 3'u32]
-doAssert dict.getString(3) == "hana"
-```
-
-`FmDictionaryView` exposes the same read-only query API over caller-owned
-external memory. It is assembled from `WaveletMatrixView` or
-`RunLengthBwtView`, three `PackedArrayView` values, and a
-`SuccinctRadixTrieView`; it does not own a `MemFile`, define a file format, or
-manage mapping lifetime. Construct those lower-level views from offsets and
-sizes maintained by the application, then pass them in
-`FmDictionaryViewParts` to `initFmDictionaryView`. All referenced memory and
-view descriptor arrays must remain valid while the dictionary view is used.
-`FmQueryWorkspace` and `PrefixQueryWorkspace` remain heap-owned scratch space
-and can be initialized for either dictionary type.
-
-For repeated substring queries, reuse an `FmQueryWorkspace`. The `Into` APIs
-also reuse caller-owned output capacity.
-
-```nim
-var workspace = initFmQueryWorkspace(dict)
-var ids: seq[DictionaryId]
-dict.findSubstringInto("ana", workspace, ids)
-
-var restored: string
-dict.getStringInto(3, restored)
-```
-
-Large prefix results can reuse `PrefixQueryWorkspace`; it switches to a
-touched-word bitmap at 256 results while preserving ascending Dictionary IDs.
-`findPrefixTrieOrderInto` is available when DFS/trie order is acceptable.
-
-`FmDictionaryBuildOptions(validateDistinct: false)` skips the temporary
-duplicate-checking hash set when the caller already guarantees distinct input.
-The default remains `true`. Set `fmBackend` to `fbpWavelet` or `fbpRunLength`
-for reproducible comparisons; `fbpAuto` (the default) selects RLE only when its
-estimated storage is clearly smaller. `FmDictionary.stats()` reports run
-statistics, estimated/actual backend bytes, and estimation error ratios, while
-`memoryUsage()` reports the selected backend's storage without retaining both
-final payloads. The RLE payload derives lengths from run boundaries and does
-not retain a `runLengths` array. Its fused `rankPair` includes a same-run path.
-Code that directly read the former public `RunLengthBwt.runLengths` field must
-derive each length from adjacent `runStarts.select1` positions (using `n` for
-the final boundary); the dictionary search APIs are unchanged.
-
-Suffix and substring backward search now dispatches once per query to a
-Wavelet- or RLE-specialized loop. LF traversal uses the corresponding checked-
-free internal path after the FM row range has already been established.
-`accessRankUnchecked` is also available for advanced callers, but its caller
-must guarantee `0 <= position < n`; normal code should use `accessRank`.
-
-Construction uses SA-IS with `O(n)` time and `O(n)` temporary storage. L/S
-types and LMS positions are stored in two `BitVector` instances at one bit per
-flag. The Radix Trie is built directly from sorted strings and adjacent LCPs;
-temporary nodes retain source offsets instead of copied labels or per-node child
-sequences. It uses DFS-preorder nodes, internal-node-only child metadata,
-block-packed parent deltas, adaptive dense/sparse edge offsets, internal
-terminal ranges, a `SuccinctBitVector` for terminal nodes, and 256-bit child
-maps only for nodes with at least 17 children. The finished
-dictionary is immutable. `stats()` and `memoryUsage()` expose trie structure,
-parent delta distribution, suffix density, and storage diagnostics. See
-[benchmarks.md](benchmarks.md) for measured performance.
-
-`nimble benchFmRev4` runs the deterministic 10-corpus, 10k/100k/1m-entry and
-8/16/32/64-byte matrix. `nimble benchRadixChildren` compares degree-specific
-linear, binary, and bitmap child lookup. `nimble benchRunLengthBwt` measures
-RLE primitives and run-start alternatives. These commands can take substantial time.
-`nimble benchFmRev5` reports backward-search, LF-traversal, materialization,
-ordering, and p50/p90/p95/p99/max latency. On Linux, build with
-`nimble benchFmRev5Perf` and run `bash benchmarks/run_fm_rev5_perf.sh` to collect
-per-query CPU counters when `perf` is installed and permitted by the kernel.
+See [benchmarks.md](benchmarks.md) and [docs/api_guide.md](docs/api_guide.md) for
+advanced query APIs, storage diagnostics, and benchmark details.
 
 ### ReversedWaveletMatrix
 
 `ReversedWaveletMatrix` uses the same compact bit-vector representation but
-constructs its levels from LSB to MSB.
-
-```nim
-import nbvs/reversed_wavelet_matrix
-
-let rwm = genReversedWaveletMatrix(@[5'u64, 1, 7, 5, 2, 1])
-doAssert rwm[2] == 7
-doAssert rwm.rank(1, 6) == 2
-doAssert rwm.rankIncl(5, 3) == 2
-doAssert rwm.rankLessThan(5, 6) == 3
-doAssert rwm.occPosition(5, 4) == 5
-doAssert rwm.select(5, 1) == 3
-doAssert rwm.selectNth(5, 2) == 3
-doAssert rwm.matchesAt(3, 5)
-doAssert rwm.valueCounts == @[
-  (value: 1'u64, frequency: 2'i64),
-  (value: 2'u64, frequency: 1'i64),
-  (value: 5'u64, frequency: 2'i64),
-  (value: 7'u64, frequency: 1'i64)]
-```
-
-It provides the same value/count enumeration functions and iterators shown for
-`WaveletMatrix`, including `collectDistinctValues`, `distinctValues`, and their
-`Items` variants. The `collect` APIs avoid sorting and do not guarantee result
-order. The other APIs sort the LSB-first traversal results by value.
-`occPosition(value, pos)` returns all values smaller than `value` in the
-complete sequence plus occurrences of `value` in `[0, pos)`. This is
-`C[value] + Occ(value, pos)` in FM-index terminology.
-Numeric-order queries such as `quantile` and `rangeFreq` remain APIs of the
-MSB-first `WaveletMatrix`.
-`matchesAt` and `matchesAtUnchecked` are also available for RWM and its View;
-the unchecked form requires `0 <= position < n`. RWM intentionally has no
-range-position predicate because an LSB-first prefix is not a contiguous
-numeric interval.
-
-For RWM, `rankLessThan(value, pos)` traverses occupied LSB-first subtrees and
-prunes subtrees whose value bounds are already decided. Unlike the WM version,
-its cost depends on the value distribution rather than being `O(bitWidth)`.
+constructs its levels from LSB to MSB. It supports access, rank/select,
+`rankLessThan`, matching predicates, and value/count enumeration. Numeric-order
+queries such as `quantile` and `rangeFreq` remain APIs of the MSB-first
+`WaveletMatrix`.
 
 ### External-memory views
 
-`BitVectorView`, `SuccinctBitVectorView`, `EliasFanoView`,
-`WaveletMatrixView`, and `ReversedWaveletMatrixView` provide the corresponding
-public operations without owning their backing memory. They can reference mmap
-regions, shared-memory segments, or application-managed buffers. The caller
-must keep every buffer and the Wavelet level-descriptor array alive and at a
-stable address while a view is in use.
-
-`requiredSuccinctBitVectorViewBytes(bitLength)` returns the required contiguous
-payload size. `initSuccinctBitVectorView(..., built = false)` creates a mutable
-view that can be populated and passed to `build()`. On reopening a persisted
-payload, pass `built = true`; totals are reconstructed from raw words while the
-persisted rank/select auxiliaries are reused. Composite initializers accept
-already initialized lower-level views, so nbvs does not impose a database
-header, page size, or whole-file layout.
-
-All pointer initializers validate capacity, nil pointers, alignment, and
-structural metadata. A view never closes an mmap or frees a supplied buffer.
-Using a view after its backing memory or descriptor array has been released or
-moved is invalid.
+`BitVectorView`, `SuccinctBitVectorView`, `EliasFanoView`, `WaveletMatrixView`,
+and `ReversedWaveletMatrixView` provide the corresponding public operations
+without owning their backing memory. The caller must keep all buffers and level
+descriptor arrays alive and at stable addresses while a view is in use.
 
 ### Benchmarks
 
-Compare the production DFS/PackedArray Radix Trie representation with LOUDS,
-DFUDS, and SBV edge boundaries:
-
-```sh
-nimble benchRadixRepresentations
-```
-
-Run five repeated trials over random, common-prefix, URL/path, code-symbol, and
-natural-name-like corpora:
-
-```sh
-nimble benchFmDistributions
-```
-
-Compare internal-node lookup, Elias-Fano first-child offsets, subtree-chain
-child navigation, block-packed parents, and terminal-ordinal mapping:
-
-```sh
-nimble benchRadixCompaction
-```
-
-Both benchmark programs accept `count` and average byte length as positional
-arguments. The distribution benchmark accepts the trial count as its third
-argument.
+See [benchmarks.md](benchmarks.md) for benchmark commands and measured results.
 
 ### Documentation generation
 
@@ -649,7 +471,11 @@ Run the full test suite:
 nimble test
 ```
 
-The tests cover public API behavior, error paths, boundary values, packed-word crossing, rank/select semantics, Elias-Fano queries, the default portable backend, and key AVX2/BMI2 helper paths when `testSimd` is used.
+Run the AVX2/BMI2 backend tests on a supported CPU:
+
+```sh
+nimble testSimd
+```
 
 ### License
 
@@ -669,6 +495,7 @@ compact bit vector と succinct data structure を Nim 向けに提供します�
 - `BitVector`: 基本的な可変 byte-backed bit vector。
 - `PackedArray`: 固定ビット幅の packed unsigned integer array。
 - `SuccinctBitVector`: `rank` / `select` 対応のportable bit vector。`-d:nbvsSimd` でAVX2/BMI2 backendを利用できます。
+- `QuadVector`: `0..3` を2-bitで保持し、`access` / `rank` / `select` に対応。payloadと補助構造に `PackedArray` を利用します。
 - `EliasFano`: 非減少 `uint64` 列の Elias-Fano 符号化。
 - `WaveletMatrix`: `uint64` 列の rank/select、quantile、値域頻度 index。
 - `ReversedWaveletMatrix`: access、rank、select 対応の LSB-first Wavelet Matrix。
@@ -692,15 +519,6 @@ nimble test
 nim c -d:nbvsSimd -r tests/all.nim
 nimble testSimd
 ```
-
-GCC/Clang では、AVX2/BMI2 backend が次のフラグを渡します。
-
-```text
--mavx2
--mbmi2
-```
-
-MSVC では AVX2/BMI2 backend が `/arch:AVX2` を使います。
 
 ### インストール
 
@@ -731,6 +549,7 @@ import nbvs
 import nbvs/bit_vector
 import nbvs/packed_array
 import nbvs/succinct_bit_vector
+import nbvs/quad_vector
 import nbvs/elias_fano
 import nbvs/wavelet_matrix
 import nbvs/wavelet_select_cursor
@@ -758,24 +577,11 @@ doAssert bv.lenOfBits == 16
 doAssert $bv == "1000000000000001"
 ```
 
-主な API です。
-
-| API | 説明 |
-| --- | --- |
-| `genBitVector(max)` | `max` bit まで扱える bit vector を作成します。 |
-| `setBit(pos)` | bit を `1` にします。 |
-| `clearBit(pos)` | bit を `0` にします。 |
-| `bv[pos]` | bit を読みます。 |
-| `bv[pos] = bool` | bit を書きます。 |
-| `$bv` | 論理長までの bit string に変換します。 |
-
 ### PackedArray
 
 `PackedArray` は、各値を `0 .. 64` bit の固定長で詰めて保持します。
-`PackedArrayView` は、`std/memfiles` で取得した領域を含む、呼び出し側所有の
-連続メモリに対して同じ値操作を提供します。Viewはメモリを所有・解放しないため、
-利用中は呼び出し側が領域の有効性とmap状態を維持する必要があります。メモリは
-`uint64` accessに必要なalignmentを満たす必要があります。
+`PackedArrayView` は呼び出し側所有の連続メモリに対して同じ値操作を提供します。
+Viewはメモリを所有・解放しません。
 
 ```nim
 import nbvs/packed_array
@@ -787,39 +593,7 @@ a.fill(7)
 
 doAssert a[0] == 7
 doAssert a.maxValue == 8191
-doAssert a.toSeq == @[7'u64, 7, 7, 7, 7]
 ```
-
-```nim
-import std/memfiles
-import nbvs/packed_array
-
-var mappedFile = memfiles.open("values.bin", mode = fmReadWrite,
-  newFileSize = 1024)
-try:
-  var view = initPackedArrayView(mappedFile.mem, mappedFile.size,
-    len = 100, bitWidth = 13)
-  view[10] = 123
-  doAssert view.get(10) == 123
-finally:
-  mappedFile.close()
-```
-
-ファイルサイズとlayoutはアプリケーション側の責務です。`PackedArrayView` はheader、
-page size、1配列1ファイルといった規約を追加しません。
-
-主な API です。
-
-| API | 説明 |
-| --- | --- |
-| `genPackedArray(len, bitWidth)` | packed array を作成します。 |
-| `initPackedArrayView(memory, memorySize, len, bitWidth)` | 外部メモリを参照する非所有Viewを作成します。 |
-| `maskForWidth(bitWidth)` | 指定 bit 幅の low-bit mask を返します。 |
-| `maxValue()` | 表現可能な最大値を返します。 |
-| `get(i)` / `a[i]` | 値を読みます。 |
-| `set(i, value)` / `a[i] = value` | 値を書きます。 |
-| `fill(value)` | 全要素を指定値で埋めます。 |
-| `toSeq()` | unpacked な sequence に変換します。 |
 
 ### SuccinctBitVector
 
@@ -835,39 +609,47 @@ sbv[999] = true
 sbv.build()
 
 doAssert sbv.access(10)
-doAssert sbv.rank1(11) == 2      # [0, 11) の 1 の個数
-doAssert sbv.rank0(11) == 9      # [0, 11) の 0 の個数
-doAssert sbv.rank1Incl(10) == 2  # [0, 10] の 1 の個数
-doAssert sbv.select1(0) == 0
+doAssert sbv.rank1(11) == 2
+doAssert sbv.rank0(11) == 9
 doAssert sbv.select1(1) == 10
-doAssert sbv.select1(2) == 999
-doAssert sbv.select1(3) == -1
 ```
-
-`rank` / `select` の意味です。
-
-| API | 意味 |
-| --- | --- |
-| `rank1(pos)` | `[0, pos)` に含まれる `1` の個数。 |
-| `rank1Unchecked(pos)` | 検査なしの `rank1`。`build` 済みかつ `0 <= pos <= lenOfBits` が必要。 |
-| `rank0(pos)` | `[0, pos)` に含まれる `0` の個数。 |
-| `rank1Incl(pos)` | `[0, pos]` に含まれる `1` の個数。 |
-| `rank0Incl(pos)` | `[0, pos]` に含まれる `0` の個数。 |
-| `select1(k)` | 0-based で `k` 番目の `1` の位置。存在しなければ `-1`。 |
-| `select0(k)` | 0-based で `k` 番目の `0` の位置。存在しなければ `-1`。 |
-| `select1Nth(nth)` | 1-based で `nth` 番目の `1` の位置。存在しなければ `-1`。 |
-| `select0Nth(nth)` | 1-based で `nth` 番目の `0` の位置。存在しなければ `-1`。 |
 
 更新後は再度 `build()` してください。
-scalar backendはword-pair rank prefixを追加で保持するため、
-`SuccinctBitVector`の格納量が生bit data比で約6.25%増加します。
-SIMD backendは既存のAVX2専用prefix構成を維持します。
+scalar backendではword-pair rank prefixを自動生成せず、512-bit block内のrankは
+scalar popcountで直接計算します。SIMD backendでは、実装上有効化される大きなvectorに
+対して既存のAVX2向け補助prefixを利用します。
+
+### QuadVector
+
+`QuadVector` は `0..3` の4値シンボルを1要素2 bitで `PackedArray` に保持し、
+`access` / `rank` / `select` を提供します。値を設定した後、rank/select を使う前に
+`build()` を呼びます。
 
 ```nim
-sbv[10] = false
-sbv.build()
-doAssert sbv.rank1(1000) == 2
+import nbvs/quad_vector
+
+var qv = genQuadVector(8)
+for i, value in [0'u8, 1, 2, 3, 0, 1, 2, 3]:
+  qv[int64(i)] = value
+qv.build()
+
+doAssert qv.access(2) == 2
+doAssert qv.rank2(8) == 2
+doAssert qv.select3(1) == 7
 ```
+
+`rank(symbol, pos)` は `[0, pos)` に含まれる対象シンボル数を返します。
+`select(symbol, k)` は0-basedで `k` 番目の出現位置を返します。
+`rank0`..`rank3`、`rank0Incl`..`rank3Incl`、`select0`..`select3` のwrapperも利用できます。
+
+payloadは2-bit `PackedArray` です。rank補助構造は4096-symbol superblockと
+512-symbol block、selectは各シンボル1024出現ごとのsampled superblock idを使います。
+補助構造の目標容量は2-bit payload比で7.8125%です。内訳はrank 6.25%、select 1.5625%で、
+object/sequence headerと末尾の丸めは除きます。
+
+portable backendはSWAR equality maskとpopcountを使用します。`-d:nbvsSimd` 指定時は
+block内をAVX2で128 packed symbolずつ走査し、最後の2-bit lane選択にBMI2 `PDEP`を使います。
+public APIとpacked補助構造はscalar/SIMDで共通です。
 
 ### EliasFano
 
@@ -882,31 +664,11 @@ let ef = genEliasFano(xs, 32)
 doAssert ef[2] == 7
 doAssert ef.select(4) == 15
 doAssert ef.lowerBound(8) == 3
-doAssert ef.upperBound(10) == 4
-doAssert ef.predecessor(6) == 3
-doAssert ef.countLessEqual(10) == 4
-doAssert ef.toSeq == xs
 ```
-
-主な API です。
-
-| API | 説明 |
-| --- | --- |
-| `genEliasFano(xs, universe)` | Elias-Fano を生成します。 |
-| `ef[i]` / `access(i)` / `select(i)` | index `i` の値を返します。 |
-| `lowerBound(v)` | `v` 以上の最初の index。なければ `n`。 |
-| `upperBound(v)` | `v` より大きい最初の index。なければ `n`。 |
-| `lastLessEqual(v)` | `v` 以下の最後の index。なければ `-1`。 |
-| `predecessor(v)` | `v` 以下の最大値。なければ `ValueError`。 |
-| `countLessThan(v)` | `v` 未満の値の個数。 |
-| `countLessEqual(v)` | `v` 以下の値の個数。 |
-| `items` | 値を順に iterate します。 |
-| `toSeq()` | `seq[uint64]` に decode します。 |
 
 ### WaveletMatrix
 
-`WaveletMatrix` は任意順序の `uint64` 列を index 化します。位置範囲と
-値範囲は半開区間です。
+`WaveletMatrix` は任意順序の `uint64` 列を index 化します。位置範囲と値範囲は半開区間です。
 
 ```nim
 import nbvs/wavelet_matrix
@@ -914,256 +676,37 @@ import nbvs/wavelet_matrix
 let wm = genWaveletMatrix(@[5'u64, 1, 7, 5, 2, 9, 1])
 doAssert wm[2] == 7
 doAssert wm.rank(5, 7) == 2
-doAssert wm.rankIncl(5, 3) == 2
-doAssert wm.rankLessThan(5, 7) == 3
-doAssert wm.occPosition(5, 4) == 5
 doAssert wm.select(1, 1) == 6
-doAssert wm.selectNth(1, 2) == 6
 doAssert wm.quantile(1, 6, 2) == 5
-doAssert wm.rangeFreq(0, 7, 2, 8) == 4
-doAssert wm.matchesAt(3, 5)
-doAssert wm.valueInRangeAt(4, 2, 8) # 値のinclusive range
 ```
 
-| API | 説明 |
-| --- | --- |
-| `genWaveletMatrix(xs)` | `xs` の不変 index を構築します。 |
-| `wm[i]` / `access(i)` | 元の列の index `i` の値を返します。 |
-| `matchesAt(position, value)` | 最初の不一致bitで終了して等値を判定します。 |
-| `valueInRangeAt(position, low, high)` | prefixを枝刈りしてinclusive range `[low, high]` を判定します。 |
-| `rank(value, pos)` | `[0, pos)` にある `value` の個数。 |
-| `rank(value, left, right)` | `[left, right)` にある `value` の個数。 |
-| `rankIncl(value, pos)` | `[0, pos]` にある `value` の個数。 |
-| `rankLessThan(value, pos)` | `[0, pos)` にある `value` 未満の個数。WMでは `O(bitWidth)`。 |
-| `occPosition(value, pos)` | 列全体の `value` 未満の個数と `[0, pos)` にある `value` の個数の和。FM-indexの `C[value] + Occ(value, pos)` に相当します。 |
-| `select(value, k)` | 0-based で `k` 番目の出現位置。なければ `-1`。 |
-| `selectNth(value, nth)` | 1-based で `nth` 番目の出現位置。なければ `-1`。 |
-| `initWaveletSelectCursor(value)` | 同じ値を繰り返し`select`するための値区間を準備します。 |
-| `nextSelect(cursor)` | 準備済みcursorから次の出現位置を返します。消費後は`-1`。 |
-| `quantile(left, right, k)` | 位置範囲内で `k` 番目に小さい値。 |
-| `countLessThan(left, right, value)` | 位置範囲内の `value` 未満の個数。 |
-| `rangeFreq(left, right, lower, upper)` | 値が `[lower, upper)` に入る個数。 |
-| `predecessor(left, right, upper)` | `upper` 未満の最大値。なければ `ValueError`。 |
-| `successor(left, right, lower)` | `lower` 以上の最小値。なければ `ValueError`。 |
-| `items` / `toSeq()` | 元の順序で値を decode します。 |
-| `collectValueCounts(left, right)` | sortせず走査順で `(value, frequency)` を収集します。 |
-| `collectValueCountFinalIntervals(left, right)` | `(value, frequency, left, right)` を収集します。`[left, right)` は最終Wavelet permutation上のterminal intervalです。 |
-| `valueCounts(left, right)` | 値で昇順の `(value, frequency)` 一覧。 |
-| `collectDistinctValues(left, right)` | 頻度を計算せず、存在するnodeから異なる値を走査順で直接収集します。 |
-| `distinctValues(left, right)` | 異なる値を昇順で返します。 |
-| `collectValueCountsItems` / `valueCountsItems` | 走査順または昇順の `(value, frequency)` を逐次返すiterator。 |
-| `collectValueCountFinalIntervalsItems` | `collectValueCountFinalIntervals` のiterator版。 |
-| `collectDistinctValuesItems` / `distinctValuesItems` | 走査順または昇順の異なる値を逐次返すiterator。 |
-
-列挙APIには、`left, right` を省略して列全体を対象にするoverloadも
-あります。すべての範囲は半開区間です。`collect` 系は順序を保証せず、
-非 `collect` 系は値の昇順を保証します。
-`matchesAtUnchecked` と `valueInRangeAtUnchecked` は位置検証を省くため、
-`0 <= position < n` を呼び出し側が保証します。同じAPIを
-`WaveletMatrixView`でも利用できます。
-
-`matchingRunsItems(value, left, right)`は一致する極大な物理位置区間を位置の
-昇順で列挙します。`matchingRuns`はsequenceとして収集し、`collectMatchingRuns`は
-同じ順序を保証する別名です。いずれも列全体のoverloadと`WaveletMatrixView`に
-対応します。最大96回の両端select判定によるprobeで、細分化されたrunでは逐次select、
-32要素以上の物理区間が見つかる場合はterminal-to-root interval liftingを選択します。
-両経路ともquery内の一時状態のみを使い、永続補助indexは追加しません。
-このheuristicは結果と順序を維持しますが、すべての入力で最速の経路を保証しません。
-[PR #17の測定結果](benchmarks/results/wm_matching_runs_pr17_validation.md)を参照してください。
-
-同じ値を繰り返し選択する場合、`WaveletSelectCursor`は値区間を1回だけ計算し、
-各出現位置で再利用します。Cursorはmatrixを所有しないため、使用中は
-`WaveletMatrix`、または`WaveletMatrixView`のbacking storageを有効に保ってください。
-
-```nim
-var cursor = wm.initWaveletSelectCursor(5)
-while cursor.remaining > 0:
-  echo wm.nextSelect(cursor)
-```
-
-```nim
-let values = genWaveletMatrix(@[1'u64, 3, 4, 1])
-doAssert values.distinctValues == @[1'u64, 3, 4]
-
-for item in values.valueCountsItems:
-  echo item.value, ": ", item.frequency
-```
+`WaveletMatrix` は access、rank/select、quantile、range frequency、
+predecessor/successor、distinct value列挙、matching run列挙、repeated-select cursorを
+提供します。高度なAPIは [docs/api_guide.md](docs/api_guide.md) を参照してください。
 
 ### FmDictionary
 
-`FmDictionary` は、構築時にWavelet BWTまたはrun-length BWTを選択するFM backendとcompactな
-path-compressed Radix Trieを組み合わせた文字列Dictionaryです。exact、prefix検索と
-Dictionary IDからの復元はTrieを使い、suffix、substring検索は従来どおりFM-indexを
-使います。edge labelは元文字列poolではなく共有byte配列へ格納します。UTF-8文字列は
-byte単位で検索し、Unicode正規化は呼び出し側の責務です。入力文字列はdistinctである
-必要があります。
-
-```nim
-import nbvs/fm_dictionary
-
-let dict = genFmDictionary(@[
-  "apple",
-  "application",
-  "banana",
-  "hana"
-])
-
-doAssert dict.findExact("banana") == 2
-doAssert dict.findPrefix("app") == @[0'u32, 1'u32]
-doAssert dict.findSubstring("ana") == @[2'u32, 3'u32]
-doAssert dict.getString(3) == "hana"
-```
-
-`FmDictionaryView`は、呼び出し側が所有するexternal memoryに対して同じread-only
-query APIを提供します。`WaveletMatrixView`または`RunLengthBwtView`、3つの
-`PackedArrayView`、`SuccinctRadixTrieView`を合成する型であり、`MemFile`を所有せず、
-file formatやmappingの寿命も管理しません。アプリケーションが管理するoffsetとsizeから
-各下位Viewを構築し、`FmDictionaryViewParts`として`initFmDictionaryView`へ渡します。
-参照するmemoryとView descriptor配列は、Dictionary Viewの使用中ずっと有効に保つ必要が
-あります。`FmQueryWorkspace`と`PrefixQueryWorkspace`は引き続きHeap上のscratch領域で、
-Heap版とView版のどちらからも初期化できます。
-
-substring検索を繰り返す場合は`FmQueryWorkspace`を再利用できます。`Into` APIでは、
-呼び出し側が所有する出力bufferのcapacityも再利用します。
-
-```nim
-var workspace = initFmQueryWorkspace(dict)
-var ids: seq[DictionaryId]
-dict.findSubstringInto("ana", workspace, ids)
-
-var restored: string
-dict.getStringInto(3, restored)
-```
-
-大きなprefix結果では`PrefixQueryWorkspace`を再利用できます。結果が256件以上では
-touched-word bitmapへ切り替え、Dictionary ID昇順を維持します。DFS/Trie順でよい場合は
-`findPrefixTrieOrderInto`も利用できます。
-
-呼び出し側で入力がdistinctと保証される場合は、
-`FmDictionaryBuildOptions(validateDistinct: false)`により一時的な重複検査HashSetを
-省略できます。既定値は後方互換のため`true`です。再現可能な比較では`fmBackend`へ
-`fbpWavelet`または`fbpRunLength`を指定できます。既定の`fbpAuto`はRLEの推定容量が
-明確に小さい場合だけRLEを選びます。`FmDictionary.stats()`はrun統計と選択時の推定値を、
-実容量、推定誤差を返し、`memoryUsage()`は両方の完成payloadを保持せず選択されたbackendの
-容量内訳を返します。RLE完成payloadはrun境界から長さを導出するため`runLengths`配列を
-保持しません。融合`rankPair`には同一run専用経路があります。
-旧公開field `RunLengthBwt.runLengths`を直接参照していたコードは、隣接する
-`runStarts.select1`の位置（最終境界は`n`）から各長さを導出してください。
-辞書検索APIに変更はありません。
-
-Suffix/Substringのbackward searchはquery入口で一度だけ分岐し、Wavelet/RLE別のloopを
-実行します。LF traversalもFM rowの範囲が保証された後は対応backendの検査なし内部経路を
-使用します。高度な用途では`accessRankUnchecked`も利用できますが、呼び出し側で
-`0 <= position < n`を保証する必要があります。通常は`accessRank`を使用してください。
-
-構築処理は時間計算量`O(n)`、追加領域`O(n)`のSA-ISを使用します。L/S型とLMS位置は、
-各flagを1 bitで保持する2つの`BitVector`へ格納します。Radix Trieは辞書順文字列と
-隣接LCPから直接構築し、一時nodeはlabel copyやnodeごとのchildren seqではなく
-入力上のoffsetを保持します。完成形はDFS preorderのnode、internal node限定の子metadata、
-block-packed parent delta、adaptiveな
-dense/sparse edge offset、internal terminal range、terminal node用の
-`SuccinctBitVector`、degree 17以上のnodeだけが持つ256-bit child mapを使用します。
-構築後のDictionaryはimmutableです。`stats()`と
-`memoryUsage()`でTrie構造、parent delta分布、suffix密度、容量内訳を確認できます。
-実測値は [benchmarks.md](benchmarks.md) を参照してください。
-
-`nimble benchFmRev4`は決定的な10 corpusについて、10k/100k/1m件と平均8/16/32/64 byteの
-matrixを実行します。`nimble benchRadixChildren`はdegree別のlinear、binary、bitmap探索を
-比較します。`nimble benchRunLengthBwt`はRLE primitiveとrun-start候補を測定します。
-これらの完走には相応の時間がかかります。
-`nimble benchFmRev5`はbackward search、LF traversal、materialization、orderingと
-p50/p90/p95/p99/max latencyを出力します。Linuxで`perf`が利用可能な場合は
-`nimble benchFmRev5Perf`でbuild後、`bash benchmarks/run_fm_rev5_perf.sh`により
-query単位のCPU counterを取得できます。
+`FmDictionary` はWavelet BWTまたはrun-length BWTを選択するFM backendとcompactな
+path-compressed Radix Trieを組み合わせた文字列Dictionaryです。exact、prefix、suffix、
+substring検索に対応します。詳細とbenchmarkは [benchmarks.md](benchmarks.md) を参照してください。
 
 ### ReversedWaveletMatrix
 
-`ReversedWaveletMatrix` は `WaveletMatrix` と同じ compact bit vector 表現を
-使い、LSB から MSB の順で level を構築します。
-
-```nim
-import nbvs/reversed_wavelet_matrix
-
-let rwm = genReversedWaveletMatrix(@[5'u64, 1, 7, 5, 2, 1])
-doAssert rwm[2] == 7
-doAssert rwm.rank(1, 6) == 2
-doAssert rwm.rankIncl(5, 3) == 2
-doAssert rwm.rankLessThan(5, 6) == 3
-doAssert rwm.occPosition(5, 4) == 5
-doAssert rwm.select(5, 1) == 3
-doAssert rwm.selectNth(5, 2) == 3
-doAssert rwm.matchesAt(3, 5)
-doAssert rwm.valueCounts == @[
-  (value: 1'u64, frequency: 2'i64),
-  (value: 2'u64, frequency: 1'i64),
-  (value: 5'u64, frequency: 2'i64),
-  (value: 7'u64, frequency: 1'i64)]
-```
-
-`WaveletMatrix` と同じ値・頻度列挙関数とiteratorを提供し、
-`collectDistinctValues`、`distinctValues`、各 `Items` 版も利用できます。
-`collect` 系APIはsortせず結果順を保証しません。非 `collect` 系APIは
-LSB-firstの探索結果を値でsortします。
-`occPosition(value, pos)` は列全体の `value` 未満の個数と、`[0, pos)` にある
-`value` の出現数の和を返します。FM-indexの `C[value] + Occ(value, pos)` に相当します。
-数値順に依存する `quantile` と `rangeFreq` は MSB-first の
-`WaveletMatrix` で利用できます。
-RWMとそのViewでも `matchesAt` / `matchesAtUnchecked` を利用できます。
-unchecked版では `0 <= position < n` を呼び出し側が保証します。LSB-firstの
-prefixは連続した数値区間にならないため、RWMにはrange position predicateを
-提供しません。
-
-RWMの `rankLessThan(value, pos)` は、LSB-firstの出現subtreeを走査し、
-値の上下限から結果が確定したsubtreeを枝刈りします。WM版の
-`O(bitWidth)` とは異なり、計算量は値の分布に依存します。
+`ReversedWaveletMatrix` は `WaveletMatrix` と同じ compact bit vector 表現を使い、
+LSB から MSB の順で level を構築します。access、rank/select、`rankLessThan`、
+matching predicate、value/count列挙に対応します。
 
 ### 外部メモリView
 
-`BitVectorView`、`SuccinctBitVectorView`、`EliasFanoView`、
-`WaveletMatrixView`、`ReversedWaveletMatrixView` は、backing memoryを
-所有せずに対応する公開操作を提供します。mmap領域、共有memory segment、
-アプリケーション管理bufferを参照できます。Viewの使用中は、すべてのbufferと
-Wavelet level descriptor配列を呼び出し側が有効かつ同じaddressに保つ必要があります。
-
-`requiredSuccinctBitVectorViewBytes(bitLength)` は連続payloadに必要な容量を
-返します。`initSuccinctBitVectorView(..., built = false)` で可変Viewを作り、
-bit設定後に `build()` を呼べます。永続化済みpayloadを再openする場合は
-`built = true` を指定します。raw wordから総数を再構成し、永続化された
-rank/select補助領域を再利用します。合成型の初期化関数は初期化済みの下位Viewを
-受け取るため、nbvsはdatabase header、page size、ファイル全体のlayoutを規定しません。
-
-pointer初期化関数は容量、nil、alignment、構造metadataを検証します。Viewがmmapを
-closeしたりbufferを解放したりすることはありません。backing memoryまたはdescriptor
-配列の解放・移動後にViewを使用してはいけません。
+`BitVectorView`、`SuccinctBitVectorView`、`EliasFanoView`、`WaveletMatrixView`、
+`ReversedWaveletMatrixView` は、backing memoryを所有せずに対応する公開操作を提供します。
+Viewの使用中は呼び出し側がbacking memoryを有効に保つ必要があります。
 
 ### ベンチマーク
 
-本番のDFS／PackedArray Radix Trie表現と、LOUDS、DFUDS、SBV edge境界を比較します。
-
-```sh
-nimble benchRadixRepresentations
-```
-
-random、共通prefix、URL/path、code symbol、自然言語名称風の各corpusを5試行ずつ
-測定します。
-
-```sh
-nimble benchFmDistributions
-```
-
-internal-node lookup、Elias-Fano first-child offset、subtree chainによる子navigation、
-block-packed parent、terminal ordinal mappingを比較します。
-
-```sh
-nimble benchRadixCompaction
-```
-
-どちらも位置引数で件数と平均byte長を指定できます。分布benchmarkでは第3引数で
-試行回数も指定できます。
+測定コマンドと結果は [benchmarks.md](benchmarks.md) を参照してください。
 
 ### ドキュメント生成
-
-Nim の API documentation は次で生成します。
 
 ```sh
 nimble docs
@@ -1179,9 +722,11 @@ nimble docs
 nimble test
 ```
 
-公開API、エラー系、境界値、word境界をまたぐpacked storage、rank/select semantics、
-Elias-Fano query、デフォルトのportable backend、`testSimd` 利用時の主要な
-AVX2/BMI2 helper pathをテスト対象にしています。
+AVX2/BMI2対応CPUでは次も実行できます。
+
+```sh
+nimble testSimd
+```
 
 ### ライセンス
 
