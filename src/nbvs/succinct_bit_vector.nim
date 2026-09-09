@@ -120,9 +120,8 @@ type
     # Vectors whose absolute count may not fit uint32 use the hierarchy only.
     blockPairPrefix*: seq[uint32]
 
-    # 512-bit block内で、2 wordごとのone-bit累積数をpackして保持する。
-    # rank query時のpopcountを最大1 wordへ抑えるための補助領域。
-    wordPairPrefix*: seq[uint32] ## Scalar rank用のpacked word-pair prefix。
+    # 後方互換のためfieldを残しています。scalar backendでは自動生成・利用しません。
+    wordPairPrefix*: seq[uint32]
 
     level1Len*: int
     level2Len*: int
@@ -312,8 +311,6 @@ func genSuccinctBitVector*(maxBits: int64): SuccinctBitVector =
 
   result.dataWords = int(ceilDiv(maxBits, 64'i64))
   result.data = newSeq[uint64](int(alignUp(int64(result.dataWords), 8'i64)))
-  when not defined(nbvsSimd):
-    result.wordPairPrefix = newSeq[uint32](int(ceilDiv(maxBits, L1)))
   when defined(nbvsSimd):
     if maxBits > L5 and maxBits <= int64(uint32.high):
       result.blockPairPrefix = newSeq[uint32](int(ceilDiv(maxBits, L1 * 2)))
@@ -352,8 +349,6 @@ func estimateSuccinctBitVectorBytes*(bitLength: int64): int64 =
     raise newException(ValueError, "bitLength exceeds supported range")
   let dataWords = alignUp(ceilDiv(bitLength, 64'i64), 8'i64)
   result = dataWords * int64(sizeof(uint64))
-  when not defined(nbvsSimd):
-    result += ceilDiv(bitLength, L1) * int64(sizeof(uint32))
   when defined(nbvsSimd):
     if bitLength > L5 and bitLength <= int64(uint32.high):
       result += ceilDiv(bitLength, L1 * 2) * int64(sizeof(uint32))
@@ -383,8 +378,6 @@ func requiredSuccinctBitVectorViewBytes*(bitLength: int64): int =
   # 4 byte必要です。各seqを別確保する所有型の見積もりには存在しない差です。
   let hasSelectTree = calcLevel(bitLength) >= 1
   var uint32Count = 0'i64
-  when not defined(nbvsSimd):
-    uint32Count = ceilDiv(bitLength, L1)
   when defined(nbvsSimd):
     if bitLength > L5 and bitLength <= int64(uint32.high):
       uint32Count = ceilDiv(bitLength, L1 * 2)
@@ -437,8 +430,6 @@ func initSuccinctBitVectorView*(memory: pointer, memorySize: int,
 
   takeSpan(result.data, uint64,
     int(alignUp(int64(result.dataWords), 8'i64)))
-  when not defined(nbvsSimd):
-    takeSpan(result.wordPairPrefix, uint32, result.level1Len)
   when defined(nbvsSimd):
     if maxBits > L5 and maxBits <= int64(uint32.high):
       takeSpan(result.blockPairPrefix, uint32,
@@ -605,21 +596,6 @@ func popcount512At*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, baseBi
     for j in 0..<8:
       result += int64(countSetBits(sbv.data[startWord + j]))
 
-func buildWordPairPrefix[S: SuccinctBitVector | SuccinctBitVectorView](sbv: var S,
-                         baseBit: int64): int64 =
-  let startWord = int(baseBit shr 6)
-  var counts: array[8, uint32]
-  for i in 0..<8:
-    counts[i] = uint32(countSetBits(sbv.data[startWord + i]))
-
-  let prefix2 = counts[0] + counts[1]
-  let prefix4 = prefix2 + counts[2] + counts[3]
-  let prefix6 = prefix4 + counts[4] + counts[5]
-  sbv.wordPairPrefix[int(baseBit shr 9)] =
-    prefix2 or (prefix4 shl 8) or (prefix6 shl 17)
-  for count in counts:
-    result += int64(count)
-
 func build*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: var S) =
   ## Builds or rebuilds the rank/select dictionary.
   sbv.resetLevelPadding()
@@ -705,10 +681,7 @@ func build*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: var S) =
           unsafeAddr sbv.selectStorage[level1NodeWord])[p1 and 15] =
             int16(total - base2)
 
-      when defined(nbvsSimd):
-        total += sbv.popcount512At(bitPos)
-      else:
-        total += sbv.buildWordPairPrefix(bitPos)
+      total += sbv.popcount512At(bitPos)
       bitPos += L1
 
       when maxLevel >= 1:
@@ -780,31 +753,8 @@ func rankIn512Block*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, pos: 
   let inBlock = int(pos and (L1 - 1))
   let wordOffset = inBlock shr 6
   let bitOffset = inBlock and 63
-  when defined(nbvsSimd):
-    for wordIndex in 0..<wordOffset:
-      result += int64(countSetBits(sbv.data[startWord + wordIndex]))
-  else:
-    let packed = sbv.wordPairPrefix[int(pos shr 9)]
-    case wordOffset
-    of 0:
-      discard
-    of 1:
-      result = int64(countSetBits(sbv.data[startWord]))
-    of 2:
-      result = int64(packed and 0xff'u32)
-    of 3:
-      result = int64(packed and 0xff'u32) +
-        int64(countSetBits(sbv.data[startWord + 2]))
-    of 4:
-      result = int64((packed shr 8) and 0x1ff'u32)
-    of 5:
-      result = int64((packed shr 8) and 0x1ff'u32) +
-        int64(countSetBits(sbv.data[startWord + 4]))
-    of 6:
-      result = int64((packed shr 17) and 0x1ff'u32)
-    else:
-      result = int64((packed shr 17) and 0x1ff'u32) +
-        int64(countSetBits(sbv.data[startWord + 6]))
+  for wordIndex in 0..<wordOffset:
+    result += int64(countSetBits(sbv.data[startWord + wordIndex]))
 
   if bitOffset > 0:
     let partialMask = (1'u64 shl bitOffset) - 1'u64
