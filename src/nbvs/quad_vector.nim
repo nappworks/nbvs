@@ -50,7 +50,6 @@ const
   SelectSampleWidth = 32
   RankSuperBitsPerRecord = 4 * RankSuperCounterWidth
   RankMetadataWordsPerSuper = 8'i64
-  RankMetadataBitsPerSuper = RankMetadataWordsPerSuper * 64'i64
   RankSuperCounterMask = (1'u64 shl RankSuperCounterWidth) - 1'u64
   RankBlockCounterMask = (1'u64 shl RankBlockCounterWidth) - 1'u64
   QuadLaneMask = 0x5555_5555_5555_5555'u64
