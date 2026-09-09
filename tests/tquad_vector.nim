@@ -148,8 +148,8 @@ block wrapperApis:
   doAssert qv.select3(1) == 7
 
 block exactAuxiliaryBudgetAtAlignedSize:
-  # 64 full superblocks and a perfectly balanced alphabet avoid tail rounding.
-  # Rank is exactly 6.25% and select samples exactly 1.5625% of the payload.
+  # 64 個の完全な superblock と均等な 4 値分布を使い、末尾の丸め誤差をなくします。
+  # rank 補助構造は payload のちょうど 6.25%、select sample はちょうど 1.5625% です。
   const N = 4096 * 64
   var qv = genQuadVector(N)
   for i in 0..<N:
