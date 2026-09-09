@@ -3,15 +3,17 @@
 > **再測定待ち**
 >
 > 2026-09-09 に SBV の SIMD 専用 `blockPairPrefix` を廃止し、scalar/SIMD で
-> rank/select 補助構造を統一しました。この変更後は SBV SIMD の rank/build 性能と
-> 補助容量が変わるため、下記の既存数値および `sbv_quad_vector_simd.csv` は
-> 旧 `blockPairPrefix` ありの実装で取得した参考値です。
-> `nimble benchSbvQv` / `nimble benchSbvQvSimd` を再実行し、CSV と本ページを更新してから
-> 最終結果として扱います。
+> rank/select 補助構造を統一しました。さらにベンチマークを
+> `build_cold` / `build_rebuild` に分離し、4値問い合わせについて
+> Binary Wavelet Matrix 2 level相当と Quad Wavelet Matrix 1 level相当の
+> 意味的に同一な比較を追加しました。
+>
+> この変更後は保存済みCSVのschemaとSBV SIMD性能が変わるため、
+> `nimble benchSbvQv` / `nimble benchSbvQvSimd` を再実行し、CSVと本ページを
+> 更新してから最終結果として扱います。
 
 ## 測定条件
 
-- 実行日: 2026-09-09
 - CPU: Intel Core i5-8365U（4 cores / 8 threads、AVX2/BMI2）
 - OS: Linux 5.15.146.1-microsoft-standard-WSL2 x86_64
 - Nim: 2.2.10
@@ -22,11 +24,48 @@
 - 測定: 固定seed、warmup 1回、測定7回のp50
 - query workload: 各operation 100,000回
 - サイズ: 65,536 / 1,048,576 / 16,777,216 symbols
+- 分布: `uniform` / `sparse` / `dense` / `skewed`
 
-分布は `uniform`（各値25%）、`sparse`（0が97%）、`dense`
-（0が1%、1..3が各約33%）、`skewed`（70/20/8/2%）です。同じ4値symbol列を
-両構造へ入力し、SBVにはsymbolの下位bitを格納しました。access/rank/selectは同数の
-queryを実行し、rank/selectのQV symbolとSBV bitは同じquery symbolから決定しています。
+## 比較の種類
+
+現行ベンチマークは、目的の異なる2種類の比較を同時に出力します。
+
+### primitive
+
+SBV 1個とQV 1個の単体primitive costを比較します。
+
+- QV: 4値symbolをそのまま2-bitで格納
+- SBV: 同じ4値symbolの下位1 bitだけを格納
+
+この比較は `access` / `rank` / `select` の1 primitiveあたりのコストを見るためのものです。
+SBVとQVで問い合わせの意味が同一ではないため、Quad Wavelet Matrixの優劣を直接判断する
+比較には使いません。
+
+### wavelet4
+
+4値alphabetに対して、同じ入力・同じqueryを次の2構造で比較します。
+
+- `BinaryWM2`: Binary Wavelet Matrix 2 level相当。2個のSBVを使用
+- `QuadWM1`: Quad Wavelet Matrix 1 level相当。1個のQVを使用
+
+`BinaryWM2` の2 level目SBVは、1 level目のhigh bitによるstable partition後の順序で
+low bitを格納します。`access` / `rank(symbol, pos)` / `select(symbol, k)` は双方とも
+同じ4値symbolに対する同一意味のqueryです。
+
+この `wavelet4` の比較を、Binary WM 2 level と Quad WM 1 level の実質的な性能比較として
+扱います。
+
+## buildの測定
+
+buildは次の2種類を分離して記録します。
+
+- `build_cold`: constructor直後相当のfresh metadataから初回 `build()` を実行
+- `build_rebuild`: 一度build済みの構造に対して、既存metadata storageを再利用して再build
+
+`build_cold` ではpayload生成・入力データの充填自体は測定範囲から除外しますが、
+初回 `build()` 内で発生するmetadata生成・select sample確保は測定対象です。
+これにより、以前のベンチでwarmupに隠れていたQV `selectSamples` の初回確保コストも
+明示的に測定できます。
 
 ## 実行方法
 
@@ -37,52 +76,56 @@ nimble benchSbvQvSimd
 
 実装は [`benchmarks/sbv_quad_vector_comparison.nim`](../sbv_quad_vector_comparison.nim)、
 生結果は [scalar CSV](sbv_quad_vector_scalar.csv) と
-[SIMD CSV](sbv_quad_vector_simd.csv) に保存しています。
+[SIMD CSV](sbv_quad_vector_simd.csv) に保存します。
 
-現行ベンチマークでは補助容量を以下に分けて出力します。
+## 出力schema
 
-- `rank_only_aux_bytes`: rank 専用補助領域
-- `select_only_aux_bytes`: select 専用補助領域
-- `shared_aux_bytes`: rank/select 共用補助領域
-- `total_aux_bytes`: 上記3つの合計
+主な列は以下です。
 
-SBV は scalar/SIMD とも旧 `wordPairPrefix` / `blockPairPrefix` を自動生成せず、
-階層 `selectStorage` を rank/select で共用します。そのため現行実装では
+- `comparison`: `primitive` / `wavelet4`
+- `structure`: `SBV1` / `QV1` / `BinaryWM2` / `QuadWM1`
+- `rank_only_aux_bytes`: rank専用補助領域
+- `select_only_aux_bytes`: select専用補助領域
+- `shared_aux_bytes`: rank/select共用補助領域
+- `total_aux_bytes`: 補助領域合計
+- `build_cold_p50_ms`: 初回build
+- `build_rebuild_p50_ms`: metadata再利用時のrebuild
+- `access_p50_ns`
+- `rank_p50_ns`
+- `select_p50_ns`
+
+SBVはscalar/SIMDとも旧 `wordPairPrefix` / `blockPairPrefix` を自動生成せず、
+階層 `selectStorage` をrank/selectで共用します。そのため現行実装では
 `rank_only_aux_bytes == 0`、`shared_aux_bytes == selectStorage` です。
 
-## 旧実装での結果概要
+QVはrank metadataとselect sampleを別々に保持するため、
+`rank_only_aux_bytes` と `select_only_aux_bytes` に分けて記録します。
 
-以下は SIMD 専用 `blockPairPrefix` を廃止する前の参考値です。
+## 旧実装での参考値
 
-16,777,216 symbolsの測定では、scalar QVのbuildは7.81–8.82 ms
-（1.90–2.15 Gsymbols/s）、SIMD QVは2.55–3.81 ms
-（4.41–6.58 Gsymbols/s）でした。QVのSIMD化によりbuildは約2.1–3.4倍に高速化しています。
+以下は SIMD 専用 `blockPairPrefix` 廃止前、かつ `build_cold` / `build_rebuild` 分離前の
+参考値です。現行schemaの最終結果としては使用しません。
 
-同サイズのQV queryは、scalarでaccess 5.38–11.94 ns、rank
-106.73–113.66 ns、select 239.13–313.03 nsでした。SIMDではaccess
-7.30–13.24 ns、rank 77.55–90.89 ns、select 211.51–261.91 nsです。
-accessはpayload readのみなのでSIMD化の対象ではなく、実行時の揺らぎが見えます。
-rank/selectは全分布でSIMD版がscalar版を短縮しました。
+16,777,216 symbolsのQVでは、scalar buildは7.81–8.82 ms、SIMD buildは2.55–3.81 msでした。
+QV queryはscalarでrank 106.73–113.66 ns、select 239.13–313.03 ns、SIMDでrank
+77.55–90.89 ns、select 211.51–261.91 nsでした。
 
-SBVとQVは表現能力とpayload幅が異なるため、単純な倍率は同一処理の高速化を意味しません。
-同じsymbol数ではSBVのpayloadがQVの半分であり、SBVのbuild/rank/selectはいずれも
-QVより短時間でした。CSVには比較のため、symbolあたりとpayload byteあたりのbuild
-throughputを両方記録しています。
+この時点のSBV/QV単体比較はprimitive cost比較であり、4値symbolに対する意味等価比較では
+ありませんでした。現行ベンチでは `wavelet4` を追加してこの点を是正しています。
 
 ## 容量
 
 16,777,216 symbolsのQV payloadは4,194,304 bytes、rank補助は262,144 bytes
 （6.25%）でした。select補助は分布により65,536–65,560 bytesで、合計補助容量は
-327,680–327,704 bytes（約7.8125%）です。末尾wordの丸めにより分布ごとに最大24 bytes
-の差があります。
+327,680–327,704 bytes（約7.8125%）です。
 
-旧測定では scalar SBV の共用 `selectStorage` は74,912 bytesでした。
-旧 SIMD 測定はこれに加えて65,536 bytesの `blockPairPrefix` を保持していましたが、
-現行実装ではこの SIMD 専用領域を廃止しています。再測定後は scalar/SIMD とも
-同じ補助構造容量になる想定です。
+旧測定ではscalar SBVの共用 `selectStorage` は74,912 bytesでした。
+旧SIMD測定はこれに加えて65,536 bytesの `blockPairPrefix` を保持していましたが、
+現行実装ではこのSIMD専用領域を廃止しています。再測定後はscalar/SIMDで
+同じ補助構造容量になります。
 
 ## 注意事項
 
 WSL2上の単一ホストでの測定です。特に65,536 symbolsのbuildは測定時間が短いため、
-絶対値や数%の差を評価する用途では、試行回数または反復build回数を増やして
+絶対値や数%の差を評価する用途では試行回数または反復build回数を増やして
 再測定してください。
