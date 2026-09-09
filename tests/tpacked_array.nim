@@ -7,6 +7,18 @@ block uncheckedAccess:
     values[index] = uint64((index * 37) mod 512)
   for index in 0..<97:
     doAssert values.getUnchecked(index) == values[index]
+
+block uncheckedWrite:
+  # word境界をまたぐbit幅でも、unchecked書き込みが通常のsetと同じ結果になることを確認します。
+  var values = genPackedArray(97, 13)
+  for index in 0..<97:
+    let value = uint64((index * 73 + 11) mod 8192)
+    values.setUnchecked(index, value)
+  for index in 0..<97:
+    doAssert values.getUnchecked(index) ==
+      uint64((index * 73 + 11) mod 8192)
+  expectRaises(ValueError): values.setUnchecked(0, 8192)
+
 import ./test_common
 
 block helpers:
