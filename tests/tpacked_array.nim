@@ -1,5 +1,6 @@
 import std/sequtils
 import nbvs/packed_array
+import ./test_common
 
 block uncheckedAccess:
   var values = genPackedArray(97, 9)
@@ -18,8 +19,6 @@ block uncheckedWrite:
     doAssert values.getUnchecked(index) ==
       uint64((index * 73 + 11) mod 8192)
   expectRaises(ValueError): values.setUnchecked(0, 8192)
-
-import ./test_common
 
 block helpers:
   doAssert ceilDiv(0, 64) == 0
