@@ -88,19 +88,23 @@ template measureMedian(body: untyped): int64 =
 func sbvRawBytes(sbv: SuccinctBitVector): int64 =
   int64(sbv.data.len * sizeof(uint64))
 
-func sbvRankBytes(sbv: SuccinctBitVector): int64 =
+func sbvRankOnlyBytes(sbv: SuccinctBitVector): int64 =
+  ## 後方互換fieldを含むrank専用補助領域です。現仕様ではscalar/SIMDとも0です。
   int64((sbv.wordPairPrefix.len + sbv.blockPairPrefix.len) * sizeof(uint32))
 
-func sbvSelectBytes(sbv: SuccinctBitVector): int64 =
+func sbvSharedBytes(sbv: SuccinctBitVector): int64 =
+  ## rank/selectの双方で利用する階層prefix treeです。
   int64(sbv.selectStorage.len * sizeof(uint64))
 
-proc emit(c: BenchCase, kind: string, rawBytes, rankBytes, selectBytes,
+proc emit(c: BenchCase, kind: string,
+          rawBytes, rankOnlyBytes, selectOnlyBytes, sharedBytes,
           buildNs, accessNs, rankNs, selectNs: int64) =
   let buildSeconds = float(buildNs) / 1_000_000_000.0
   let symbolThroughput = float(c.symbols) / buildSeconds / 1_000_000.0
   let payloadThroughput = float(rawBytes) / buildSeconds / 1024.0 / 1024.0
-  echo &"{kind},{c.symbols},{c.distribution},{rawBytes},{rankBytes}," &
-    &"{selectBytes},{rankBytes + selectBytes}," &
+  let totalAuxBytes = rankOnlyBytes + selectOnlyBytes + sharedBytes
+  echo &"{kind},{c.symbols},{c.distribution},{rawBytes},{rankOnlyBytes}," &
+    &"{selectOnlyBytes},{sharedBytes},{totalAuxBytes}," &
     &"{float(buildNs) / 1_000_000.0:.6f},{symbolThroughput:.3f}," &
     &"{payloadThroughput:.3f},{float(accessNs) / queryCount.float:.3f}," &
     &"{float(rankNs) / queryCount.float:.3f}," &
@@ -163,15 +167,15 @@ proc runCase(c: BenchCase) =
     for index in 0..<queryCount:
       sink = sink xor qv.select(int(querySymbols[index]), qvTargets[index])
 
-  emit(c, "SBV", sbvRawBytes(sbv), sbvRankBytes(sbv), sbvSelectBytes(sbv),
-       sbvBuildNs, sbvAccessNs, sbvRankNs, sbvSelectNs)
-  emit(c, "QV", qv.rawBytes, qv.rankAuxiliaryBytes, qv.selectAuxiliaryBytes,
+  emit(c, "SBV", sbvRawBytes(sbv), sbvRankOnlyBytes(sbv), 0,
+       sbvSharedBytes(sbv), sbvBuildNs, sbvAccessNs, sbvRankNs, sbvSelectNs)
+  emit(c, "QV", qv.rawBytes, qv.rankAuxiliaryBytes, qv.selectAuxiliaryBytes, 0,
        qvBuildNs, qvAccessNs, qvRankNs, qvSelectNs)
 
 when isMainModule:
-  echo "structure,symbols,distribution,payload_bytes,rank_aux_bytes," &
-    "select_aux_bytes,total_aux_bytes,build_p50_ms,build_msymbols_s," &
-    "build_payload_mib_s,access_p50_ns,rank_p50_ns,select_p50_ns"
+  echo "structure,symbols,distribution,payload_bytes,rank_only_aux_bytes," &
+    "select_only_aux_bytes,shared_aux_bytes,total_aux_bytes,build_p50_ms," &
+    "build_msymbols_s,build_payload_mib_s,access_p50_ns,rank_p50_ns,select_p50_ns"
   for c in cases:
     runCase(c)
   stderr.writeLine("sink=", sink)
