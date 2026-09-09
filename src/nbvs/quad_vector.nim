@@ -27,10 +27,11 @@ import ./packed_array
 
 when defined(nbvsSimd):
   when defined(gcc) or defined(clang):
-    {.localPassc: "-mavx2".}
-    {.localPassc: "-mbmi2".}
+    # inline展開先を含む全C生成単位で命令セットを有効にする必要があります。
+    {.passC: "-mavx2".}
+    {.passC: "-mbmi2".}
   when defined(vcc):
-    {.localPassc: "/arch:AVX2".}
+    {.passC: "/arch:AVX2".}
 
   import ./internal/x86_intrinsics
 
@@ -101,10 +102,10 @@ func requireBuilt(qv: QuadVector) {.inline.} =
 func rankSuperIndex(superBlock: int64, symbol: int): int {.inline.} =
   int(superBlock * 4'i64 + int64(symbol))
 
-func rankBlockIndex(superBlock, block: int64, symbol: int): int {.inline.} =
-  ## `block` は 1..7 で、その block の先頭位置までの prefix を保持します。
+func rankBlockIndex(superBlock, blockIndex: int64, symbol: int): int {.inline.} =
+  ## `blockIndex` は 1..7 で、その block の先頭位置までの prefix を保持します。
   int(superBlock * RankBlockPrefixesPerSuper +
-      (block - 1'i64) * 4'i64 + int64(symbol))
+      (blockIndex - 1'i64) * 4'i64 + int64(symbol))
 
 func symbolUnchecked(qv: QuadVector, pos: int64): uint8 {.inline.} =
   ## 2-bit 固定幅であることを利用し、PackedArray の境界検査を省いて直接読み出します。
@@ -178,7 +179,7 @@ func countSymbolRangeScalar(qv: QuadVector, symbol: int,
     result += int64(countSetBits(mask))
 
 func selectSymbolRangeScalar(qv: QuadVector, symbol: int,
-                             startPos, endPos, occurrence: int64): int64 {.inline.} =
+                             startPos, endPos, occurrence: int64): int64 {.inline, used.} =
   ## SWAR の一致 mask と bit clearing を使う portable な word scan です。
   var wanted = occurrence
   var wordPos = startPos
@@ -411,20 +412,20 @@ func build*(qv: var QuadVector) =
     let superEnd = min(qv.lenOfSymbols,
                        superStart + QuadRankSuperBlockSize)
     var blockStart = superStart
-    var block = 0'i64
+    var blockIndex = 0'i64
 
     while blockStart < superEnd:
-      if block > 0:
+      if blockIndex > 0:
         for symbol in 0..3:
           qv.rankBlockPrefix.setUnchecked(
-            rankBlockIndex(superBlock, block, symbol), uint64(local[symbol]))
+            rankBlockIndex(superBlock, blockIndex, symbol), uint64(local[symbol]))
 
       let blockEnd = min(superEnd, blockStart + QuadRankBlockSize)
       let counts = qv.countSymbolsRange(blockStart, blockEnd)
       local.addCounts(counts)
       absolute.addCounts(counts)
 
-      inc block
+      inc blockIndex
       blockStart = blockEnd
 
   qv.totalCounts = absolute
@@ -458,13 +459,13 @@ func rankUnchecked*(qv: QuadVector, symbol: int, pos: int64): int64 {.inline.} =
 
   let superBlock = pos shr QuadRankSuperBlockShift
   let offsetInSuper = pos and (QuadRankSuperBlockSize - 1'i64)
-  let block = offsetInSuper shr QuadRankBlockShift
+  let blockIndex = offsetInSuper shr QuadRankBlockShift
 
   result = int64(qv.rankSuperPrefix.getUnchecked(
     rankSuperIndex(superBlock, symbol)))
-  if block > 0:
+  if blockIndex > 0:
     result += int64(qv.rankBlockPrefix.getUnchecked(
-      rankBlockIndex(superBlock, block, symbol)))
+      rankBlockIndex(superBlock, blockIndex, symbol)))
 
   let blockStart = pos and not (QuadRankBlockSize - 1'i64)
   result += qv.countSymbolRange(symbol, blockStart, pos)

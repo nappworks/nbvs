@@ -369,6 +369,11 @@ The portable backend uses 64-bit SWAR equality masks and popcount. With
 and BMI2 `PDEP` selects the final matching 2-bit lane. The public API and packed
 auxiliary representation are shared by both backends.
 
+The reproducible SBV/QV comparison uses fixed seeds, one warmup, seven measured
+runs, and reports the median for several sizes and distributions. Run it with
+`nimble benchSbvQv` (scalar) or `nimble benchSbvQvSimd` (AVX2/BMI2). The recorded
+results and environment are in `benchmarks/results/sbv_quad_vector_comparison.md`.
+
 ### EliasFano
 
 `EliasFano` encodes a nondecreasing `uint64` sequence.  Duplicates are allowed.  `universe` is exclusive.
@@ -953,6 +958,11 @@ portable backendは64-bit SWAR equality maskとpopcountを使います。
 `-d:nbvsSimd` 指定時はblock内をAVX2で128 packed symbolずつ走査し、最後の一致する
 2-bit laneの選択にBMI2 `PDEP`を使います。public APIとpacked補助構造は
 scalar/SIMDで共通です。
+
+再現可能なSBV/QV比較では固定seed、1回のwarmup、7回の測定と中央値を使用し、
+複数のサイズと分布を測定します。scalarは `nimble benchSbvQv`、AVX2/BMI2は
+`nimble benchSbvQvSimd` で実行できます。保存済みの結果と環境は
+`benchmarks/results/sbv_quad_vector_comparison.md` にあります。
 
 ### EliasFano
 

@@ -29,6 +29,12 @@ task benchSimd, "Run SIMD SuccinctBitVector benchmarks":
 task benchMemory, "Report SuccinctBitVector logical memory":
   exec "nim c --path:src -d:release --mm:arc -r benchmarks/bench_memory.nim"
 
+task benchSbvQv, "Compare scalar SuccinctBitVector and QuadVector performance":
+  exec "nim c --path:src -d:release --mm:arc -r benchmarks/sbv_quad_vector_comparison.nim"
+
+task benchSbvQvSimd, "Compare SIMD SuccinctBitVector and QuadVector performance":
+  exec "nim c --path:src -d:release --mm:arc -d:nbvsSimd -r benchmarks/sbv_quad_vector_comparison.nim"
+
 task benchFmDictionary, "Run FmDictionary benchmarks":
   exec "nim c --path:src -d:release --mm:arc -r benchmarks/fm_dictionary_bench.nim"
 

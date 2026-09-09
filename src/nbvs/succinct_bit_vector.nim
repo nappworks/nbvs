@@ -24,11 +24,12 @@ else:
 
 when defined(nbvsSimd):
   when defined(gcc) or defined(clang):
-    {.localPassc: "-mavx2".}
-    {.localPassc: "-mbmi2".}
+    # inline展開先を含む全C生成単位で命令セットを有効にする必要があります。
+    {.passC: "-mavx2".}
+    {.passC: "-mbmi2".}
 
   when defined(vcc):
-    {.localPassc: "/arch:AVX2".}
+    {.passC: "/arch:AVX2".}
 
   import ./internal/x86_intrinsics
 
