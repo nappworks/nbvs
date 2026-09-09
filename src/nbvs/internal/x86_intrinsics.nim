@@ -79,6 +79,10 @@ proc mm256_shuffle_epi8*(a, b: M256i): M256i
 proc mm256_add_epi8*(a, b: M256i): M256i
   {.importc: "_mm256_add_epi8", header: "<immintrin.h>", noSideEffect.}
 
+## Binds `_mm256_add_epi64`.
+proc mm256_add_epi64*(a, b: M256i): M256i
+  {.importc: "_mm256_add_epi64", header: "<immintrin.h>", noSideEffect.}
+
 ## Binds `_mm256_sad_epu8`.
 proc mm256_sad_epu8*(a, b: M256i): M256i
   {.importc: "_mm256_sad_epu8", header: "<immintrin.h>", noSideEffect.}
