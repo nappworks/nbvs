@@ -18,8 +18,9 @@
 ## Select は 0-based で、指定した出現が存在しない場合は `-1` を返します。
 ##
 ## portable backend は 64-bit SWAR mask と popcount / bit clearing を使用します。
-## `-d:nbvsSimd` 指定時は block 内の rank/select を AVX2/BMI2 実装へ切り替えます。
-## public API、packed payload、rank/select metadata の表現は両 backend で共通です。
+## `-d:nbvsSimd` 指定時は block 内の rank/select と build 時の集計を
+## AVX2/BMI2 実装へ切り替えます。public API、packed payload、rank/select metadata の
+## 表現は両 backend で共通です。
 
 import std/bitops
 import ./packed_array
@@ -40,6 +41,8 @@ const
   QuadSelectSampleRate* = 1024'i64
   MaxQuadVectorSymbols* = (1'i64 shl 43) - 1'i64
 
+  QuadRankBlockShift = 9
+  QuadRankSuperBlockShift = 12
   RankSuperCounterWidth = 44
   RankBlockCounterWidth = 12
   SelectSampleWidth = 32
@@ -49,7 +52,7 @@ const
 when defined(nbvsSimd):
   const
     # 4-bit nibble 内に含まれる値 0 の 2-bit lane 数です。
-    # packed data を対象シンボルの反復パターンと XOR すると、一致 lane が 0 になるため、
+    # packed data を対象シンボルの反復パターンと XOR すると一致 lane が 0 になるため、
     # 4 シンボルすべてを同じ lookup table で処理できます。
     QuadZeroPairNibbleLookup = [
       2'i8, 1'i8, 1'i8, 1'i8, 1'i8, 0'i8, 0'i8, 0'i8,
@@ -95,12 +98,19 @@ func requireBuilt(qv: QuadVector) {.inline.} =
   if not qv.isCalced:
     raise newException(ValueError, "QuadVector rank/select dictionary is not built")
 
-func rankSuperIndex(superBlock, symbol: int64): int64 {.inline.} =
-  superBlock * 4'i64 + symbol
+func rankSuperIndex(superBlock: int64, symbol: int): int {.inline.} =
+  int(superBlock * 4'i64 + int64(symbol))
 
-func rankBlockIndex(superBlock, block, symbol: int64): int64 {.inline.} =
+func rankBlockIndex(superBlock, block: int64, symbol: int): int {.inline.} =
   ## `block` は 1..7 で、その block の先頭位置までの prefix を保持します。
-  superBlock * RankBlockPrefixesPerSuper + (block - 1'i64) * 4'i64 + symbol
+  int(superBlock * RankBlockPrefixesPerSuper +
+      (block - 1'i64) * 4'i64 + int64(symbol))
+
+func symbolUnchecked(qv: QuadVector, pos: int64): uint8 {.inline.} =
+  ## 2-bit 固定幅であることを利用し、PackedArray の境界検査を省いて直接読み出します。
+  let wordIndex = int(pos shr 5)
+  let shift = int((pos and 31'i64) shl 1)
+  uint8((qv.data.data[wordIndex] shr shift) and 3'u64)
 
 func matchingLaneMask(word: uint64, symbol: int): uint64 {.inline.} =
   ## 一致した 2-bit lane ごとに bit 0,2,...,62 の位置へ 1 を立てます。
@@ -115,6 +125,38 @@ func validLaneMask(symbolCount: int): uint64 {.inline.} =
     QuadLaneMask
   else:
     QuadLaneMask and ((1'u64 shl (symbolCount * 2)) - 1'u64)
+
+func addCounts(target: var array[4, int64], source: array[4, int64]) {.inline.} =
+  for symbol in 0..3:
+    target[symbol] += source[symbol]
+
+func countSymbolsWord(word: uint64, symbolCount: int): array[4, int64] {.inline.} =
+  ## 1つの 64-bit word に packed された最大32シンボルを3回のpopcountで4値集計します。
+  let valid = validLaneMask(symbolCount)
+  let low = word and valid
+  let high = (word shr 1) and valid
+  let both = low and high
+
+  result[3] = int64(countSetBits(both))
+  result[1] = int64(countSetBits(low and not high))
+  result[2] = int64(countSetBits(high and not low))
+  result[0] = int64(symbolCount) - result[1] - result[2] - result[3]
+
+func countSymbolsRangeScalar(qv: QuadVector,
+                             startPos, endPos: int64): array[4, int64] {.inline.} =
+  ## build 用に4シンボルを同時集計します。`startPos` は word 境界に揃っている必要があります。
+  if endPos <= startPos:
+    return
+
+  var wordIndex = int(startPos shr 5)
+  var remaining = endPos - startPos
+  while remaining >= 32:
+    result.addCounts(countSymbolsWord(qv.data.data[wordIndex], 32))
+    inc wordIndex
+    remaining -= 32
+
+  if remaining > 0:
+    result.addCounts(countSymbolsWord(qv.data.data[wordIndex], int(remaining)))
 
 func countSymbolRangeScalar(qv: QuadVector, symbol: int,
                             startPos, endPos: int64): int64 {.inline.} =
@@ -160,10 +202,8 @@ func selectSymbolRangeScalar(qv: QuadVector, symbol: int,
   -1
 
 when defined(nbvsSimd):
-  func countSymbol128Avx2(qv: QuadVector, symbol, wordIndex: int): int64 {.inline.} =
-    ## AVX2 を使い、packed された 128 シンボル（32 byte）内の対象シンボル数を数えます。
-    let packed = mm256_loadu_si256(
-      cast[ptr M256i](unsafeAddr qv.data.data[wordIndex]))
+  func countSymbolPacked128Avx2(packed: M256i, symbol: int): int64 {.inline.} =
+    ## すでにload済みの128 packed symbolから対象シンボル数を数えます。
     let repeated = cast[int8](uint8(symbol * 0x55))
     let normalized = mm256_xor_si256(packed, mm256_set1_epi8(repeated))
     let nibbleMask = mm256_set1_epi8(0x0f'i8)
@@ -180,6 +220,23 @@ when defined(nbvsSimd):
     var laneSums: array[4, uint64]
     mm256_storeu_si256(cast[ptr M256i](addr laneSums[0]), sums)
     result = int64(laneSums[0] + laneSums[1] + laneSums[2] + laneSums[3])
+
+  func countSymbol128Avx2(qv: QuadVector, symbol, wordIndex: int): int64 {.inline.} =
+    ## AVX2 を使い、packed された 128 シンボル（32 byte）内の対象シンボル数を数えます。
+    let packed = mm256_loadu_si256(
+      cast[ptr M256i](unsafeAddr qv.data.data[wordIndex]))
+    result = countSymbolPacked128Avx2(packed, symbol)
+
+  func countSymbols128Avx2(qv: QuadVector,
+                           wordIndex: int): array[4, int64] {.inline.} =
+    ## build 用に1回の256-bit loadから4シンボルをまとめて集計します。
+    ## 0 の個数は全128シンボルから1..3の個数を引いて求めます。
+    let packed = mm256_loadu_si256(
+      cast[ptr M256i](unsafeAddr qv.data.data[wordIndex]))
+    result[1] = countSymbolPacked128Avx2(packed, 1)
+    result[2] = countSymbolPacked128Avx2(packed, 2)
+    result[3] = countSymbolPacked128Avx2(packed, 3)
+    result[0] = 128'i64 - result[1] - result[2] - result[3]
 
   func selectSymbolRangeBmi2(qv: QuadVector, symbol: int,
                              startPos, endPos, occurrence: int64): int64 {.inline.} =
@@ -202,38 +259,59 @@ when defined(nbvsSimd):
 
     -1
 
+  func countSymbolsRange(qv: QuadVector,
+                         startPos, endPos: int64): array[4, int64] {.inline.} =
+    ## AVX2 で128シンボルずつ4値集計し、最後の短いtailだけscalarで処理します。
+    if endPos <= startPos:
+      return
+
+    var symbolPos = startPos
+    var wordIndex = int(startPos shr 5)
+    while endPos - symbolPos >= 128:
+      result.addCounts(qv.countSymbols128Avx2(wordIndex))
+      symbolPos += 128
+      wordIndex += 4
+
+    if symbolPos < endPos:
+      result.addCounts(qv.countSymbolsRangeScalar(symbolPos, endPos))
+
   func countSymbolRange(qv: QuadVector, symbol: int,
                         startPos, endPos: int64): int64 {.inline.} =
-    ## AVX2 で 128 シンボルずつ走査し、最後の短い tail は scalar SWAR で処理します。
+    ## AVX2 で128シンボルずつ走査し、最後の短いtailはscalar SWARで処理します。
     if endPos <= startPos:
       return 0
 
-    var wordPos = startPos
+    var symbolPos = startPos
     var wordIndex = int(startPos shr 5)
-    while endPos - wordPos >= 128:
+    while endPos - symbolPos >= 128:
       result += qv.countSymbol128Avx2(symbol, wordIndex)
-      wordPos += 128
+      symbolPos += 128
       wordIndex += 4
 
-    result += qv.countSymbolRangeScalar(symbol, wordPos, endPos)
+    result += qv.countSymbolRangeScalar(symbol, symbolPos, endPos)
 
   func selectSymbolRange(qv: QuadVector, symbol: int,
                          startPos, endPos, occurrence: int64): int64 {.inline.} =
-    ## AVX2 で 128-symbol chunk を飛ばし、最後の一致 lane を BMI2 PDEP で選択します。
+    ## AVX2 で128-symbol chunkを飛ばし、最後の一致laneをBMI2 PDEPで選択します。
     var wanted = occurrence
-    var wordPos = startPos
+    var symbolPos = startPos
     var wordIndex = int(startPos shr 5)
 
-    while endPos - wordPos >= 128:
+    while endPos - symbolPos >= 128:
       let count = qv.countSymbol128Avx2(symbol, wordIndex)
       if wanted < count:
-        return qv.selectSymbolRangeBmi2(symbol, wordPos, wordPos + 128, wanted)
+        return qv.selectSymbolRangeBmi2(symbol, symbolPos,
+                                         symbolPos + 128, wanted)
       wanted -= count
-      wordPos += 128
+      symbolPos += 128
       wordIndex += 4
 
-    qv.selectSymbolRangeBmi2(symbol, wordPos, endPos, wanted)
+    qv.selectSymbolRangeBmi2(symbol, symbolPos, endPos, wanted)
 else:
+  func countSymbolsRange(qv: QuadVector,
+                         startPos, endPos: int64): array[4, int64] {.inline.} =
+    qv.countSymbolsRangeScalar(startPos, endPos)
+
   func countSymbolRange(qv: QuadVector, symbol: int,
                         startPos, endPos: int64): int64 {.inline.} =
     qv.countSymbolRangeScalar(symbol, startPos, endPos)
@@ -261,12 +339,12 @@ func genQuadVector*(maxSymbols: int64): QuadVector =
   for symbol in 0..3:
     result.selectSamples[symbol] = genPackedArray(0, SelectSampleWidth)
 
-func access*(qv: QuadVector, pos: int64): uint8 =
+func access*(qv: QuadVector, pos: int64): uint8 {.inline.} =
   ## `pos` に格納されているシンボルを返します。
   qv.checkAccessIndex(pos)
-  result = uint8(qv.data[pos])
+  result = qv.symbolUnchecked(pos)
 
-func `[]`*(qv: QuadVector, pos: int64): uint8 =
+func `[]`*(qv: QuadVector, pos: int64): uint8 {.inline.} =
   ## `access` の別名です。
   qv.access(pos)
 
@@ -275,7 +353,12 @@ func setSymbol*(qv: var QuadVector, pos: int64, value: uint8) =
   qv.checkAccessIndex(pos)
   if value > 3'u8:
     raise newException(ValueError, "QuadVector value must be in 0..3")
-  qv.data[pos] = uint64(value)
+
+  let wordIndex = int(pos shr 5)
+  let shift = int((pos and 31'i64) shl 1)
+  let mask = 3'u64 shl shift
+  qv.data.data[wordIndex] =
+    (qv.data.data[wordIndex] and not mask) or (uint64(value) shl shift)
   qv.isCalced = false
 
 func `[]=`*(qv: var QuadVector, pos: int64, value: uint8) =
@@ -286,50 +369,83 @@ func clearSymbol*(qv: var QuadVector, pos: int64) =
   ## `pos` のシンボルを 0 に設定し、rank/select metadata を無効化します。
   qv.setSymbol(pos, 0'u8)
 
+func ensureRankStorage(qv: var QuadVector) =
+  ## vector長が不変な通常のrebuildでは既存metadataを再利用し、不要な再確保を避けます。
+  let superEntries = qv.superBlockCount * 4'i64
+  let blockEntries = qv.superBlockCount * RankBlockPrefixesPerSuper
+  if qv.rankSuperPrefix.len != superEntries:
+    qv.rankSuperPrefix = genPackedArray(superEntries, RankSuperCounterWidth)
+  if qv.rankBlockPrefix.len != blockEntries:
+    qv.rankBlockPrefix = genPackedArray(blockEntries, RankBlockCounterWidth)
+
+func ensureSelectStorage(qv: var QuadVector, symbol: int, sampleCount: int64) =
+  ## 出現数が同じrebuildではselect sampleの既存storageを再利用します。
+  if qv.selectSamples[symbol].len != sampleCount:
+    qv.selectSamples[symbol] = genPackedArray(sampleCount, SelectSampleWidth)
+
+func superStartRank(qv: QuadVector, symbol: int,
+                    superBlock: int64): int64 {.inline.} =
+  if superBlock >= qv.superBlockCount:
+    qv.totalCounts[symbol]
+  else:
+    int64(qv.rankSuperPrefix.getUnchecked(
+      rankSuperIndex(superBlock, symbol)))
+
 func build*(qv: var QuadVector) =
-  ## scalar/SIMD backend で共通の packed rank/select dictionary を構築または再構築します。
-  qv.totalCounts = [0'i64, 0'i64, 0'i64, 0'i64]
+  ## packed rank/select dictionaryを構築または再構築します。
+  ##
+  ## raw payloadは512-symbol block単位で1回だけ走査します。各blockで4シンボルを
+  ## 同時集計し、rank metadataと総出現数を同じpassで構築します。select sampleは
+  ## その後にsuperblock累積値だけを走査して生成するため、payloadを2回読みません。
+  qv.ensureRankStorage()
 
-  for pos in 0'i64..<qv.lenOfSymbols:
-    inc qv.totalCounts[int(qv.data[pos])]
+  var absolute = [0'i64, 0'i64, 0'i64, 0'i64]
 
+  for superBlock in 0'i64..<qv.superBlockCount:
+    for symbol in 0..3:
+      qv.rankSuperPrefix[int64(rankSuperIndex(superBlock, symbol))] =
+        uint64(absolute[symbol])
+
+    var local = [0'i64, 0'i64, 0'i64, 0'i64]
+    let superStart = superBlock shl QuadRankSuperBlockShift
+    let superEnd = min(qv.lenOfSymbols,
+                       superStart + QuadRankSuperBlockSize)
+    var blockStart = superStart
+    var block = 0'i64
+
+    while blockStart < superEnd:
+      if block > 0:
+        for symbol in 0..3:
+          qv.rankBlockPrefix[int64(rankBlockIndex(
+            superBlock, block, symbol))] = uint64(local[symbol])
+
+      let blockEnd = min(superEnd, blockStart + QuadRankBlockSize)
+      let counts = qv.countSymbolsRange(blockStart, blockEnd)
+      local.addCounts(counts)
+      absolute.addCounts(counts)
+
+      inc block
+      blockStart = blockEnd
+
+  qv.totalCounts = absolute
+
+  # sample k は「k*1024番目の出現を含むsuperblock」を指します。
+  # superblock prefixだけを前向きに走査し、raw payloadの再走査を避けます。
   for symbol in 0..3:
     let sampleCount = ceilDivPositive(qv.totalCounts[symbol],
                                       QuadSelectSampleRate)
-    qv.selectSamples[symbol] = genPackedArray(sampleCount, SelectSampleWidth)
+    qv.ensureSelectStorage(symbol, sampleCount)
+    if sampleCount == 0:
+      continue
 
-  qv.rankSuperPrefix = genPackedArray(qv.superBlockCount * 4'i64,
-                                       RankSuperCounterWidth)
-  qv.rankBlockPrefix = genPackedArray(
-    qv.superBlockCount * RankBlockPrefixesPerSuper,
-    RankBlockCounterWidth)
-
-  var absolute = [0'i64, 0'i64, 0'i64, 0'i64]
-  var local = [0'i64, 0'i64, 0'i64, 0'i64]
-
-  for pos in 0'i64..<qv.lenOfSymbols:
-    let offsetInSuper = pos mod QuadRankSuperBlockSize
-    let superBlock = pos div QuadRankSuperBlockSize
-
-    if offsetInSuper == 0:
-      local = [0'i64, 0'i64, 0'i64, 0'i64]
-      for symbol in 0..3:
-        qv.rankSuperPrefix[rankSuperIndex(superBlock, int64(symbol))] =
-          uint64(absolute[symbol])
-    elif offsetInSuper mod QuadRankBlockSize == 0:
-      let block = offsetInSuper div QuadRankBlockSize
-      for symbol in 0..3:
-        qv.rankBlockPrefix[rankBlockIndex(superBlock, block,
-                                          int64(symbol))] =
-          uint64(local[symbol])
-
-    let symbol = int(qv.data[pos])
-    if absolute[symbol] mod QuadSelectSampleRate == 0:
-      let sampleIndex = absolute[symbol] div QuadSelectSampleRate
-      qv.selectSamples[symbol][sampleIndex] = uint64(superBlock)
-
-    inc absolute[symbol]
-    inc local[symbol]
+    var sampleIndex = 0'i64
+    var targetOccurrence = 0'i64
+    for superBlock in 0'i64..<qv.superBlockCount:
+      let nextRank = qv.superStartRank(symbol, superBlock + 1)
+      while sampleIndex < sampleCount and targetOccurrence < nextRank:
+        qv.selectSamples[symbol][sampleIndex] = uint64(superBlock)
+        inc sampleIndex
+        targetOccurrence = sampleIndex * QuadSelectSampleRate
 
   qv.isCalced = true
 
@@ -339,56 +455,51 @@ func rankUnchecked*(qv: QuadVector, symbol: int, pos: int64): int64 {.inline.} =
   if pos == qv.lenOfSymbols:
     return qv.totalCounts[symbol]
 
-  let superBlock = pos div QuadRankSuperBlockSize
-  let offsetInSuper = pos mod QuadRankSuperBlockSize
-  let block = offsetInSuper div QuadRankBlockSize
+  let superBlock = pos shr QuadRankSuperBlockShift
+  let offsetInSuper = pos and (QuadRankSuperBlockSize - 1'i64)
+  let block = offsetInSuper shr QuadRankBlockShift
 
-  result = int64(qv.rankSuperPrefix[
-    rankSuperIndex(superBlock, int64(symbol))])
+  result = int64(qv.rankSuperPrefix.getUnchecked(
+    rankSuperIndex(superBlock, symbol)))
   if block > 0:
-    result += int64(qv.rankBlockPrefix[
-      rankBlockIndex(superBlock, block, int64(symbol))])
+    result += int64(qv.rankBlockPrefix.getUnchecked(
+      rankBlockIndex(superBlock, block, symbol)))
 
-  let blockStart = superBlock * QuadRankSuperBlockSize +
-                   block * QuadRankBlockSize
+  let blockStart = pos and not (QuadRankBlockSize - 1'i64)
   result += qv.countSymbolRange(symbol, blockStart, pos)
 
-func rank*(qv: QuadVector, symbol: int, pos: int64): int64 =
+func rank*(qv: QuadVector, symbol: int, pos: int64): int64 {.inline.} =
   ## `[0, pos)` に含まれる `symbol` の個数を返します。
   checkSymbol(symbol)
   qv.checkRankPosition(pos)
   qv.requireBuilt()
   result = qv.rankUnchecked(symbol, pos)
 
-func rankIncl*(qv: QuadVector, symbol: int, pos: int64): int64 =
+func rankIncl*(qv: QuadVector, symbol: int, pos: int64): int64 {.inline.} =
   ## `[0, pos]` に含まれる `symbol` の個数を返します。
   checkSymbol(symbol)
   qv.checkAccessIndex(pos)
   qv.requireBuilt()
   result = qv.rankUnchecked(symbol, pos + 1)
 
-func superStartRank(qv: QuadVector, symbol: int, superBlock: int64): int64 {.inline.} =
-  if superBlock >= qv.superBlockCount:
-    qv.totalCounts[symbol]
-  else:
-    int64(qv.rankSuperPrefix[rankSuperIndex(superBlock, int64(symbol))])
-
 func select*(qv: QuadVector, symbol: int, k: int64): int64 =
-  ## 0-based で `k` 番目に出現する `symbol` の位置を返します。存在しない場合は `-1` です。
+  ## 0-basedで`k`番目に出現する`symbol`の位置を返します。存在しない場合は`-1`です。
   checkSymbol(symbol)
   qv.requireBuilt()
   if k < 0 or k >= qv.totalCounts[symbol]:
     return -1
 
   let sampleIndex = k div QuadSelectSampleRate
-  let sampleBlock = int64(qv.selectSamples[symbol][sampleIndex])
+  let sampleBlock = int64(qv.selectSamples[symbol].getUnchecked(
+    int(sampleIndex)))
   let sampleCount = qv.selectSamples[symbol].len
 
   var upperExclusive = qv.superBlockCount
   if sampleIndex + 1 < sampleCount:
     upperExclusive = min(upperExclusive,
-      int64(qv.selectSamples[symbol][sampleIndex + 1]) + 1'i64)
+      int64(qv.selectSamples[symbol].getUnchecked(int(sampleIndex + 1))) + 1'i64)
 
+  # sampleが示す範囲内だけを二分探索します。uniform分布では通常ごく狭い範囲です。
   var lo = sampleBlock
   var hi = upperExclusive
   while lo < hi:
@@ -399,7 +510,7 @@ func select*(qv: QuadVector, symbol: int, k: int64): int64 =
       lo = mid + 1
 
   let superBlock = lo
-  let superStartPos = superBlock * QuadRankSuperBlockSize
+  let superStartPos = superBlock shl QuadRankSuperBlockShift
   let superEndPos = min(qv.lenOfSymbols,
                         superStartPos + QuadRankSuperBlockSize)
   let superRank = qv.superStartRank(symbol, superBlock)
@@ -411,13 +522,13 @@ func select*(qv: QuadVector, symbol: int, k: int64): int64 =
   for block in 0'i64..<blockCount:
     let blockEndRank =
       if block + 1 < blockCount:
-        int64(qv.rankBlockPrefix[
-          rankBlockIndex(superBlock, block + 1, int64(symbol))])
+        int64(qv.rankBlockPrefix.getUnchecked(
+          rankBlockIndex(superBlock, block + 1, symbol)))
       else:
         qv.superStartRank(symbol, superBlock + 1) - superRank
 
     if wantedInSuper < blockEndRank:
-      let blockStartPos = superStartPos + block * QuadRankBlockSize
+      let blockStartPos = superStartPos + (block shl QuadRankBlockShift)
       let blockEndPos = min(superEndPos, blockStartPos + QuadRankBlockSize)
       return qv.selectSymbolRange(symbol, blockStartPos, blockEndPos,
                                   wantedInSuper - previous)
@@ -426,15 +537,15 @@ func select*(qv: QuadVector, symbol: int, k: int64): int64 =
   -1
 
 template defineRankWrappers(name, symbolValue: untyped) =
-  func name*(qv: QuadVector, pos: int64): int64 =
+  func name*(qv: QuadVector, pos: int64): int64 {.inline.} =
     qv.rank(symbolValue, pos)
 
 template defineRankInclWrappers(name, symbolValue: untyped) =
-  func name*(qv: QuadVector, pos: int64): int64 =
+  func name*(qv: QuadVector, pos: int64): int64 {.inline.} =
     qv.rankIncl(symbolValue, pos)
 
 template defineSelectWrappers(name, symbolValue: untyped) =
-  func name*(qv: QuadVector, k: int64): int64 =
+  func name*(qv: QuadVector, k: int64): int64 {.inline.} =
     qv.select(symbolValue, k)
 
 defineRankWrappers(rank0, 0)
@@ -475,4 +586,4 @@ func `$`*(qv: QuadVector): string =
   ## シンボル列を `0`..`3` の数字からなる文字列として返します。
   result = newStringOfCap(int(min(qv.lenOfSymbols, int64(int.high))))
   for pos in 0'i64..<qv.lenOfSymbols:
-    result.add char(ord('0') + int(qv.data[pos]))
+    result.add char(ord('0') + int(qv.symbolUnchecked(pos)))
