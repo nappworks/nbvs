@@ -1,5 +1,14 @@
 # SBV / QV パフォーマンス比較
 
+> **再測定待ち**
+>
+> 2026-09-09 に SBV の SIMD 専用 `blockPairPrefix` を廃止し、scalar/SIMD で
+> rank/select 補助構造を統一しました。この変更後は SBV SIMD の rank/build 性能と
+> 補助容量が変わるため、下記の既存数値および `sbv_quad_vector_simd.csv` は
+> 旧 `blockPairPrefix` ありの実装で取得した参考値です。
+> `nimble benchSbvQv` / `nimble benchSbvQvSimd` を再実行し、CSV と本ページを更新してから
+> 最終結果として扱います。
+
 ## 測定条件
 
 - 実行日: 2026-09-09
@@ -30,7 +39,20 @@ nimble benchSbvQvSimd
 生結果は [scalar CSV](sbv_quad_vector_scalar.csv) と
 [SIMD CSV](sbv_quad_vector_simd.csv) に保存しています。
 
-## 結果概要
+現行ベンチマークでは補助容量を以下に分けて出力します。
+
+- `rank_only_aux_bytes`: rank 専用補助領域
+- `select_only_aux_bytes`: select 専用補助領域
+- `shared_aux_bytes`: rank/select 共用補助領域
+- `total_aux_bytes`: 上記3つの合計
+
+SBV は scalar/SIMD とも旧 `wordPairPrefix` / `blockPairPrefix` を自動生成せず、
+階層 `selectStorage` を rank/select で共用します。そのため現行実装では
+`rank_only_aux_bytes == 0`、`shared_aux_bytes == selectStorage` です。
+
+## 旧実装での結果概要
+
+以下は SIMD 専用 `blockPairPrefix` を廃止する前の参考値です。
 
 16,777,216 symbolsの測定では、scalar QVのbuildは7.81–8.82 ms
 （1.90–2.15 Gsymbols/s）、SIMD QVは2.55–3.81 ms
@@ -54,9 +76,10 @@ throughputを両方記録しています。
 327,680–327,704 bytes（約7.8125%）です。末尾wordの丸めにより分布ごとに最大24 bytes
 の差があります。
 
-scalar SBVは同サイズでrank補助を確保せず、select補助は74,912 bytesでした。
-SIMD SBVはさらに65,536 bytesのrank補助を持ちます。これらはobject/sequence headerを
-除く確保済み配列容量です。
+旧測定では scalar SBV の共用 `selectStorage` は74,912 bytesでした。
+旧 SIMD 測定はこれに加えて65,536 bytesの `blockPairPrefix` を保持していましたが、
+現行実装ではこの SIMD 専用領域を廃止しています。再測定後は scalar/SIMD とも
+同じ補助構造容量になる想定です。
 
 ## 注意事項
 
