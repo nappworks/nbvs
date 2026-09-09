@@ -403,8 +403,8 @@ func build*(qv: var QuadVector) =
 
   for superBlock in 0'i64..<qv.superBlockCount:
     for symbol in 0..3:
-      qv.rankSuperPrefix[int64(rankSuperIndex(superBlock, symbol))] =
-        uint64(absolute[symbol])
+      qv.rankSuperPrefix.setUnchecked(
+        rankSuperIndex(superBlock, symbol), uint64(absolute[symbol]))
 
     var local = [0'i64, 0'i64, 0'i64, 0'i64]
     let superStart = superBlock shl QuadRankSuperBlockShift
@@ -416,8 +416,8 @@ func build*(qv: var QuadVector) =
     while blockStart < superEnd:
       if block > 0:
         for symbol in 0..3:
-          qv.rankBlockPrefix[int64(rankBlockIndex(
-            superBlock, block, symbol))] = uint64(local[symbol])
+          qv.rankBlockPrefix.setUnchecked(
+            rankBlockIndex(superBlock, block, symbol), uint64(local[symbol]))
 
       let blockEnd = min(superEnd, blockStart + QuadRankBlockSize)
       let counts = qv.countSymbolsRange(blockStart, blockEnd)
@@ -443,7 +443,8 @@ func build*(qv: var QuadVector) =
     for superBlock in 0'i64..<qv.superBlockCount:
       let nextRank = qv.superStartRank(symbol, superBlock + 1)
       while sampleIndex < sampleCount and targetOccurrence < nextRank:
-        qv.selectSamples[symbol][sampleIndex] = uint64(superBlock)
+        qv.selectSamples[symbol].setUnchecked(
+          int(sampleIndex), uint64(superBlock))
         inc sampleIndex
         targetOccurrence = sampleIndex * QuadSelectSampleRate
 
@@ -518,23 +519,29 @@ func select*(qv: QuadVector, symbol: int, k: int64): int64 =
   let symbolsInSuper = superEndPos - superStartPos
   let blockCount = ceilDivPositive(symbolsInSuper, QuadRankBlockSize)
 
-  var previous = 0'i64
-  for block in 0'i64..<blockCount:
-    let blockEndRank =
-      if block + 1 < blockCount:
-        int64(qv.rankBlockPrefix.getUnchecked(
-          rankBlockIndex(superBlock, block + 1, symbol)))
-      else:
-        qv.superStartRank(symbol, superBlock + 1) - superRank
+  # 512-symbol blockもprefixに対するupper-boundで選び、最大8 blockの線形走査を避けます。
+  var blockLo = 0'i64
+  var blockHi = blockCount
+  while blockLo + 1 < blockHi:
+    let mid = blockLo + ((blockHi - blockLo) shr 1)
+    let prefix = int64(qv.rankBlockPrefix.getUnchecked(
+      rankBlockIndex(superBlock, mid, symbol)))
+    if prefix <= wantedInSuper:
+      blockLo = mid
+    else:
+      blockHi = mid
 
-    if wantedInSuper < blockEndRank:
-      let blockStartPos = superStartPos + (block shl QuadRankBlockShift)
-      let blockEndPos = min(superEndPos, blockStartPos + QuadRankBlockSize)
-      return qv.selectSymbolRange(symbol, blockStartPos, blockEndPos,
-                                  wantedInSuper - previous)
-    previous = blockEndRank
-
-  -1
+  let selectedBlock = blockLo
+  let previous =
+    if selectedBlock == 0:
+      0'i64
+    else:
+      int64(qv.rankBlockPrefix.getUnchecked(
+        rankBlockIndex(superBlock, selectedBlock, symbol)))
+  let blockStartPos = superStartPos + (selectedBlock shl QuadRankBlockShift)
+  let blockEndPos = min(superEndPos, blockStartPos + QuadRankBlockSize)
+  result = qv.selectSymbolRange(symbol, blockStartPos, blockEndPos,
+                                wantedInSuper - previous)
 
 template defineRankWrappers(name, symbolValue: untyped) =
   func name*(qv: QuadVector, pos: int64): int64 {.inline.} =
