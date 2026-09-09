@@ -14,7 +14,8 @@
 ##
 ## デフォルトではportable scalar実装を使用します。`nbvsSimd` をdefineすると、
 ## 512-bit blockのpopcount/select scanにAVX2を使用し、64-bit word内の
-## selectにBMI2の `PDEP` を使用します。
+## selectにBMI2の `PDEP` を使用します。rank/selectの補助構造自体は
+## scalar/SIMDで共通です。
 import std/bitops
 
 when defined(nbvsSimd):
@@ -116,12 +117,8 @@ type
     totalOnes*: int64 ## Total number of one bits after `build`.
     totalZeros*: int64 ## Total number of zero bits after `build`.
 
-    # Absolute one-bit count at the start of each 1024-bit pair of blocks.
-    # Together with the StartPrefix hierarchy this stays below 7% of raw data.
-    # Vectors whose absolute count may not fit uint32 use the hierarchy only.
+    # 後方互換のためfieldを残しています。scalar/SIMDとも自動生成・利用しません。
     blockPairPrefix*: seq[uint32]
-
-    # 後方互換のためfieldを残しています。scalar backendでは自動生成・利用しません。
     wordPairPrefix*: seq[uint32]
 
     level1Len*: int
@@ -312,9 +309,6 @@ func genSuccinctBitVector*(maxBits: int64): SuccinctBitVector =
 
   result.dataWords = int(ceilDiv(maxBits, 64'i64))
   result.data = newSeq[uint64](int(alignUp(int64(result.dataWords), 8'i64)))
-  when defined(nbvsSimd):
-    if maxBits > L5 and maxBits <= int64(uint32.high):
-      result.blockPairPrefix = newSeq[uint32](int(ceilDiv(maxBits, L1 * 2)))
 
   result.level1Len = int(ceilDiv(maxBits, L1))
   result.level2Len = int(ceilDiv(maxBits, L2))
@@ -341,8 +335,8 @@ func genSuccinctBitVector*(maxBits: int64): SuccinctBitVector =
 func estimateSuccinctBitVectorBytes*(bitLength: int64): int64 =
   ## 指定bit長の`SuccinctBitVector`が保持する配列容量をbyte単位で推定します。
   ##
-  ## 現在のscalar/SIMD backendが`genSuccinctBitVector`で確保するraw data、
-  ## rank補助配列、select treeを同じpadding規則で計算します。
+  ## scalar/SIMD共通のraw dataとrank/select共用prefix treeを、
+  ## `genSuccinctBitVector`と同じpadding規則で計算します。
   if bitLength < 0:
     raise newException(ValueError, "bitLength must be non-negative")
   let level = calcLevel(bitLength)
@@ -350,9 +344,6 @@ func estimateSuccinctBitVectorBytes*(bitLength: int64): int64 =
     raise newException(ValueError, "bitLength exceeds supported range")
   let dataWords = alignUp(ceilDiv(bitLength, 64'i64), 8'i64)
   result = dataWords * int64(sizeof(uint64))
-  when defined(nbvsSimd):
-    if bitLength > L5 and bitLength <= int64(uint32.high):
-      result += ceilDiv(bitLength, L1 * 2) * int64(sizeof(uint32))
 
   if level >= 1:
     let level1Len = ceilDiv(bitLength, L1)
@@ -374,16 +365,7 @@ func estimateSuccinctBitVectorBytes*(bitLength: int64): int64 =
 
 func requiredSuccinctBitVectorViewBytes*(bitLength: int64): int =
   ## `SuccinctBitVectorView` の全backing領域に必要なbyte数を返します。
-  var bytes = estimateSuccinctBitVectorBytes(bitLength)
-  # uint32補助領域の要素数が奇数なら、後続select treeのuint64 alignmentに
-  # 4 byte必要です。各seqを別確保する所有型の見積もりには存在しない差です。
-  let hasSelectTree = calcLevel(bitLength) >= 1
-  var uint32Count = 0'i64
-  when defined(nbvsSimd):
-    if bitLength > L5 and bitLength <= int64(uint32.high):
-      uint32Count = ceilDiv(bitLength, L1 * 2)
-  if hasSelectTree and (uint32Count and 1) != 0:
-    bytes += 4
+  let bytes = estimateSuccinctBitVectorBytes(bitLength)
   if bytes > int64(int.high):
     raise newException(ValueError, "backing memory size exceeds int range")
   result = int(bytes)
@@ -431,10 +413,6 @@ func initSuccinctBitVectorView*(memory: pointer, memorySize: int,
 
   takeSpan(result.data, uint64,
     int(alignUp(int64(result.dataWords), 8'i64)))
-  when defined(nbvsSimd):
-    if maxBits > L5 and maxBits <= int64(uint32.high):
-      takeSpan(result.blockPairPrefix, uint32,
-        int(ceilDiv(maxBits, L1 * 2)))
 
   var nodeCount = 0
   if result.level >= 1:
@@ -637,9 +615,6 @@ func build*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: var S) =
       var blockInL8 = 0
 
     while bitPos < sbv.lenOfBits:
-      if sbv.blockPairPrefix.len > 0 and (bitPos and 1023'i64) == 0:
-        sbv.blockPairPrefix[int(bitPos shr 10)] = uint32(total)
-
       when maxLevel >= 8:
         if blockInL8 == 0:
           sbv.setLevel8(p8, total)
@@ -771,14 +746,6 @@ func rank1Unchecked*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, pos: 
     return 0
   if pos == sbv.lenOfBits:
     return sbv.totalOnes
-
-  if sbv.blockPairPrefix.len > 0:
-    let blockIdx = int(pos shr 9)
-    result = int64(sbv.blockPairPrefix[blockIdx shr 1])
-    if (blockIdx and 1) != 0:
-      result += sbv.popcount512At(int64(blockIdx - 1) * L1)
-    result += sbv.rankIn512Block(pos)
-    return
 
   template rankFromSelectTree(maxLevel: static[int]) =
     var nodeWord = 0
