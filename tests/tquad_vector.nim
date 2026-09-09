@@ -56,6 +56,9 @@ block constructorAndErrors:
   doAssert qv.maxOfSymbols == 10
   doAssert qv.lenOfSymbols == 10
   doAssert qv.data.bitWidth == 2
+  doAssert qv.rankMetadata.bitWidth == 64
+  doAssert qv.rankSuperPrefix.len == 0
+  doAssert qv.rankBlockPrefix.len == 0
   doAssert not qv.isCalced
   doAssert $qv == "0000000000"
 
@@ -75,6 +78,7 @@ block empty:
     doAssert qv.rank(symbol, 0) == 0
     doAssert qv.select(symbol, 0) == -1
   doAssert qv.rawBytes == 0
+  doAssert qv.rankAuxiliaryBytes == 0
   doAssert qv.selectAuxiliaryBytes == 0
 
 block smallPatterns:
@@ -92,6 +96,13 @@ block blockAndSuperBlockBoundaries:
     values[i] = uint8((i xor (i shr 3)) and 3)
   for pos in [0, 511, 512, 513, 4095, 4096, 4097, 8191, 8192, 8999]:
     values[pos] = uint8(pos mod 4)
+  checkAgainstNaive(values)
+
+block metadataFieldBoundaries:
+  # 44-bit/12-bit fieldが64-bit word境界を跨ぐrank recordでも結果が崩れないことを確認します。
+  var values = newSeq[uint8](4096)
+  for i in 0..<values.len:
+    values[i] = uint8(((i div 11) xor (i shr 4) xor i) and 3)
   checkAgainstNaive(values)
 
 block selectAcrossEmptyBlocks:
@@ -159,7 +170,7 @@ block wrapperApis:
 
 block exactAuxiliaryBudgetAtAlignedSize:
   # 64 個の完全な superblock と均等な 4 値分布を使い、末尾の丸め誤差をなくします。
-  # rank 補助構造は payload のちょうど 6.25%、select sample はちょうど 1.5625% です。
+  # rank metadataは各superblockちょうど64 byte、select sampleはpayloadの1.5625%です。
   const N = 4096 * 64
   var qv = genQuadVector(N)
   for i in 0..<N:
@@ -167,6 +178,11 @@ block exactAuxiliaryBudgetAtAlignedSize:
   qv.build()
 
   doAssert qv.rawBytes == 65_536
+  doAssert qv.rankMetadata.len == 64 * 8
+  doAssert qv.rankMetadata.data.len == 64 * 8
+  doAssert qv.rankSuperPrefix.len == 0
+  doAssert qv.rankBlockPrefix.len == 0
+  doAssert qv.rankAuxiliaryBytes == 64 * 64
   doAssert qv.rankAuxiliaryBytes == qv.rawBytes div 16
   doAssert qv.selectAuxiliaryBytes == qv.rawBytes div 64
   doAssert qv.auxiliaryBytes * 10_000 div qv.rawBytes == 781
