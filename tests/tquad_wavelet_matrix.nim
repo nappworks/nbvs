@@ -19,10 +19,10 @@ proc checkEquivalent(values: seq[uint64], bitWidth: int) =
     doAssert qa.rankBefore == wa.rankBefore
     doAssert qwm.accessRankUnchecked(pos) == qa
 
-  var distinct = values
-  distinct.sort()
+  var distinctValues = values
+  distinctValues.sort()
   var probes = @[0'u64, 1'u64]
-  for value in distinct:
+  for value in distinctValues:
     if probes.len < 24 and (probes.len == 0 or probes[^1] != value):
       probes.add value
   if bitWidth < 64:
