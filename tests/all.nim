@@ -7,6 +7,7 @@ import ./tstructure_views
 import ./tsuccinct_bit_vector
 import ./tsbv_scalar_no_word_pair_prefix
 import ./tquad_vector
+import ./tquad_vector_hot_path
 import ./tquad_wavelet_matrix
 import ./tbit_vector_select_cursor
 import ./telias_fano
