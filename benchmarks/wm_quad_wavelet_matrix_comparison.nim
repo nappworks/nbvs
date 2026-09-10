@@ -3,6 +3,16 @@
 ## 同じ入力、固定bit幅、同じrandom position/value/occurrenceを使い、
 ## access / accessRank / rank / select を比較します。query測定前に意味等価性を
 ## doAssertで検証します。
+##
+## PR #18 の全再測定では長時間実行を避けるため、queryは warmup 1回 + 測定3回、
+## 20,000件、buildは測定1回とします。8-bitでは WM=8 levels / QWM=4 levels の
+## 比較を65K / 1M / 16Mで行い、cacheに収まりやすいケースからlarge working setまで
+## level半減の効果を確認します。
+##
+## 結果は以下へ保存してください。
+##
+##   nimble benchWmQwm > benchmarks/results/wm_quad_wavelet_matrix_scalar.csv
+##   nimble benchWmQwmSimd > benchmarks/results/wm_quad_wavelet_matrix_simd.csv
 
 import std/[algorithm, monotimes, strformat, times]
 import nbvs/[wavelet_matrix, quad_wavelet_matrix]
@@ -18,20 +28,26 @@ type
 
 const
   cases = [
+    BenchCase(symbols: 65_536, bitWidth: 8, distribution: uniform),
+    BenchCase(symbols: 65_536, bitWidth: 8, distribution: skewed),
     BenchCase(symbols: 65_536, bitWidth: 64, distribution: uniform),
     BenchCase(symbols: 65_536, bitWidth: 64, distribution: skewed),
+    BenchCase(symbols: 1_048_576, bitWidth: 8, distribution: uniform),
+    BenchCase(symbols: 1_048_576, bitWidth: 8, distribution: skewed),
     BenchCase(symbols: 1_048_576, bitWidth: 16, distribution: uniform),
     BenchCase(symbols: 1_048_576, bitWidth: 32, distribution: uniform),
     BenchCase(symbols: 1_048_576, bitWidth: 64, distribution: uniform),
     BenchCase(symbols: 1_048_576, bitWidth: 64, distribution: skewed),
+    BenchCase(symbols: 16_777_216, bitWidth: 8, distribution: uniform),
+    BenchCase(symbols: 16_777_216, bitWidth: 8, distribution: skewed),
     BenchCase(symbols: 16_777_216, bitWidth: 64, distribution: uniform),
     BenchCase(symbols: 16_777_216, bitWidth: 64, distribution: skewed)
   ]
   warmupIters = 1
-  queryMeasuredIters = 7
-  buildMeasuredIters = 3
-  queryCount = 100_000
-  validationCount = 2048
+  queryMeasuredIters = 3
+  buildMeasuredIters = 1
+  queryCount = 20_000
+  validationCount = 512
 
 var sink {.volatile.}: uint64
 
@@ -55,10 +71,10 @@ proc makeValues(c: BenchCase): seq[uint64] =
     of uniform:
       value = random and mask
     of skewed:
-      # 95%を小さいhot setへ寄せつつ、残りはfull-width randomにして
-      # level数を固定bitWidthのまま維持します。
+      # 8-bitでもskewを残せるようhot setは下位4 bitへ寄せます。
+      # wider caseでは残り5%をfull-width randomにして上位levelも通します。
       if random mod 100'u64 < 95'u64:
-        value = (random and 255'u64) and mask
+        value = (random and 15'u64) and mask
       else:
         value = nextRand(state) and mask
 
@@ -86,6 +102,15 @@ template measureMedian(iters: static[int], body: untyped): int64 =
       let elapsed = (getMonoTime() - started).inNanoseconds
       if iteration >= warmupIters:
         samples.add elapsed
+    median(samples)
+
+template measureBuild(body: untyped): int64 =
+  block:
+    var samples = newSeqOfCap[int64](buildMeasuredIters)
+    for iteration in 0..<buildMeasuredIters:
+      let started = getMonoTime()
+      body
+      samples.add (getMonoTime() - started).inNanoseconds
     median(samples)
 
 func wmRawBytes(wm: WaveletMatrix): int64 =
@@ -128,10 +153,10 @@ proc runCase(c: BenchCase) =
   let values = makeValues(c)
   let positions = makePositions(queryCount, c.symbols)
 
-  let wmBuildNs = measureMedian(buildMeasuredIters):
+  let wmBuildNs = measureBuild:
     let built = genWaveletMatrix(values, c.bitWidth)
     sink = sink xor uint64(built.levels[0].totalOnes)
-  let qwmBuildNs = measureMedian(buildMeasuredIters):
+  let qwmBuildNs = measureBuild:
     let built = genQuadWaveletMatrix(values, c.bitWidth)
     sink = sink xor uint64(built.levels[0].totalCounts[3])
 
