@@ -1,5 +1,5 @@
 import std/[algorithm, memfiles, os, random, tempfiles]
-import nbvs/[wavelet_matrix, quad_wavelet_matrix]
+import nbvs/[wavelet_matrix, quad_wavelet_matrix, quad_vector_view]
 import ./test_common
 
 proc checkEquivalent(values: seq[uint64], bitWidth: int) =
