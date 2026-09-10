@@ -8,7 +8,7 @@
 ## external memoryへ連続配置でき、mmapのclose/reopenにも対応します。
 
 import std/bitops
-import ./[quad_vector, quad_vector_view]
+import ./[packed_array, quad_vector, quad_vector_view]
 
 const
   MaxQuadWaveletLevels* = 32
@@ -72,6 +72,13 @@ func startsFromCounts(counts: array[4, int64]): array[4, int64] {.inline.} =
   result[1] = counts[0]
   result[2] = counts[0] + counts[1]
   result[3] = counts[0] + counts[1] + counts[2]
+
+func countsFromStarts(starts: array[4, int64], n: int64):
+    array[4, int64] {.inline.} =
+  result[0] = starts[1]
+  result[1] = starts[2] - starts[1]
+  result[2] = starts[3] - starts[2]
+  result[3] = n - starts[3]
 
 func symbolUnchecked[V: QuadVector | QuadVectorView](qv: V,
                                                      pos: int64): int {.inline.} =
@@ -169,10 +176,43 @@ func validateRoute(starts: array[4, int64], n: int64) =
       starts[2] > starts[3] or starts[3] > n:
     raise newException(ValueError, "invalid Quad Wavelet routing metadata")
 
+func bindPersistedLevel(qv: var QuadVectorView,
+                        counts: array[4, int64]) =
+  ## QWM routing tableから復元したcountを使って、payload全走査なしにbuilt QV Viewを開きます。
+  ## select sampleの実データは永続化済みbackingをそのまま参照します。
+  var total = 0'i64
+  for count in counts:
+    if count < 0:
+      raise newException(ValueError, "invalid Quad Vector symbol count")
+    total += count
+  if total != qv.lenOfSymbols:
+    raise newException(ValueError, "Quad Vector symbol counts do not match length")
+
+  qv.totalCounts = counts
+  var wordOffset = 0
+  for symbol in 0..3:
+    let sampleCount = ceilDivPositive(counts[symbol], QuadSelectSampleRate)
+    let words = int(ceilDivPositive(sampleCount, 2'i64))
+    if wordOffset > qv.selectStorageWords - words:
+      raise newException(ValueError, "select sample backing memory is too small")
+    if words == 0:
+      qv.selectSamples[symbol] = initPackedArrayView(
+        nil, 0, 0, 32)
+    else:
+      let memory = cast[pointer](
+        cast[uint](qv.selectStorage) + uint(wordOffset * sizeof(uint64)))
+      qv.selectSamples[symbol] = initPackedArrayView(
+        memory, words * sizeof(uint64), sampleCount, 32)
+    wordOffset += words
+  qv.selectStorageUsedWords = wordOffset
+  qv.isCalced = true
+
 func initQuadWaveletMatrixView*(memory: pointer, memorySize: int,
     n: int64, bitWidth: int, built = false): QuadWaveletMatrixView =
   ## 1つの64-byte aligned external memoryからQWM Viewを構成します。
-  ## `built=true`では先頭routing tableと永続化済みQV metadataを再利用します。
+  ##
+  ## `built=true`では先頭routing tableから各levelのcountを復元するため、
+  ## QV payloadをopen時に再走査しません。永続化済みrank/select metadataをそのまま使います。
   validateMetadata(n, bitWidth)
   let required = requiredQuadWaveletMatrixViewBytes(n, bitWidth)
   if memorySize < 0 or memorySize < required:
@@ -200,16 +240,14 @@ func initQuadWaveletMatrixView*(memory: pointer, memorySize: int,
     offset = int(alignUpPositive(int64(offset),
                                  int64(QuadVectorViewAlignment)))
     result.levels[level] = initQuadVectorView(
-      offsetPointer(memory, offset), levelBytes, n, built)
+      offsetPointer(memory, offset), levelBytes, n, built = false)
     if built:
       for symbol in 0..3:
         result.bucketStarts[level][symbol] =
           result.routeStorage[level * QuadWaveletRouteWidth + symbol]
       validateRoute(result.bucketStarts[level], n)
-      let counts = result.levels[level].totalCounts
-      let expected = startsFromCounts(counts)
-      if result.bucketStarts[level] != expected:
-        raise newException(ValueError, "Quad Wavelet route/count mismatch")
+      result.levels[level].bindPersistedLevel(
+        countsFromStarts(result.bucketStarts[level], n))
     offset += levelBytes
 
 proc build*[Value: SomeUnsignedInt](wm: var QuadWaveletMatrixView,
@@ -341,7 +379,9 @@ func rankPair*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
   if wm.n == 0 or not wm.valueFits(value):
     return
   if wm.levelCount == 0:
-    return (left, right)
+    result.leftRank = left
+    result.rightRank = right
+    return
 
   var startPos = 0'i64
   var leftPos = left
@@ -450,7 +490,24 @@ func countLessThan*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
     let start = wm.bucketStarts[level][target]
     lo = start + targetLeftRank
     hi = start + targetRightRank
-  
+
+func countLessThan*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
+    wm: W, value: uint64, pos: int64): int64 =
+  ## `[0,pos)`内のvalue未満の個数です。
+  wm.checkPosition(pos)
+  wm.countLessThan(0, pos, value)
+
+func rankLessThan*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
+    wm: W, value: uint64, pos: int64): int64 {.inline.} =
+  ## WaveletMatrix互換名です。
+  wm.countLessThan(value, pos)
+
+func occPosition*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
+    wm: W, value: uint64, pos: int64): int64 =
+  ## FM-indexの`C[value] + Occ(value,pos)`に相当します。
+  wm.checkPosition(pos)
+  wm.countLessThan(0, wm.n, value) + wm.rank(value, pos)
+
 func rangeFreq*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
     wm: W, left, right: int64, lower, upper: uint64): int64 =
   ## `[left,right)`中で値が`[lower,upper)`に入る個数です。
@@ -459,6 +516,35 @@ func rangeFreq*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
     return 0
   wm.countLessThan(left, right, upper) -
     wm.countLessThan(left, right, lower)
+
+func predecessor*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
+    wm: W, left, right: int64, upper: uint64): uint64 =
+  ## `[left,right)`内で`upper`未満の最大値を返します。
+  wm.checkRange(left, right)
+  let count = wm.countLessThan(left, right, upper)
+  if count <= 0:
+    raise newException(ValueError, "predecessor does not exist")
+  wm.quantile(left, right, count - 1)
+
+func successor*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
+    wm: W, left, right: int64, lower: uint64): uint64 =
+  ## `[left,right)`内で`lower`以上の最小値を返します。
+  wm.checkRange(left, right)
+  let count = wm.countLessThan(left, right, lower)
+  if count >= right - left:
+    raise newException(ValueError, "successor does not exist")
+  wm.quantile(left, right, count)
+
+iterator items*[W: QuadWaveletMatrix | QuadWaveletMatrixView](wm: W): uint64 =
+  ## 元配列順に値を列挙します。
+  for i in 0'i64..<wm.n:
+    yield wm.access(i)
+
+func toSeq*[W: QuadWaveletMatrix | QuadWaveletMatrixView](wm: W): seq[uint64] =
+  ## 元配列順にdecodeします。
+  result = newSeqOfCap[uint64](int(wm.n))
+  for value in wm.items:
+    result.add value
 
 func rawBytes*(wm: QuadWaveletMatrix): int64 =
   for level in 0..<wm.levelCount:
