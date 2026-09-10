@@ -318,10 +318,10 @@ Rank/select semantics:
 | `select0Nth(nth)` | Position of the 1-based `nth` `0`, or `-1`. |
 
 After any mutation through `setBit`, `clearBit`, or `[]=`, call `build()` again before `rank` or `select`.
-The scalar backend does not automatically create a word-pair rank prefix;
-rank inside a 512-bit block is computed directly with scalar popcount. The SIMD
-backend keeps its existing AVX2-specific auxiliary prefix where the implementation
-enables it.
+Both scalar and SIMD backends use the same shared hierarchical `selectStorage`
+for rank/select metadata and do not automatically create `wordPairPrefix` or
+`blockPairPrefix`. The backend-specific difference is limited to block-local
+processing: scalar popcount/bit clearing versus AVX2/BMI2 operations.
 
 ```nim
 sbv[10] = false
@@ -668,7 +668,7 @@ natural-name-like corpora:
 nimble benchFmDistributions
 ```
 
-Compare internal-node lookup, Elias-Fano first-child offsets, subtree-chain
+Compare internal-node lookup, Elias-Fano first-child offset, subtree-chain
 child navigation, block-packed parents, and terminal-ordinal mapping:
 
 ```sh
@@ -909,9 +909,9 @@ doAssert sbv.select1(3) == -1
 | `select0Nth(nth)` | 1-based で `nth` 番目の `0` の位置。存在しなければ `-1`。 |
 
 更新後は再度 `build()` してください。
-scalar backendではword-pair rank prefixを自動生成せず、512-bit block内のrankは
-scalar popcountで直接計算します。SIMD backendは、実装上有効化される場合に既存の
-AVX2向け補助prefixを利用します。
+scalar/SIMD backendは同じ階層 `selectStorage` をrank/select metadataとして共有し、
+`wordPairPrefix` / `blockPairPrefix` を自動生成・利用しません。backendごとの差は
+block内処理だけで、scalarはpopcount / bit clearing、SIMDはAVX2/BMI2を使用します。
 
 ```nim
 sbv[10] = false
