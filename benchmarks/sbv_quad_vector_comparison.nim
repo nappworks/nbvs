@@ -50,6 +50,7 @@ const
   warmupIters = 1
   measuredIters = 7
   queryCount = 100_000
+  validationQueryCount = 1024
 
 var sink {.volatile.}: int64
 
@@ -299,6 +300,32 @@ func binarySelect(binary: BinaryTwoLevel, symbol: int, k: int64): int64 {.inline
   else:
     binary.high.select1(level1Pos - binary.zerosHigh)
 
+proc validateWavelet4(binary: BinaryTwoLevel, qv: QuadVector,
+                      positions: openArray[int64],
+                      querySymbols: openArray[uint8],
+                      exactTargets: openArray[int64]) =
+  ## 測定外でBinaryWM2とQuadWM1の意味等価性を照合します。
+  ## ベンチhelperの変更で4値query semanticsが崩れた場合は、性能測定前に失敗させます。
+  for symbol in 0..3:
+    doAssert binary.counts[symbol] == qv.totalCounts[symbol]
+    doAssert binary.binaryRank(symbol, 0) == qv.rank(symbol, 0)
+    doAssert binary.binaryRank(symbol, qv.lenOfSymbols) ==
+      qv.rank(symbol, qv.lenOfSymbols)
+    if qv.totalCounts[symbol] > 0:
+      doAssert binary.binarySelect(symbol, 0) == qv.select(symbol, 0)
+      let last = qv.totalCounts[symbol] - 1
+      doAssert binary.binarySelect(symbol, last) == qv.select(symbol, last)
+
+  let checks = min(validationQueryCount,
+                   min(positions.len, min(querySymbols.len, exactTargets.len)))
+  for index in 0..<checks:
+    let position = positions[index]
+    let symbol = int(querySymbols[index])
+    let target = exactTargets[index]
+    doAssert binary.binaryAccess(position) == int64(qv.access(position))
+    doAssert binary.binaryRank(symbol, position) == qv.rank(symbol, position)
+    doAssert binary.binarySelect(symbol, target) == qv.select(symbol, target)
+
 proc runCase(c: BenchCase) =
   let symbols = makeSymbols(c)
   let positions = makePositions(c.symbols)
@@ -337,6 +364,9 @@ proc runCase(c: BenchCase) =
     sbvTargets[index] = int64(nextRand(targetState) mod uint64(sbvTotal))
     # wavelet4比較ではBinary2/QVで完全に同じ4値symbolとoccurrenceを使用します。
     exactTargets[index] = int64(nextRand(targetState) mod uint64(qv.totalCounts[symbol]))
+
+  # 性能測定に入る前に、BinaryWM2/QVが同じ4値query結果を返すことを確認します。
+  validateWavelet4(binary, qv, positions, querySymbols, exactTargets)
 
   # primitive: 1個のSBVと1個のQVの単体コスト比較です。
   let sbvAccessNs = measureMedian:
