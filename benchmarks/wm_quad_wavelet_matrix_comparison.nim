@@ -130,10 +130,10 @@ proc runCase(c: BenchCase) =
 
   let wmBuildNs = measureMedian(buildMeasuredIters):
     let built = genWaveletMatrix(values, c.bitWidth)
-    sink = sink xor uint64(built.n) xor uint64(built.bitWidth)
+    sink = sink xor uint64(built.levels[0].totalOnes)
   let qwmBuildNs = measureMedian(buildMeasuredIters):
     let built = genQuadWaveletMatrix(values, c.bitWidth)
-    sink = sink xor uint64(built.n) xor uint64(built.levelCount)
+    sink = sink xor uint64(built.levels[0].totalCounts[3])
 
   let wm = genWaveletMatrix(values, c.bitWidth)
   let qwm = genQuadWaveletMatrix(values, c.bitWidth)
