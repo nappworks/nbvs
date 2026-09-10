@@ -10,6 +10,12 @@
 ##
 ## buildは初回構築 (`build_cold`) と、構築済みmetadataを再利用する
 ## 再構築 (`build_rebuild`) を分離して測定します。
+##
+## PR #18 の再測定では実行時間を抑えるため warmup 1回、測定3回、
+## query 50,000件を使用します。結果は以下へ保存してください。
+##
+##   nimble benchSbvQv > benchmarks/results/sbv_quad_vector_scalar.csv
+##   nimble benchSbvQvSimd > benchmarks/results/sbv_quad_vector_simd.csv
 
 import std/[algorithm, monotimes, strformat, times]
 import nbvs/[quad_vector, succinct_bit_vector]
@@ -48,9 +54,9 @@ const
     BenchCase(symbols: 16_777_216'i64, distribution: skewed)
   ]
   warmupIters = 1
-  measuredIters = 7
-  queryCount = 100_000
-  validationQueryCount = 1024
+  measuredIters = 3
+  queryCount = 50_000
+  validationQueryCount = 512
 
 var sink {.volatile.}: int64
 
