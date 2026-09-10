@@ -7,6 +7,7 @@
 ## * `nbvs/succinct_bit_vector`
 ## * `nbvs/quad_vector`
 ## * `nbvs/quad_vector_view`
+## * `nbvs/quad_wavelet_matrix`
 ## * `nbvs/bit_vector_select_cursor`
 ## * `nbvs/elias_fano`
 ## * `nbvs/wavelet_matrix`
@@ -18,15 +19,17 @@
 ## Import this module when you want the complete `nbvs` API.
 
 import nbvs/[bit_vector, packed_array, succinct_bit_vector, quad_vector,
-  quad_vector_view, bit_vector_select_cursor, elias_fano, wavelet_matrix,
-  reversed_wavelet_matrix, wavelet_position_match, wavelet_select_cursor,
-  wavelet_matching_runs, run_length_bwt, succinct_radix_trie, fm_dictionary]
+  quad_vector_view, quad_wavelet_matrix, bit_vector_select_cursor, elias_fano,
+  wavelet_matrix, reversed_wavelet_matrix, wavelet_position_match,
+  wavelet_select_cursor, wavelet_matching_runs, run_length_bwt,
+  succinct_radix_trie, fm_dictionary]
 
 export bit_vector
 export packed_array
 export succinct_bit_vector
 export quad_vector
 export quad_vector_view
+export quad_wavelet_matrix
 export bit_vector_select_cursor
 export elias_fano
 export wavelet_matrix
