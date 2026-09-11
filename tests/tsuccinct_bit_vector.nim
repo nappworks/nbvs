@@ -196,6 +196,26 @@ block directRankAndSelectInternals:
   doAssert sbv.selectIn512ZerosAvx2(0, 1) == 2
   doAssert sbv.selectIn512ZerosTail(512, 1) == 513
 
+block fixedDepthRankMatchesGeneric:
+  for length in [512'i64, 513, 8193, 65537, 524289, 4194305]:
+    var sbv = genSuccinctBitVector(length)
+    for pos in countup(0'i64, length - 1, 9973'i64):
+      sbv[pos] = true
+    sbv[length - 1] = true
+    sbv.build()
+
+    for pos in [0'i64, 1, min(511'i64, length),
+                min(8192'i64, length), length div 2, length]:
+      let expected = sbv.rank1Unchecked(pos)
+      case int(sbv.level)
+      of 0: doAssert sbv.rank1UncheckedDepth0(pos) == expected
+      of 1: doAssert sbv.rank1UncheckedDepth1(pos) == expected
+      of 2: doAssert sbv.rank1UncheckedDepth2(pos) == expected
+      of 3: doAssert sbv.rank1UncheckedDepth3(pos) == expected
+      of 4: doAssert sbv.rank1UncheckedDepth4(pos) == expected
+      of 5: doAssert sbv.rank1UncheckedDepth5(pos) == expected
+      else: doAssert false
+
 block selectLeafWordBoundaries:
   var ones = genSuccinctBitVector(512)
   var onePositions: seq[int64] = @[]
