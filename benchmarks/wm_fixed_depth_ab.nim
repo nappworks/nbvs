@@ -202,35 +202,39 @@ proc runCase(c: BenchCase) =
     doAssert genericRank(wm, value, pos) == wm.rank(value, pos)
     doAssert genericSelect(wm, value, targets[i]) == wm.select(value, targets[i])
 
-  let access = measurePair:
-    for pos in positions:
-      sink = sink xor genericAccess(wm, pos)
-  do:
-    for pos in positions:
-      sink = sink xor wm.access(pos)
+  let access = measurePair(
+    (block:
+      for pos in positions:
+        sink = sink xor genericAccess(wm, pos)),
+    (block:
+      for pos in positions:
+        sink = sink xor wm.access(pos)))
 
-  let accessRank = measurePair:
-    for pos in positions:
-      let item = genericAccessRank(wm, pos)
-      sink = sink xor item.value xor uint64(item.rankBefore)
-  do:
-    for pos in positions:
-      let item = wm.accessRankUnchecked(pos)
-      sink = sink xor item.value xor uint64(item.rankBefore)
+  let accessRank = measurePair(
+    (block:
+      for pos in positions:
+        let item = genericAccessRank(wm, pos)
+        sink = sink xor item.value xor uint64(item.rankBefore)),
+    (block:
+      for pos in positions:
+        let item = wm.accessRankUnchecked(pos)
+        sink = sink xor item.value xor uint64(item.rankBefore)))
 
-  let rank = measurePair:
-    for i in 0..<queryCount:
-      sink = sink xor uint64(genericRank(wm, queryValues[i], positions[i]))
-  do:
-    for i in 0..<queryCount:
-      sink = sink xor uint64(wm.rank(queryValues[i], positions[i]))
+  let rank = measurePair(
+    (block:
+      for i in 0..<queryCount:
+        sink = sink xor uint64(genericRank(wm, queryValues[i], positions[i]))),
+    (block:
+      for i in 0..<queryCount:
+        sink = sink xor uint64(wm.rank(queryValues[i], positions[i]))))
 
-  let select = measurePair:
-    for i in 0..<queryCount:
-      sink = sink xor uint64(genericSelect(wm, queryValues[i], targets[i]))
-  do:
-    for i in 0..<queryCount:
-      sink = sink xor uint64(wm.select(queryValues[i], targets[i]))
+  let select = measurePair(
+    (block:
+      for i in 0..<queryCount:
+        sink = sink xor uint64(genericSelect(wm, queryValues[i], targets[i]))),
+    (block:
+      for i in 0..<queryCount:
+        sink = sink xor uint64(wm.select(queryValues[i], targets[i]))))
 
   emit(c, "access", access)
   emit(c, "accessRank", accessRank)
