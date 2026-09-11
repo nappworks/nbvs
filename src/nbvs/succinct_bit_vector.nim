@@ -737,52 +737,76 @@ func rankIn512Block*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, pos: 
     result += int64(countSetBits(
       sbv.data[startWord + wordOffset] and partialMask))
 
-func rank1Unchecked*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, pos: int64): int64 =
-  ## 検査なしで半開区間 `[0, pos)` のone bit数を返します。
-  ##
-  ## `build` 済みであり、`0 <= pos <= lenOfBits` を満たす場合だけ
-  ## 使用できます。通常は安全な `rank1` を使用してください。
+template rank1UncheckedFixedBody(sbv, pos, outValue, maxLevel: untyped) =
   if pos == 0:
     return 0
   if pos == sbv.lenOfBits:
     return sbv.totalOnes
 
-  template rankFromSelectTree(maxLevel: static[int]) =
-    var nodeWord = 0
-    template addI32Level(levelNum: static[int], shift: static[int]) =
-      when maxLevel >= levelNum:
-        let lane = int((pos shr shift) and 7)
-        let vals = cast[ptr UncheckedArray[int32]](unsafeAddr sbv.selectStorage[nodeWord])
-        result += int64(vals[lane])
-        nodeWord += SelectNodeWords + lane * SelectFullSubtreeWords[levelNum - 1]
+  var nodeWord = 0
+  template addI32Level(levelNum: static[int], shift: static[int]) =
+    when maxLevel >= levelNum:
+      let lane = int((pos shr shift) and 7)
+      let vals = cast[ptr UncheckedArray[int32]](
+        unsafeAddr sbv.selectStorage[nodeWord])
+      outValue += int64(vals[lane])
+      nodeWord += SelectNodeWords +
+        lane * SelectFullSubtreeWords[levelNum - 1]
 
-    when maxLevel >= 8:
-      let lane8 = int((pos shr 31) and 3)
-      let vals8 = cast[ptr UncheckedArray[int64]](unsafeAddr sbv.selectStorage[nodeWord])
-      result += vals8[lane8]
-      nodeWord += SelectNodeWords + lane8 * SelectFullSubtreeWords[7]
-    addI32Level(7, 28)
-    addI32Level(6, 25)
-    addI32Level(5, 22)
-    addI32Level(4, 19)
-    addI32Level(3, 16)
-    addI32Level(2, 13)
-    when maxLevel >= 1:
-      let lane1 = int((pos shr 9) and 15)
-      let vals1 = cast[ptr UncheckedArray[int16]](unsafeAddr sbv.selectStorage[nodeWord])
-      result += int64(vals1[lane1])
+  when maxLevel >= 8:
+    let lane8 = int((pos shr 31) and 3)
+    let vals8 = cast[ptr UncheckedArray[int64]](
+      unsafeAddr sbv.selectStorage[nodeWord])
+    outValue += vals8[lane8]
+    nodeWord += SelectNodeWords + lane8 * SelectFullSubtreeWords[7]
+  addI32Level(7, 28)
+  addI32Level(6, 25)
+  addI32Level(5, 22)
+  addI32Level(4, 19)
+  addI32Level(3, 16)
+  addI32Level(2, 13)
+  when maxLevel >= 1:
+    let lane1 = int((pos shr 9) and 15)
+    let vals1 = cast[ptr UncheckedArray[int16]](
+      unsafeAddr sbv.selectStorage[nodeWord])
+    outValue += int64(vals1[lane1])
 
+  outValue += sbv.rankIn512Block(pos)
+
+template defineRank1UncheckedDepth(name: untyped, maxLevel: static[int]) =
+  func name*[S: SuccinctBitVector | SuccinctBitVectorView](
+      sbv: S, pos: int64): int64 {.inline.} =
+    ## WMなど、同じ長さのSBVを繰り返し辿るhot path向けの固定depth rankです。
+    ## 呼び出し側は `sbv.level == maxLevel` と通常のunchecked条件を保証します。
+    rank1UncheckedFixedBody(sbv, pos, result, maxLevel)
+
+defineRank1UncheckedDepth(rank1UncheckedDepth0, 0)
+defineRank1UncheckedDepth(rank1UncheckedDepth1, 1)
+defineRank1UncheckedDepth(rank1UncheckedDepth2, 2)
+defineRank1UncheckedDepth(rank1UncheckedDepth3, 3)
+defineRank1UncheckedDepth(rank1UncheckedDepth4, 4)
+defineRank1UncheckedDepth(rank1UncheckedDepth5, 5)
+defineRank1UncheckedDepth(rank1UncheckedDepth6, 6)
+defineRank1UncheckedDepth(rank1UncheckedDepth7, 7)
+defineRank1UncheckedDepth(rank1UncheckedDepth8, 8)
+
+func rank1Unchecked*[S: SuccinctBitVector | SuccinctBitVectorView](
+    sbv: S, pos: int64): int64 =
+  ## 検査なしで半開区間 `[0, pos)` のone bit数を返します。
+  ##
+  ## `build` 済みであり、`0 <= pos <= lenOfBits` を満たす場合だけ
+  ## 使用できます。通常は安全な `rank1` を使用してください。
+  ## generic pathはdepthを1回dispatchし、固定depth実装へ委譲します。
   case int(sbv.level)
-  of 0: discard
-  of 1: rankFromSelectTree(1)
-  of 2: rankFromSelectTree(2)
-  of 3: rankFromSelectTree(3)
-  of 4: rankFromSelectTree(4)
-  of 5: rankFromSelectTree(5)
-  of 6: rankFromSelectTree(6)
-  of 7: rankFromSelectTree(7)
-  else: rankFromSelectTree(8)
-  result += sbv.rankIn512Block(pos)
+  of 0: result = sbv.rank1UncheckedDepth0(pos)
+  of 1: result = sbv.rank1UncheckedDepth1(pos)
+  of 2: result = sbv.rank1UncheckedDepth2(pos)
+  of 3: result = sbv.rank1UncheckedDepth3(pos)
+  of 4: result = sbv.rank1UncheckedDepth4(pos)
+  of 5: result = sbv.rank1UncheckedDepth5(pos)
+  of 6: result = sbv.rank1UncheckedDepth6(pos)
+  of 7: result = sbv.rank1UncheckedDepth7(pos)
+  else: result = sbv.rank1UncheckedDepth8(pos)
 
 func rank1*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, pos: int64): int64 {.inline.} =
   ## Returns the number of one bits in the half-open range `[0, pos)`.
