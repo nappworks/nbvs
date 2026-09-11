@@ -66,7 +66,12 @@ proc makePositions(count, symbols: int): seq[int64] =
 func bitAtRaw(bits: SuccinctBitVector, pos: int64): bool {.inline.} =
   ((bits.data[int(pos shr 6)] shr int(pos and 63)) and 1'u64) != 0
 
+func valueFits8(value: uint64): bool {.inline.} =
+  (value shr bitWidth) == 0
+
 func genericAccess(wm: WaveletMatrix, i: int64): uint64 =
+  if i < 0 or i >= wm.n:
+    raise newException(IndexDefect, "index out of bounds")
   var pos = i
   for level in 0..<wm.bitWidth:
     let shift = wm.bitWidth - level - 1
@@ -95,6 +100,10 @@ func genericAccessRank(wm: WaveletMatrix, pos: int64):
   result.rankBefore = current - intervalLeft
 
 func genericRank(wm: WaveletMatrix, value: uint64, pos: int64): int64 =
+  if pos < 0 or pos > wm.n:
+    raise newException(IndexDefect, "position out of bounds")
+  if wm.n == 0 or not valueFits8(value):
+    return 0
   var left = 0'i64
   var right = pos
   for level in 0..<wm.bitWidth:
@@ -108,7 +117,7 @@ func genericRank(wm: WaveletMatrix, value: uint64, pos: int64): int64 =
   result = right - left
 
 func genericSelect(wm: WaveletMatrix, value: uint64, k: int64): int64 =
-  if k < 0:
+  if k < 0 or wm.n == 0 or not valueFits8(value):
     return -1
 
   var left = 0'i64
