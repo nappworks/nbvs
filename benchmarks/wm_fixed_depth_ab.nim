@@ -9,7 +9,7 @@
 ##
 ## CSV columnsの speedup は generic_ns / fixed_ns です。1.0超ならfixed-depth側が高速です。
 
-import std/[algorithm, monotimes, strformat]
+import std/[algorithm, monotimes, strformat, times]
 import nbvs/[succinct_bit_vector, wavelet_matrix]
 
 type
