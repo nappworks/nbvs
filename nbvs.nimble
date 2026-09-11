@@ -41,6 +41,12 @@ task benchWmQwm, "Compare scalar WaveletMatrix and QuadWaveletMatrix end-to-end"
 task benchWmQwmSimd, "Compare SIMD WaveletMatrix and QuadWaveletMatrix end-to-end":
   exec "nim c --path:src -d:release --mm:arc -d:nbvsSimd -r benchmarks/wm_quad_wavelet_matrix_comparison.nim"
 
+task benchWmDepthAb, "A/B scalar WM generic vs fixed-depth rank dispatch":
+  exec "nim c --path:src -d:release --mm:arc -r benchmarks/wm_fixed_depth_ab.nim"
+
+task benchWmDepthAbSimd, "A/B SIMD WM generic vs fixed-depth rank dispatch":
+  exec "nim c --path:src -d:release --mm:arc -d:nbvsSimd -r benchmarks/wm_fixed_depth_ab.nim"
+
 task benchFmDictionary, "Run FmDictionary benchmarks":
   exec "nim c --path:src -d:release --mm:arc -r benchmarks/fm_dictionary_bench.nim"
 
