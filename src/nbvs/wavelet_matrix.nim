@@ -184,16 +184,31 @@ func bitAtUnchecked[B: SuccinctBitVector | SuccinctBitVectorView](
 func access*[W: WaveletMatrix | WaveletMatrixView](wm: W, i: int64): uint64 =
   ## Returns the value at index `i`.
   wm.checkIndex(i)
-  var pos = i
+  if wm.bitWidth == 0:
+    return 0
 
-  for level in 0..<wm.bitWidth:
-    let shift = wm.bitWidth - level - 1
-    let ones = wm.levels[level].rank1Unchecked(pos)
-    if wm.levels[level].bitAtUnchecked(pos):
-      result = result or (1'u64 shl shift)
-      pos = wm.zeroCounts[level] + ones
-    else:
-      pos -= ones
+  template runAccess(rankFn: untyped) =
+    block:
+      var pos = i
+      for level in 0..<wm.bitWidth:
+        let shift = wm.bitWidth - level - 1
+        let ones = rankFn(wm.levels[level], pos)
+        if wm.levels[level].bitAtUnchecked(pos):
+          result = result or (1'u64 shl shift)
+          pos = wm.zeroCounts[level] + ones
+        else:
+          pos -= ones
+
+  case int(wm.levels[0].level)
+  of 0: runAccess(rank1UncheckedDepth0)
+  of 1: runAccess(rank1UncheckedDepth1)
+  of 2: runAccess(rank1UncheckedDepth2)
+  of 3: runAccess(rank1UncheckedDepth3)
+  of 4: runAccess(rank1UncheckedDepth4)
+  of 5: runAccess(rank1UncheckedDepth5)
+  of 6: runAccess(rank1UncheckedDepth6)
+  of 7: runAccess(rank1UncheckedDepth7)
+  else: runAccess(rank1UncheckedDepth8)
 
 func accessRankUnchecked*[W: WaveletMatrix | WaveletMatrixView](wm: W,
     pos: int64): tuple[value: uint64, rankBefore: int64] =
@@ -201,20 +216,37 @@ func accessRankUnchecked*[W: WaveletMatrix | WaveletMatrixView](wm: W,
   ##
   ## 呼び出し側は`0 <= pos < wm.n`を保証する必要があります。FM内部の
   ## LF traversalなど、範囲が既に保証されたhot path向けです。
-  var current = pos
-  var intervalLeft = 0'i64
-  for level in 0..<wm.bitWidth:
-    let shift = wm.bitWidth - level - 1
-    let currentOnes = wm.levels[level].rank1Unchecked(current)
-    let leftOnes = wm.levels[level].rank1Unchecked(intervalLeft)
-    if wm.levels[level].bitAtUnchecked(current):
-      result.value = result.value or (1'u64 shl shift)
-      current = wm.zeroCounts[level] + currentOnes
-      intervalLeft = wm.zeroCounts[level] + leftOnes
-    else:
-      current -= currentOnes
-      intervalLeft -= leftOnes
-  result.rankBefore = current - intervalLeft
+  if wm.bitWidth == 0:
+    result.rankBefore = pos
+    return
+
+  template runAccessRank(rankFn: untyped) =
+    block:
+      var current = pos
+      var intervalLeft = 0'i64
+      for level in 0..<wm.bitWidth:
+        let shift = wm.bitWidth - level - 1
+        let currentOnes = rankFn(wm.levels[level], current)
+        let leftOnes = rankFn(wm.levels[level], intervalLeft)
+        if wm.levels[level].bitAtUnchecked(current):
+          result.value = result.value or (1'u64 shl shift)
+          current = wm.zeroCounts[level] + currentOnes
+          intervalLeft = wm.zeroCounts[level] + leftOnes
+        else:
+          current -= currentOnes
+          intervalLeft -= leftOnes
+      result.rankBefore = current - intervalLeft
+
+  case int(wm.levels[0].level)
+  of 0: runAccessRank(rank1UncheckedDepth0)
+  of 1: runAccessRank(rank1UncheckedDepth1)
+  of 2: runAccessRank(rank1UncheckedDepth2)
+  of 3: runAccessRank(rank1UncheckedDepth3)
+  of 4: runAccessRank(rank1UncheckedDepth4)
+  of 5: runAccessRank(rank1UncheckedDepth5)
+  of 6: runAccessRank(rank1UncheckedDepth6)
+  of 7: runAccessRank(rank1UncheckedDepth7)
+  else: runAccessRank(rank1UncheckedDepth8)
 
 func accessRank*[W: WaveletMatrix | WaveletMatrixView](wm: W,
                  pos: int64): tuple[value: uint64, rankBefore: int64] =
@@ -234,17 +266,30 @@ func rank*[W: WaveletMatrix | WaveletMatrixView](wm: W, value: uint64, pos: int6
   if wm.n == 0 or not wm.valueFits(value):
     return 0
 
-  var left = 0'i64
-  var right = pos
-  for level in 0..<wm.bitWidth:
-    let shift = wm.bitWidth - level - 1
-    if ((value shr shift) and 1'u64) == 0:
-      left -= wm.levels[level].rank1Unchecked(left)
-      right -= wm.levels[level].rank1Unchecked(right)
-    else:
-      left = wm.zeroCounts[level] + wm.levels[level].rank1Unchecked(left)
-      right = wm.zeroCounts[level] + wm.levels[level].rank1Unchecked(right)
-  result = right - left
+  template runRank(rankFn: untyped) =
+    block:
+      var left = 0'i64
+      var right = pos
+      for level in 0..<wm.bitWidth:
+        let shift = wm.bitWidth - level - 1
+        if ((value shr shift) and 1'u64) == 0:
+          left -= rankFn(wm.levels[level], left)
+          right -= rankFn(wm.levels[level], right)
+        else:
+          left = wm.zeroCounts[level] + rankFn(wm.levels[level], left)
+          right = wm.zeroCounts[level] + rankFn(wm.levels[level], right)
+      result = right - left
+
+  case int(wm.levels[0].level)
+  of 0: runRank(rank1UncheckedDepth0)
+  of 1: runRank(rank1UncheckedDepth1)
+  of 2: runRank(rank1UncheckedDepth2)
+  of 3: runRank(rank1UncheckedDepth3)
+  of 4: runRank(rank1UncheckedDepth4)
+  of 5: runRank(rank1UncheckedDepth5)
+  of 6: runRank(rank1UncheckedDepth6)
+  of 7: runRank(rank1UncheckedDepth7)
+  else: runRank(rank1UncheckedDepth8)
 
 func rank*[W: WaveletMatrix | WaveletMatrixView](wm: W, value: uint64, left, right: int64): int64 =
   ## Counts occurrences of `value` in `[left, right)`.
@@ -302,28 +347,41 @@ func select*[W: WaveletMatrix | WaveletMatrixView](wm: W, value: uint64, k: int6
   if k < 0 or wm.n == 0 or not wm.valueFits(value):
     return -1
 
-  var left = 0'i64
-  var right = wm.n
-  for level in 0..<wm.bitWidth:
-    let shift = wm.bitWidth - level - 1
-    if ((value shr shift) and 1'u64) == 0:
-      left -= wm.levels[level].rank1Unchecked(left)
-      right -= wm.levels[level].rank1Unchecked(right)
-    else:
-      left = wm.zeroCounts[level] + wm.levels[level].rank1Unchecked(left)
-      right = wm.zeroCounts[level] + wm.levels[level].rank1Unchecked(right)
+  template runSelectForward(rankFn: untyped) =
+    block:
+      var left = 0'i64
+      var right = wm.n
+      for level in 0..<wm.bitWidth:
+        let shift = wm.bitWidth - level - 1
+        if ((value shr shift) and 1'u64) == 0:
+          left -= rankFn(wm.levels[level], left)
+          right -= rankFn(wm.levels[level], right)
+        else:
+          left = wm.zeroCounts[level] + rankFn(wm.levels[level], left)
+          right = wm.zeroCounts[level] + rankFn(wm.levels[level], right)
 
-  if k >= right - left:
-    return -1
+      if k >= right - left:
+        return -1
 
-  var pos = left + k
-  for level in countdown(wm.bitWidth - 1, 0):
-    let shift = wm.bitWidth - level - 1
-    if ((value shr shift) and 1'u64) == 0:
-      pos = wm.levels[level].select0(pos)
-    else:
-      pos = wm.levels[level].select1(pos - wm.zeroCounts[level])
-  result = pos
+      var pos = left + k
+      for level in countdown(wm.bitWidth - 1, 0):
+        let shift = wm.bitWidth - level - 1
+        if ((value shr shift) and 1'u64) == 0:
+          pos = wm.levels[level].select0(pos)
+        else:
+          pos = wm.levels[level].select1(pos - wm.zeroCounts[level])
+      result = pos
+
+  case int(wm.levels[0].level)
+  of 0: runSelectForward(rank1UncheckedDepth0)
+  of 1: runSelectForward(rank1UncheckedDepth1)
+  of 2: runSelectForward(rank1UncheckedDepth2)
+  of 3: runSelectForward(rank1UncheckedDepth3)
+  of 4: runSelectForward(rank1UncheckedDepth4)
+  of 5: runSelectForward(rank1UncheckedDepth5)
+  of 6: runSelectForward(rank1UncheckedDepth6)
+  of 7: runSelectForward(rank1UncheckedDepth7)
+  else: runSelectForward(rank1UncheckedDepth8)
 
 func selectNth*[W: WaveletMatrix | WaveletMatrixView](wm: W, value: uint64, nth: int64): int64 =
   ## Returns the position of the 1-based `nth` occurrence, or `-1`.
