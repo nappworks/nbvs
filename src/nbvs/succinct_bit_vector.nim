@@ -737,6 +737,92 @@ func rankIn512Block*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, pos: 
     result += int64(countSetBits(
       sbv.data[startWord + wordOffset] and partialMask))
 
+func accessRankIn512BlockUnchecked*[
+    S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, pos: int64):
+    tuple[bit: bool, rankBefore: int64] {.inline.} =
+  ## 検査なしで `pos` のbitと、同じ512-bit block内の `[blockStart, pos)`
+  ## にあるone bit数を返します。呼び出し側は `0 <= pos < lenOfBits`
+  ## を保証する必要があります。
+  let wordIndex = int(pos shr 6)
+  let startWord = (wordIndex shr 3) shl 3
+  for currentWord in startWord..<wordIndex:
+    result.rankBefore += int64(countSetBits(sbv.data[currentWord]))
+
+  let word = sbv.data[wordIndex]
+  let bitOffset = int(pos and 63)
+  if bitOffset > 0:
+    let partialMask = (1'u64 shl bitOffset) - 1'u64
+    result.rankBefore += int64(countSetBits(word and partialMask))
+  result.bit = ((word shr bitOffset) and 1'u64) != 0
+
+template accessRank1UncheckedFixedBody(
+    sbv, pos, outBit, outRank, maxLevel: untyped) =
+  var nodeWord = 0
+  template addI32Level(levelNum: static[int], shift: static[int]) =
+    when maxLevel >= levelNum:
+      let lane = int((pos shr shift) and 7)
+      let vals = cast[ptr UncheckedArray[int32]](
+        unsafeAddr sbv.selectStorage[nodeWord])
+      outRank += int64(vals[lane])
+      nodeWord += SelectNodeWords +
+        lane * SelectFullSubtreeWords[levelNum - 1]
+
+  when maxLevel >= 8:
+    let lane8 = int((pos shr 31) and 3)
+    let vals8 = cast[ptr UncheckedArray[int64]](
+      unsafeAddr sbv.selectStorage[nodeWord])
+    outRank += vals8[lane8]
+    nodeWord += SelectNodeWords + lane8 * SelectFullSubtreeWords[7]
+  addI32Level(7, 28)
+  addI32Level(6, 25)
+  addI32Level(5, 22)
+  addI32Level(4, 19)
+  addI32Level(3, 16)
+  addI32Level(2, 13)
+  when maxLevel >= 1:
+    let lane1 = int((pos shr 9) and 15)
+    let vals1 = cast[ptr UncheckedArray[int16]](
+      unsafeAddr sbv.selectStorage[nodeWord])
+    outRank += int64(vals1[lane1])
+
+  let leaf = sbv.accessRankIn512BlockUnchecked(pos)
+  outBit = leaf.bit
+  outRank += leaf.rankBefore
+
+template defineAccessRank1UncheckedDepth(name: untyped, maxLevel: static[int]) =
+  func name*[S: SuccinctBitVector | SuccinctBitVectorView](
+      sbv: S, pos: int64): tuple[bit: bool, rankBefore: int64] {.inline.} =
+    ## WMのaccess系hot path向けの固定depth fused access+rankです。
+    ## 呼び出し側は `sbv.level == maxLevel` と
+    ## `0 <= pos < sbv.lenOfBits` を保証します。
+    accessRank1UncheckedFixedBody(
+      sbv, pos, result.bit, result.rankBefore, maxLevel)
+
+defineAccessRank1UncheckedDepth(accessRank1UncheckedDepth0, 0)
+defineAccessRank1UncheckedDepth(accessRank1UncheckedDepth1, 1)
+defineAccessRank1UncheckedDepth(accessRank1UncheckedDepth2, 2)
+defineAccessRank1UncheckedDepth(accessRank1UncheckedDepth3, 3)
+defineAccessRank1UncheckedDepth(accessRank1UncheckedDepth4, 4)
+defineAccessRank1UncheckedDepth(accessRank1UncheckedDepth5, 5)
+defineAccessRank1UncheckedDepth(accessRank1UncheckedDepth6, 6)
+defineAccessRank1UncheckedDepth(accessRank1UncheckedDepth7, 7)
+defineAccessRank1UncheckedDepth(accessRank1UncheckedDepth8, 8)
+
+func accessRank1Unchecked*[S: SuccinctBitVector | SuccinctBitVectorView](
+    sbv: S, pos: int64): tuple[bit: bool, rankBefore: int64] {.inline.} =
+  ## 検査なしで `pos` のbitと `rank1(pos)` を同時に返します。
+  ## generic pathはdepthを1回dispatchし、固定depth実装へ委譲します。
+  case int(sbv.level)
+  of 0: result = sbv.accessRank1UncheckedDepth0(pos)
+  of 1: result = sbv.accessRank1UncheckedDepth1(pos)
+  of 2: result = sbv.accessRank1UncheckedDepth2(pos)
+  of 3: result = sbv.accessRank1UncheckedDepth3(pos)
+  of 4: result = sbv.accessRank1UncheckedDepth4(pos)
+  of 5: result = sbv.accessRank1UncheckedDepth5(pos)
+  of 6: result = sbv.accessRank1UncheckedDepth6(pos)
+  of 7: result = sbv.accessRank1UncheckedDepth7(pos)
+  else: result = sbv.accessRank1UncheckedDepth8(pos)
+
 template rank1UncheckedFixedBody(sbv, pos, outValue, maxLevel: untyped) =
   if pos == 0:
     return 0
