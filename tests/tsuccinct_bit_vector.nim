@@ -263,6 +263,62 @@ block fusedAccessRankMatchesSeparate:
       else:
         doAssert false
 
+block fixedDepthRankPairMatchesSeparate:
+  for length in [1'i64, 512, 513, 8193, 65537, 524289, 4194305]:
+    var sbv = genSuccinctBitVector(length)
+    for pos in 0'i64..<length:
+      if (pos * 17 + 3) mod 29 < 11:
+        sbv[pos] = true
+    sbv.build()
+
+    let ranges = [
+      (0'i64, 0'i64),
+      (0'i64, min(1'i64, length)),
+      (0'i64, min(512'i64, length)),
+      (min(1'i64, length), min(63'i64, length)),
+      (min(63'i64, length), min(65'i64, length)),
+      (min(511'i64, length), min(512'i64, length)),
+      (min(511'i64, length), min(513'i64, length)),
+      (length div 2, length),
+      (max(0'i64, length - 511), length)
+    ]
+    for (left, right) in ranges:
+      if left > right:
+        continue
+      let expectedLeft = sbv.rank1Unchecked(left)
+      let expectedRight = sbv.rank1Unchecked(right)
+      let generic = sbv.rank1PairUnchecked(left, right)
+      doAssert generic.leftRank == expectedLeft
+      doAssert generic.rightRank == expectedRight
+
+      case int(sbv.level)
+      of 0:
+        let item = sbv.rank1PairUncheckedDepth0(left, right)
+        doAssert item.leftRank == expectedLeft
+        doAssert item.rightRank == expectedRight
+      of 1:
+        let item = sbv.rank1PairUncheckedDepth1(left, right)
+        doAssert item.leftRank == expectedLeft
+        doAssert item.rightRank == expectedRight
+      of 2:
+        let item = sbv.rank1PairUncheckedDepth2(left, right)
+        doAssert item.leftRank == expectedLeft
+        doAssert item.rightRank == expectedRight
+      of 3:
+        let item = sbv.rank1PairUncheckedDepth3(left, right)
+        doAssert item.leftRank == expectedLeft
+        doAssert item.rightRank == expectedRight
+      of 4:
+        let item = sbv.rank1PairUncheckedDepth4(left, right)
+        doAssert item.leftRank == expectedLeft
+        doAssert item.rightRank == expectedRight
+      of 5:
+        let item = sbv.rank1PairUncheckedDepth5(left, right)
+        doAssert item.leftRank == expectedLeft
+        doAssert item.rightRank == expectedRight
+      else:
+        doAssert false
+
 block selectLeafWordBoundaries:
   var ones = genSuccinctBitVector(512)
   var onePositions: seq[int64] = @[]
