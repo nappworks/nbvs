@@ -550,12 +550,16 @@ touched-word bitmap at 256 results while preserving ascending Dictionary IDs.
 
 `FmDictionaryBuildOptions(validateDistinct: false)` skips the temporary
 duplicate-checking hash set when the caller already guarantees distinct input.
-The default remains `true`. Set `fmBackend` to `fbpWavelet` or `fbpRunLength`
-for reproducible comparisons; `fbpAuto` (the default) selects RLE only when its
-estimated storage is clearly smaller. `FmDictionary.stats()` reports run
-statistics, estimated/actual backend bytes, and estimation error ratios, while
-`memoryUsage()` reports the selected backend's storage without retaining both
-final payloads. The RLE payload derives lengths from run boundaries and does
+The default remains `true`. Set `fmBackend` to `fbpWavelet`,
+`fbpHybridWavelet`, or `fbpRunLength` for reproducible comparisons.
+`fbpWavelet` keeps the fixed 9-bit Binary Wavelet Matrix for A/B compatibility.
+`fbpHybridWavelet` uses the exact 9-bit mixed-radix layout
+`SuccinctBitVector(bit 8) -> 4 x QuadVector(bits 7..0)`; it does not pad the
+alphabet to 10 bits. `fbpAuto` (the default) selects RLE only when its estimated
+storage is clearly smaller and otherwise uses the hybrid backend.
+`FmDictionary.stats()` reports run statistics, estimated/actual backend bytes,
+and estimation error ratios, while `memoryUsage()` reports the selected
+backend's storage without retaining both final payloads. The RLE payload derives lengths from run boundaries and does
 not retain a `runLengths` array. Its fused `rankPair` includes a same-run path.
 Code that directly read the former public `RunLengthBwt.runLengths` field must
 derive each length from adjacent `runStarts.select1` positions (using `n` for
