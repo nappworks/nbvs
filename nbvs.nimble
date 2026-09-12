@@ -53,6 +53,12 @@ task benchWmAccessRankFusionAb, "A/B scalar WM unfused vs fused SBV access-rank"
 task benchWmAccessRankFusionAbSimd, "A/B SIMD WM unfused vs fused SBV access-rank":
   exec "nim c --path:src -d:release --mm:arc -d:nbvsSimd -r benchmarks/wm_access_rank_fusion_ab.nim"
 
+task benchWmRankPairAb, "A/B scalar WM separate ranks vs fixed-depth rank pairs":
+  exec "nim c --path:src -d:release --mm:arc -r benchmarks/wm_rank_pair_ab.nim"
+
+task benchWmRankPairAbSimd, "A/B SIMD WM separate ranks vs fixed-depth rank pairs":
+  exec "nim c --path:src -d:release --mm:arc -d:nbvsSimd -r benchmarks/wm_rank_pair_ab.nim"
+
 task benchFmDictionary, "Run FmDictionary benchmarks":
   exec "nim c --path:src -d:release --mm:arc -r benchmarks/fm_dictionary_bench.nim"
 
