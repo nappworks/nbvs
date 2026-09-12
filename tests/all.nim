@@ -9,6 +9,7 @@ import ./tsbv_scalar_no_word_pair_prefix
 import ./tquad_vector
 import ./tquad_vector_hot_path
 import ./tquad_wavelet_matrix
+import ./thybrid_wavelet_matrix_9
 import ./tbit_vector_select_cursor
 import ./telias_fano
 import ./twavelet_matrix
