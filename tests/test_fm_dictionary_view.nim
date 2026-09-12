@@ -11,7 +11,7 @@ type
 
   HybridBacking = object
     levels: array[HybridWavelet9QuadLevels, seq[uint64]]
-    lastBits: seq[uint64]
+    firstBits: seq[uint64]
 
   TrieBacking = object
     internalBits, hasSuffixBits, terminalBits: seq[uint64]
@@ -88,9 +88,9 @@ proc hybridView(source: HybridWaveletMatrix9,
   var levels: array[HybridWavelet9QuadLevels, QuadVectorView]
   for level in 0..<HybridWavelet9QuadLevels:
     levels[level] = quadView(source.levels[level], backing.levels[level])
-  let lastBits = succinctView(source.lastBits, backing.lastBits)
-  initHybridWaveletMatrix9View(source.n, levels, source.bucketStarts,
-    lastBits, source.lastZeroCount)
+  let firstBits = succinctView(source.firstBits, backing.firstBits)
+  initHybridWaveletMatrix9View(source.n, firstBits, source.firstZeroCount,
+    levels, source.bucketStarts)
 
 proc trieView(source: SuccinctRadixTrie,
               backing: var TrieBacking): SuccinctRadixTrieView =
