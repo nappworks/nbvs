@@ -1,4 +1,4 @@
-import std/[algorithm, random]
+import std/random
 import nbvs/[hybrid_wavelet_matrix_9, wavelet_matrix]
 
 proc checkEquivalent(values: seq[uint64]) =
