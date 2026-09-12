@@ -187,28 +187,28 @@ func access*[W: WaveletMatrix | WaveletMatrixView](wm: W, i: int64): uint64 =
   if wm.bitWidth == 0:
     return 0
 
-  template runAccess(rankFn: untyped) =
+  template runAccess(accessRankFn: untyped) =
     block:
       var pos = i
       for level in 0..<wm.bitWidth:
         let shift = wm.bitWidth - level - 1
-        let ones = rankFn(wm.levels[level], pos)
-        if wm.levels[level].bitAtUnchecked(pos):
+        let item = accessRankFn(wm.levels[level], pos)
+        if item.bit:
           result = result or (1'u64 shl shift)
-          pos = wm.zeroCounts[level] + ones
+          pos = wm.zeroCounts[level] + item.rankBefore
         else:
-          pos -= ones
+          pos -= item.rankBefore
 
   case int(wm.levels[0].level)
-  of 0: runAccess(rank1UncheckedDepth0)
-  of 1: runAccess(rank1UncheckedDepth1)
-  of 2: runAccess(rank1UncheckedDepth2)
-  of 3: runAccess(rank1UncheckedDepth3)
-  of 4: runAccess(rank1UncheckedDepth4)
-  of 5: runAccess(rank1UncheckedDepth5)
-  of 6: runAccess(rank1UncheckedDepth6)
-  of 7: runAccess(rank1UncheckedDepth7)
-  else: runAccess(rank1UncheckedDepth8)
+  of 0: runAccess(accessRank1UncheckedDepth0)
+  of 1: runAccess(accessRank1UncheckedDepth1)
+  of 2: runAccess(accessRank1UncheckedDepth2)
+  of 3: runAccess(accessRank1UncheckedDepth3)
+  of 4: runAccess(accessRank1UncheckedDepth4)
+  of 5: runAccess(accessRank1UncheckedDepth5)
+  of 6: runAccess(accessRank1UncheckedDepth6)
+  of 7: runAccess(accessRank1UncheckedDepth7)
+  else: runAccess(accessRank1UncheckedDepth8)
 
 func accessRankUnchecked*[W: WaveletMatrix | WaveletMatrixView](wm: W,
     pos: int64): tuple[value: uint64, rankBefore: int64] =
@@ -220,33 +220,33 @@ func accessRankUnchecked*[W: WaveletMatrix | WaveletMatrixView](wm: W,
     result.rankBefore = pos
     return
 
-  template runAccessRank(rankFn: untyped) =
+  template runAccessRank(accessRankFn, rankFn: untyped) =
     block:
       var current = pos
       var intervalLeft = 0'i64
       for level in 0..<wm.bitWidth:
         let shift = wm.bitWidth - level - 1
-        let currentOnes = rankFn(wm.levels[level], current)
+        let currentItem = accessRankFn(wm.levels[level], current)
         let leftOnes = rankFn(wm.levels[level], intervalLeft)
-        if wm.levels[level].bitAtUnchecked(current):
+        if currentItem.bit:
           result.value = result.value or (1'u64 shl shift)
-          current = wm.zeroCounts[level] + currentOnes
+          current = wm.zeroCounts[level] + currentItem.rankBefore
           intervalLeft = wm.zeroCounts[level] + leftOnes
         else:
-          current -= currentOnes
+          current -= currentItem.rankBefore
           intervalLeft -= leftOnes
       result.rankBefore = current - intervalLeft
 
   case int(wm.levels[0].level)
-  of 0: runAccessRank(rank1UncheckedDepth0)
-  of 1: runAccessRank(rank1UncheckedDepth1)
-  of 2: runAccessRank(rank1UncheckedDepth2)
-  of 3: runAccessRank(rank1UncheckedDepth3)
-  of 4: runAccessRank(rank1UncheckedDepth4)
-  of 5: runAccessRank(rank1UncheckedDepth5)
-  of 6: runAccessRank(rank1UncheckedDepth6)
-  of 7: runAccessRank(rank1UncheckedDepth7)
-  else: runAccessRank(rank1UncheckedDepth8)
+  of 0: runAccessRank(accessRank1UncheckedDepth0, rank1UncheckedDepth0)
+  of 1: runAccessRank(accessRank1UncheckedDepth1, rank1UncheckedDepth1)
+  of 2: runAccessRank(accessRank1UncheckedDepth2, rank1UncheckedDepth2)
+  of 3: runAccessRank(accessRank1UncheckedDepth3, rank1UncheckedDepth3)
+  of 4: runAccessRank(accessRank1UncheckedDepth4, rank1UncheckedDepth4)
+  of 5: runAccessRank(accessRank1UncheckedDepth5, rank1UncheckedDepth5)
+  of 6: runAccessRank(accessRank1UncheckedDepth6, rank1UncheckedDepth6)
+  of 7: runAccessRank(accessRank1UncheckedDepth7, rank1UncheckedDepth7)
+  else: runAccessRank(accessRank1UncheckedDepth8, rank1UncheckedDepth8)
 
 func accessRank*[W: WaveletMatrix | WaveletMatrixView](wm: W,
                  pos: int64): tuple[value: uint64, rankBefore: int64] =
