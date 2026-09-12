@@ -66,6 +66,11 @@ func bitAtRaw(bits: SuccinctBitVector, pos: int64): bool {.inline.} =
   ((bits.data[int(pos shr 6)] shr int(pos and 63)) and 1'u64) != 0
 
 func unfusedAccess(wm: WaveletMatrix, i: int64): uint64 =
+  if i < 0 or i >= wm.n:
+    raise newException(IndexDefect, "index out of bounds")
+  if wm.bitWidth == 0:
+    return 0
+
   template run(rankFn: untyped) =
     block:
       var pos = i
@@ -91,6 +96,10 @@ func unfusedAccess(wm: WaveletMatrix, i: int64): uint64 =
 
 func unfusedAccessRank(wm: WaveletMatrix, pos: int64):
     tuple[value: uint64, rankBefore: int64] =
+  if wm.bitWidth == 0:
+    result.rankBefore = pos
+    return
+
   template run(rankFn: untyped) =
     block:
       var current = pos
