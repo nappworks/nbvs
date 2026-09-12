@@ -216,6 +216,53 @@ block fixedDepthRankMatchesGeneric:
       of 5: doAssert sbv.rank1UncheckedDepth5(pos) == expected
       else: doAssert false
 
+block fusedAccessRankMatchesSeparate:
+  for length in [1'i64, 512, 513, 8193, 65537, 524289, 4194305]:
+    var sbv = genSuccinctBitVector(length)
+    for pos in countup(0'i64, length - 1, 9973'i64):
+      sbv[pos] = true
+    sbv[length - 1] = true
+    sbv.build()
+
+    let positions = [0'i64, min(1'i64, length - 1),
+                     min(511'i64, length - 1),
+                     min(8192'i64, length - 1),
+                     length div 2, length - 1]
+    for pos in positions:
+      let expectedBit = sbv[pos]
+      let expectedRank = sbv.rank1Unchecked(pos)
+      let generic = sbv.accessRank1Unchecked(pos)
+      doAssert generic.bit == expectedBit
+      doAssert generic.rankBefore == expectedRank
+
+      case int(sbv.level)
+      of 0:
+        let item = sbv.accessRank1UncheckedDepth0(pos)
+        doAssert item.bit == expectedBit
+        doAssert item.rankBefore == expectedRank
+      of 1:
+        let item = sbv.accessRank1UncheckedDepth1(pos)
+        doAssert item.bit == expectedBit
+        doAssert item.rankBefore == expectedRank
+      of 2:
+        let item = sbv.accessRank1UncheckedDepth2(pos)
+        doAssert item.bit == expectedBit
+        doAssert item.rankBefore == expectedRank
+      of 3:
+        let item = sbv.accessRank1UncheckedDepth3(pos)
+        doAssert item.bit == expectedBit
+        doAssert item.rankBefore == expectedRank
+      of 4:
+        let item = sbv.accessRank1UncheckedDepth4(pos)
+        doAssert item.bit == expectedBit
+        doAssert item.rankBefore == expectedRank
+      of 5:
+        let item = sbv.accessRank1UncheckedDepth5(pos)
+        doAssert item.bit == expectedBit
+        doAssert item.rankBefore == expectedRank
+      else:
+        doAssert false
+
 block selectLeafWordBoundaries:
   var ones = genSuccinctBitVector(512)
   var onePositions: seq[int64] = @[]
