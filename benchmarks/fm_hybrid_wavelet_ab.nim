@@ -80,10 +80,6 @@ proc main() =
 
   let values = makeCorpus(count, averageLength)
 
-  let binaryBuild = elapsedNs:
-    discard
-  discard binaryBuild
-
   var started = getMonoTime()
   let binary = genFmDictionary(values, FmDictionaryBuildOptions(
     validateDistinct: true, fmBackend: fbpWavelet))
