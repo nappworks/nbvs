@@ -566,8 +566,9 @@ derive each length from adjacent `runStarts.select1` positions (using `n` for
 the final boundary); the dictionary search APIs are unchanged.
 
 Suffix and substring backward search now dispatches once per query to a
-Wavelet- or RLE-specialized loop. LF traversal uses the corresponding checked-
-free internal path after the FM row range has already been established.
+Binary-Wavelet-, Hybrid-Wavelet-, or RLE-specialized loop. LF traversal uses
+the corresponding checked-free internal path after the FM row range has
+already been established.
 `accessRankUnchecked` is also available for advanced callers, but its caller
 must guarantee `0 <= position < n`; normal code should use `accessRank`.
 
