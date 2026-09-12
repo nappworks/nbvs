@@ -61,6 +61,14 @@ func bitUnchecked[S: SuccinctBitVector | SuccinctBitVectorView](
     bits: S, pos: int64): bool {.inline.} =
   ((bits.data[int(pos shr 6)] shr int(pos and 63'i64)) and 1'u64) != 0
 
+func quadAccessRankUnchecked[V: QuadVector | QuadVectorView](
+    qv: V, pos: int64): tuple[symbol: uint8, rankBefore: int64] {.inline.} =
+  when V is QuadVector:
+    result = qv.accessRankUnchecked(pos)
+  else:
+    result.symbol = uint8(qv.quadSymbolUnchecked(pos))
+    result.rankBefore = qv.rankUnchecked(int(result.symbol), pos)
+
 func routeBit[S: SuccinctBitVector | SuccinctBitVectorView](
     bits: S, zeroCount, pos: int64, bit: bool): int64 {.inline.} =
   let ones = bits.rank1Unchecked(pos)
@@ -159,7 +167,7 @@ func accessRankUnchecked*[
   var current = pos
   var intervalLeft = 0'i64
   for level in 0..<HybridWavelet9QuadLevels:
-    let item = wm.levels[level].accessRankUnchecked(current)
+    let item = wm.levels[level].quadAccessRankUnchecked(current)
     let symbol = int(item.symbol)
     result.value = result.value or
       (uint64(symbol) shl HybridWavelet9Shifts[level])
@@ -298,7 +306,7 @@ func estimateHybridWaveletMatrix9Bytes*(n: int64): int64 =
     if words > maxSelectWords:
       maxSelectWords = words
   let quadBytes = quadPayloadBytes + quadRankBytes + maxSelectWords * 8
-  result = HybridWavelet9QuadLevels.int64 * quadBytes +
+  result = int64(HybridWavelet9QuadLevels) * quadBytes +
     estimateSuccinctBitVectorBytes(n) +
     int64(HybridWavelet9QuadLevels * 4 * sizeof(int64) + sizeof(int64))
 
