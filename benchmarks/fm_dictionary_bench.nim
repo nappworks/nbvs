@@ -95,7 +95,9 @@ proc run(count, averageLength: int, japanese: bool) =
   sink = sink xor uint64(standaloneWm.n)
 
   started = getMonoTime()
-  let dict = genFmDictionary(values)
+  # このlegacy primitive benchmarkはstandalone Binary WMと同条件で比較する。
+  let dict = genFmDictionary(values, FmDictionaryBuildOptions(
+    validateDistinct: true, fmBackend: fbpWavelet))
   let dictionaryNs = elapsedNs(started)
   let buildPeakRssKiB = peakRssKiB()
 
