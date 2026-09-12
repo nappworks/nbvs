@@ -32,21 +32,3 @@ query全体の傾向、levelを9段から5段へ削減できること、およ�
 
 rev3ではAutoがlog-message-like corpusでRLE、それ以外でHybridを選択した。
 これは推定容量に基づく現在の選択条件と一致する。
-
-## ShikiDB E2E
-
-ShikiDBのローカルcheckoutで、このリポジトリの`src`を明示して検証した。
-
-- `tests/test_fm_string_v2.nim`: 6 tests成功
-- rows: 100,000
-- cardinality: 10,000
-- repeats: 5
-- build + publish: 60.833 ms
-- reopen FmDictionary rebuild: 50.110 ms
-- exact String to ID lookup: 0.521 us/query
-- equality count: 0.737 ms/query
-- `.fms1`: 425,144 bytes
-- backend: `fbHybridWavelet`
-- FmDictionary memory: 344,172 bytes
-- BWT length / runs: 180,002 / 42,011
-- BWT run ratio: 0.233392
