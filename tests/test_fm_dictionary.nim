@@ -16,25 +16,41 @@ func naiveOccurrenceCount(value, pattern: string): uint32 =
 proc verifyBackends(values: seq[string], patterns: seq[string]) =
   let wavelet = genFmDictionary(values, FmDictionaryBuildOptions(
     validateDistinct: true, fmBackend: fbpWavelet))
+  let hybrid = genFmDictionary(values, FmDictionaryBuildOptions(
+    validateDistinct: true, fmBackend: fbpHybridWavelet))
   let runLength = genFmDictionary(values, FmDictionaryBuildOptions(
     validateDistinct: true, fmBackend: fbpRunLength))
   doAssert wavelet.backendKind == fbWavelet
+  doAssert hybrid.backendKind == fbHybridWavelet
   doAssert runLength.backendKind == fbRunLength
   doAssert wavelet.stats.actualWaveletBytes > 0
+  doAssert hybrid.stats.actualWaveletBytes > 0
   doAssert abs(wavelet.stats.waveletEstimateErrorRatio - 1.0) < 0.000001
+  doAssert hybrid.stats.waveletEstimateErrorRatio > 0.0
   doAssert abs(runLength.stats.rleEstimateErrorRatio - 1.0) < 0.000001
   for pattern in patterns:
-    doAssert wavelet.findExactFm(pattern) == runLength.findExactFm(pattern)
-    doAssert wavelet.findPrefix(pattern) == runLength.findPrefix(pattern)
-    doAssert wavelet.findSuffix(pattern) == runLength.findSuffix(pattern)
-    doAssert wavelet.findSubstring(pattern) == runLength.findSubstring(pattern)
-    doAssert wavelet.findSubstringOccurrences(pattern) ==
-      runLength.findSubstringOccurrences(pattern)
+    let expectedExact = wavelet.findExactFm(pattern)
+    let expectedPrefix = wavelet.findPrefix(pattern)
+    let expectedSuffix = wavelet.findSuffix(pattern)
+    let expectedSubstring = wavelet.findSubstring(pattern)
+    let expectedOccurrences = wavelet.findSubstringOccurrences(pattern)
+    doAssert hybrid.findExactFm(pattern) == expectedExact
+    doAssert runLength.findExactFm(pattern) == expectedExact
+    doAssert hybrid.findPrefix(pattern) == expectedPrefix
+    doAssert runLength.findPrefix(pattern) == expectedPrefix
+    doAssert hybrid.findSuffix(pattern) == expectedSuffix
+    doAssert runLength.findSuffix(pattern) == expectedSuffix
+    doAssert hybrid.findSubstring(pattern) == expectedSubstring
+    doAssert runLength.findSubstring(pattern) == expectedSubstring
+    doAssert hybrid.findSubstringOccurrences(pattern) == expectedOccurrences
+    doAssert runLength.findSubstringOccurrences(pattern) == expectedOccurrences
   for id, value in values:
-    var waveletValue, runLengthValue: string
+    var waveletValue, hybridValue, runLengthValue: string
     wavelet.getStringIntoFm(DictionaryId(id), waveletValue)
+    hybrid.getStringIntoFm(DictionaryId(id), hybridValue)
     runLength.getStringIntoFm(DictionaryId(id), runLengthValue)
     doAssert waveletValue == value
+    doAssert hybridValue == value
     doAssert runLengthValue == value
 
 block forcedBackends:
@@ -108,7 +124,8 @@ block suffixArrayRandomNaiveComparison:
 
 block basic:
   let values = @["apple", "application", "banana", "hana"]
-  let dict = genFmDictionary(values)
+  let dict = genFmDictionary(values, FmDictionaryBuildOptions(
+    validateDistinct: true, fmBackend: fbpWavelet))
   doAssert dict.len == 4
   doAssert dict.bwt.bitWidth == SymbolBitWidth
   var bwtDisplay = ""
@@ -248,7 +265,7 @@ block largeSubstringOrdering:
   var values = newSeq[string](600)
   for index in 0..<values.len:
     values[index] = "shared-needle-" & $index
-  for preference in [fbpWavelet, fbpRunLength, fbpAuto]:
+  for preference in [fbpWavelet, fbpHybridWavelet, fbpRunLength, fbpAuto]:
     let dict = genFmDictionary(values, FmDictionaryBuildOptions(
       validateDistinct: true, fmBackend: preference))
     var workspace = initFmQueryWorkspace(dict)
