@@ -823,111 +823,6 @@ func accessRank1Unchecked*[S: SuccinctBitVector | SuccinctBitVectorView](
   of 7: result = sbv.accessRank1UncheckedDepth7(pos)
   else: result = sbv.accessRank1UncheckedDepth8(pos)
 
-func countOnesSame512Unchecked*[
-    S: SuccinctBitVector | SuccinctBitVectorView](
-    sbv: S, left, right: int64): int64 {.inline.} =
-  ## 同じ512-bit block内の半開区間 `[left, right)` のone数を返します。
-  ## 呼び出し側は `0 <= left <= right <= lenOfBits` かつ
-  ## `left shr 9 == right shr 9`（right==lenOfBitsのtailも含む）を保証します。
-  if left == right:
-    return 0
-
-  var current = left
-  while current < right:
-    let wordIndex = int(current shr 6)
-    let wordStart = current and not 63'i64
-    let wordEnd = min(right, wordStart + 64)
-    let lo = int(current - wordStart)
-    let hi = int(wordEnd - wordStart)
-    var mask: uint64
-    if hi == 64:
-      mask = uint64.high shl lo
-    else:
-      mask = ((1'u64 shl hi) - 1'u64) and (uint64.high shl lo)
-    result += int64(countSetBits(sbv.data[wordIndex] and mask))
-    current = wordEnd
-
-template rank1PairUncheckedFixedBody(
-    sbv, left, right, outLeft, outRight, maxLevel: untyped) =
-  if left == right:
-    outLeft = sbv.rank1UncheckedDepthDispatch(left, maxLevel)
-    outRight = outLeft
-  elif (left shr 9) == (right shr 9):
-    var prefix = 0'i64
-    var nodeWord = 0
-    template addI32Level(levelNum: static[int], shift: static[int]) =
-      when maxLevel >= levelNum:
-        let lane = int((left shr shift) and 7)
-        let vals = cast[ptr UncheckedArray[int32]](
-          unsafeAddr sbv.selectStorage[nodeWord])
-        prefix += int64(vals[lane])
-        nodeWord += SelectNodeWords +
-          lane * SelectFullSubtreeWords[levelNum - 1]
-
-    when maxLevel >= 8:
-      let lane8 = int((left shr 31) and 3)
-      let vals8 = cast[ptr UncheckedArray[int64]](
-        unsafeAddr sbv.selectStorage[nodeWord])
-      prefix += vals8[lane8]
-      nodeWord += SelectNodeWords + lane8 * SelectFullSubtreeWords[7]
-    addI32Level(7, 28)
-    addI32Level(6, 25)
-    addI32Level(5, 22)
-    addI32Level(4, 19)
-    addI32Level(3, 16)
-    addI32Level(2, 13)
-    when maxLevel >= 1:
-      let lane1 = int((left shr 9) and 15)
-      let vals1 = cast[ptr UncheckedArray[int16]](
-        unsafeAddr sbv.selectStorage[nodeWord])
-      prefix += int64(vals1[lane1])
-
-    outLeft = prefix + sbv.rankIn512Block(left)
-    outRight = outLeft + sbv.countOnesSame512Unchecked(left, right)
-  else:
-    outLeft = sbv.rank1UncheckedDepthDispatch(left, maxLevel)
-    outRight = sbv.rank1UncheckedDepthDispatch(right, maxLevel)
-
-template rank1UncheckedDepthDispatch(sbv, pos, maxLevel: untyped): int64 =
-  block:
-    var rankValue = 0'i64
-    rank1UncheckedFixedBody(sbv, pos, rankValue, maxLevel)
-    rankValue
-
-template defineRank1PairUncheckedDepth(name: untyped, maxLevel: static[int]) =
-  func name*[S: SuccinctBitVector | SuccinctBitVectorView](
-      sbv: S, left, right: int64):
-      tuple[leftRank, rightRank: int64] {.inline.} =
-    ## WM range hot path向けの固定depth pair rankです。
-    ## 同一512-bit blockではprefix traversalとleaf scanを共有します。
-    rank1PairUncheckedFixedBody(
-      sbv, left, right, result.leftRank, result.rightRank, maxLevel)
-
-defineRank1PairUncheckedDepth(rank1PairUncheckedDepth0, 0)
-defineRank1PairUncheckedDepth(rank1PairUncheckedDepth1, 1)
-defineRank1PairUncheckedDepth(rank1PairUncheckedDepth2, 2)
-defineRank1PairUncheckedDepth(rank1PairUncheckedDepth3, 3)
-defineRank1PairUncheckedDepth(rank1PairUncheckedDepth4, 4)
-defineRank1PairUncheckedDepth(rank1PairUncheckedDepth5, 5)
-defineRank1PairUncheckedDepth(rank1PairUncheckedDepth6, 6)
-defineRank1PairUncheckedDepth(rank1PairUncheckedDepth7, 7)
-defineRank1PairUncheckedDepth(rank1PairUncheckedDepth8, 8)
-
-func rank1PairUnchecked*[S: SuccinctBitVector | SuccinctBitVectorView](
-    sbv: S, left, right: int64):
-    tuple[leftRank, rightRank: int64] {.inline.} =
-  ## 検査なしで `rank1(left)` と `rank1(right)` を同時に返します。
-  case int(sbv.level)
-  of 0: result = sbv.rank1PairUncheckedDepth0(left, right)
-  of 1: result = sbv.rank1PairUncheckedDepth1(left, right)
-  of 2: result = sbv.rank1PairUncheckedDepth2(left, right)
-  of 3: result = sbv.rank1PairUncheckedDepth3(left, right)
-  of 4: result = sbv.rank1PairUncheckedDepth4(left, right)
-  of 5: result = sbv.rank1PairUncheckedDepth5(left, right)
-  of 6: result = sbv.rank1PairUncheckedDepth6(left, right)
-  of 7: result = sbv.rank1PairUncheckedDepth7(left, right)
-  else: result = sbv.rank1PairUncheckedDepth8(left, right)
-
 template rank1UncheckedFixedBody(sbv, pos, outValue, maxLevel: untyped) =
   if pos == 0:
     return 0
@@ -998,6 +893,79 @@ func rank1Unchecked*[S: SuccinctBitVector | SuccinctBitVectorView](
   of 6: result = sbv.rank1UncheckedDepth6(pos)
   of 7: result = sbv.rank1UncheckedDepth7(pos)
   else: result = sbv.rank1UncheckedDepth8(pos)
+
+func countOnesSame512Unchecked*[
+    S: SuccinctBitVector | SuccinctBitVectorView](
+    sbv: S, left, right: int64): int64 {.inline.} =
+  ## 1つの512-bit blockに収まる半開区間 `[left, right)` のone数を返します。
+  ## 呼び出し側は `0 <= left <= right <= lenOfBits` と、空区間を除き
+  ## `left shr 9 == (right - 1) shr 9` を保証します。
+  var current = left
+  while current < right:
+    let wordIndex = int(current shr 6)
+    let wordStart = current and not 63'i64
+    let wordEnd = min(right, wordStart + 64)
+    let lo = int(current - wordStart)
+    let hi = int(wordEnd - wordStart)
+    var mask: uint64
+    if hi == 64:
+      mask = uint64.high shl lo
+    else:
+      mask = ((1'u64 shl hi) - 1'u64) and (uint64.high shl lo)
+    result += int64(countSetBits(sbv.data[wordIndex] and mask))
+    current = wordEnd
+
+template rank1AtFixedDepth(sbv, pos, depth: untyped): int64 =
+  when depth == 0: sbv.rank1UncheckedDepth0(pos)
+  elif depth == 1: sbv.rank1UncheckedDepth1(pos)
+  elif depth == 2: sbv.rank1UncheckedDepth2(pos)
+  elif depth == 3: sbv.rank1UncheckedDepth3(pos)
+  elif depth == 4: sbv.rank1UncheckedDepth4(pos)
+  elif depth == 5: sbv.rank1UncheckedDepth5(pos)
+  elif depth == 6: sbv.rank1UncheckedDepth6(pos)
+  elif depth == 7: sbv.rank1UncheckedDepth7(pos)
+  else: sbv.rank1UncheckedDepth8(pos)
+
+template defineRank1PairUncheckedDepth(name: untyped, depth: static[int]) =
+  func name*[S: SuccinctBitVector | SuccinctBitVectorView](
+      sbv: S, left, right: int64):
+      tuple[leftRank, rightRank: int64] {.inline.} =
+    ## WM range hot path向けの固定depth pair rankです。
+    ## 同一512-bit blockではprefix traversalを1回にし、
+    ## right側は `[left,right)` の局所popcountから導出します。
+    result.leftRank = rank1AtFixedDepth(sbv, left, depth)
+    if left == right:
+      result.rightRank = result.leftRank
+    elif (left shr 9) == ((right - 1) shr 9):
+      result.rightRank = result.leftRank +
+        sbv.countOnesSame512Unchecked(left, right)
+    else:
+      result.rightRank = rank1AtFixedDepth(sbv, right, depth)
+
+defineRank1PairUncheckedDepth(rank1PairUncheckedDepth0, 0)
+defineRank1PairUncheckedDepth(rank1PairUncheckedDepth1, 1)
+defineRank1PairUncheckedDepth(rank1PairUncheckedDepth2, 2)
+defineRank1PairUncheckedDepth(rank1PairUncheckedDepth3, 3)
+defineRank1PairUncheckedDepth(rank1PairUncheckedDepth4, 4)
+defineRank1PairUncheckedDepth(rank1PairUncheckedDepth5, 5)
+defineRank1PairUncheckedDepth(rank1PairUncheckedDepth6, 6)
+defineRank1PairUncheckedDepth(rank1PairUncheckedDepth7, 7)
+defineRank1PairUncheckedDepth(rank1PairUncheckedDepth8, 8)
+
+func rank1PairUnchecked*[S: SuccinctBitVector | SuccinctBitVectorView](
+    sbv: S, left, right: int64):
+    tuple[leftRank, rightRank: int64] {.inline.} =
+  ## 検査なしで `rank1(left)` と `rank1(right)` を同時に返します。
+  case int(sbv.level)
+  of 0: result = sbv.rank1PairUncheckedDepth0(left, right)
+  of 1: result = sbv.rank1PairUncheckedDepth1(left, right)
+  of 2: result = sbv.rank1PairUncheckedDepth2(left, right)
+  of 3: result = sbv.rank1PairUncheckedDepth3(left, right)
+  of 4: result = sbv.rank1PairUncheckedDepth4(left, right)
+  of 5: result = sbv.rank1PairUncheckedDepth5(left, right)
+  of 6: result = sbv.rank1PairUncheckedDepth6(left, right)
+  of 7: result = sbv.rank1PairUncheckedDepth7(left, right)
+  else: result = sbv.rank1PairUncheckedDepth8(left, right)
 
 func rank1*[S: SuccinctBitVector | SuccinctBitVectorView](sbv: S, pos: int64): int64 {.inline.} =
   ## Returns the number of one bits in the half-open range `[0, pos)`.
