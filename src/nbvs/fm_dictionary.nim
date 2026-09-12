@@ -430,6 +430,14 @@ func backwardStepWavelet[D: FmDictionary | FmDictionaryView](dict: D, symbol: Fm
   result.left = base + ranks.leftRank
   result.right = base + ranks.rightRank
 
+func backwardStepHybrid[D: FmDictionary | FmDictionaryView](
+    dict: D, symbol: FmSymbol, interval: FmInterval): FmInterval {.inline.} =
+  let base = int64(dict.cTable.getUnchecked(int(symbol)))
+  let ranks = dict.hybridBwt.rankPair(
+    uint64(symbol), interval.left, interval.right)
+  result.left = base + ranks.leftRank
+  result.right = base + ranks.rightRank
+
 func backwardStepRunLength[D: FmDictionary | FmDictionaryView](dict: D, symbol: FmSymbol,
                            interval: FmInterval): FmInterval {.inline.} =
   let base = int64(dict.cTable.getUnchecked(int(symbol)))
@@ -446,6 +454,14 @@ func backwardSearchBytesWavelet[D: FmDictionary | FmDictionaryView](dict: D,
     if result.left >= result.right:
       return
 
+func backwardSearchBytesHybrid[D: FmDictionary | FmDictionaryView](
+    dict: D, pattern: string): FmInterval =
+  result = FmInterval(left: 0, right: dict.hybridBwt.n)
+  for index in countdown(pattern.high, 0):
+    result = dict.backwardStepHybrid(encodeByte(byte(pattern[index])), result)
+    if result.left >= result.right:
+      return
+
 func backwardSearchBytesRunLength[D: FmDictionary | FmDictionaryView](dict: D,
                                   pattern: string): FmInterval =
   result = FmInterval(left: 0, right: dict.runLengthBwt.n)
@@ -456,11 +472,13 @@ func backwardSearchBytesRunLength[D: FmDictionary | FmDictionaryView](dict: D,
 
 func backwardSearchBytes[D: FmDictionary | FmDictionaryView](dict: D,
     pattern: string): FmInterval =
-  result = FmInterval(left: 0, right: dict.bwtLength)
-  for index in countdown(pattern.high, 0):
-    result = dict.backwardStep(encodeByte(byte(pattern[index])), result)
-    if result.left >= result.right:
-      return
+  case dict.backendKind
+  of fbWavelet:
+    dict.backwardSearchBytesWavelet(pattern)
+  of fbHybridWavelet:
+    dict.backwardSearchBytesHybrid(pattern)
+  of fbRunLength:
+    dict.backwardSearchBytesRunLength(pattern)
 
 func backwardSearchExact[D: FmDictionary | FmDictionaryView](dict: D, value: string): FmInterval =
   result = FmInterval(left: 0, right: dict.bwtLength)
@@ -478,12 +496,28 @@ func backwardSearchPrefix[D: FmDictionary | FmDictionaryView](dict: D, prefix: s
 
 func backwardSearchSuffix[D: FmDictionary | FmDictionaryView](dict: D,
     suffix: string): FmInterval =
-  result = FmInterval(left: 0, right: dict.bwtLength)
-  result = dict.backwardStep(SeparatorSymbol, result)
-  for index in countdown(suffix.high, 0):
-    result = dict.backwardStep(encodeByte(byte(suffix[index])), result)
-    if result.left >= result.right:
-      return
+  case dict.backendKind
+  of fbWavelet:
+    result = FmInterval(left: 0, right: dict.bwt.n)
+    result = dict.backwardStepWavelet(SeparatorSymbol, result)
+    for index in countdown(suffix.high, 0):
+      result = dict.backwardStepWavelet(encodeByte(byte(suffix[index])), result)
+      if result.left >= result.right:
+        return
+  of fbHybridWavelet:
+    result = FmInterval(left: 0, right: dict.hybridBwt.n)
+    result = dict.backwardStepHybrid(SeparatorSymbol, result)
+    for index in countdown(suffix.high, 0):
+      result = dict.backwardStepHybrid(encodeByte(byte(suffix[index])), result)
+      if result.left >= result.right:
+        return
+  of fbRunLength:
+    result = FmInterval(left: 0, right: dict.runLengthBwt.n)
+    result = dict.backwardStepRunLength(SeparatorSymbol, result)
+    for index in countdown(suffix.high, 0):
+      result = dict.backwardStepRunLength(encodeByte(byte(suffix[index])), result)
+      if result.left >= result.right:
+        return
 
 func lfStep[D: FmDictionary | FmDictionaryView](dict: D, row: int64): LfStepResult {.inline.} =
   let item = dict.bwtAccessRank(row)
@@ -493,6 +527,13 @@ func lfStep[D: FmDictionary | FmDictionaryView](dict: D, row: int64): LfStepResu
 
 func lfStepWavelet[D: FmDictionary | FmDictionaryView](dict: D, row: int64): LfStepResult {.inline.} =
   let item = dict.bwt.accessRankUnchecked(row)
+  result.symbol = FmSymbol(item.value)
+  result.nextRow = int64(dict.cTable.getUnchecked(int(item.value))) +
+    item.rankBefore
+
+func lfStepHybrid[D: FmDictionary | FmDictionaryView](
+    dict: D, row: int64): LfStepResult {.inline.} =
+  let item = dict.hybridBwt.accessRankUnchecked(row)
   result.symbol = FmSymbol(item.value)
   result.nextRow = int64(dict.cTable.getUnchecked(int(item.value))) +
     item.rankBefore
@@ -538,13 +579,23 @@ func dictionaryIdFromMatchRowWavelet[D: FmDictionary | FmDictionaryView](dict: D
                                      initialRow: int64): int64 =
   dictionaryIdFromMatchRowImpl(dict.lfStepWavelet(row))
 
+func dictionaryIdFromMatchRowHybrid[D: FmDictionary | FmDictionaryView](
+    dict: D, initialRow: int64): int64 =
+  dictionaryIdFromMatchRowImpl(dict.lfStepHybrid(row))
+
 func dictionaryIdFromMatchRowRunLength[D: FmDictionary | FmDictionaryView](dict: D,
                                        initialRow: int64): int64 =
   dictionaryIdFromMatchRowImpl(dict.lfStepRunLength(row))
 
 func dictionaryIdFromMatchRow[D: FmDictionary | FmDictionaryView](
     dict: D, initialRow: int64): int64 =
-  dictionaryIdFromMatchRowImpl(dict.lfStep(row))
+  case dict.backendKind
+  of fbWavelet:
+    dict.dictionaryIdFromMatchRowWavelet(initialRow)
+  of fbHybridWavelet:
+    dict.dictionaryIdFromMatchRowHybrid(initialRow)
+  of fbRunLength:
+    dict.dictionaryIdFromMatchRowRunLength(initialRow)
 
 when defined(nbvsFmBenchmark):
   template countedMatchRowImpl(stepCall: untyped): untyped =
@@ -569,7 +620,13 @@ when defined(nbvsFmBenchmark):
 
   func dictionaryIdFromMatchRowCounted(dict: FmDictionary,
       initialRow: int64, steps: var int64): int64 =
-    countedMatchRowImpl(dict.lfStep(row))
+    case dict.backendKind
+    of fbWavelet:
+      countedMatchRowImpl(dict.lfStepWavelet(row))
+    of fbHybridWavelet:
+      countedMatchRowImpl(dict.lfStepHybrid(row))
+    of fbRunLength:
+      countedMatchRowImpl(dict.lfStepRunLength(row))
 
 func findExactFm*[D: FmDictionary | FmDictionaryView](dict: D, value: string): int64 =
   ## FM-indexで完全一致するDictionary IDを返します。
