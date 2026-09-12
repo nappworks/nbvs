@@ -97,3 +97,9 @@ task benchFmRev5, "Measure FM query phases and tail latency":
 
 task benchFmRev5Perf, "Build the rev5 Linux perf workload":
   exec "nim c --path:src -d:release -d:nbvsFmBenchmark --mm:arc benchmarks/fm_dictionary_rev5.nim"
+
+task benchFmHybridAb, "A/B scalar Binary WM vs 4QV+SBV FM backend":
+  exec "nim c --path:src -d:release --mm:arc -r benchmarks/fm_hybrid_wavelet_ab.nim"
+
+task benchFmHybridAbSimd, "A/B SIMD Binary WM vs 4QV+SBV FM backend":
+  exec "nim c --path:src -d:release --mm:arc -d:nbvsSimd -r benchmarks/fm_hybrid_wavelet_ab.nim"
