@@ -128,6 +128,75 @@ func separateRangeRank(wm: WaveletMatrix, value: uint64,
   of 7: run(7)
   else: run(8)
 
+func separateWmRankPair(wm: WaveletMatrix, value: uint64,
+                        left, right: int64):
+    tuple[leftRank, rightRank: int64] =
+  template run(depth: static[int]) =
+    block:
+      var start = 0'i64
+      var leftPos = left
+      var rightPos = right
+      for level in 0..<wm.bitWidth:
+        let shift = wm.bitWidth - level - 1
+        var startOnes, leftOnes, rightOnes: int64
+        when depth == 0:
+          startOnes = wm.levels[level].rank1UncheckedDepth0(start)
+          leftOnes = wm.levels[level].rank1UncheckedDepth0(leftPos)
+          rightOnes = wm.levels[level].rank1UncheckedDepth0(rightPos)
+        elif depth == 1:
+          startOnes = wm.levels[level].rank1UncheckedDepth1(start)
+          leftOnes = wm.levels[level].rank1UncheckedDepth1(leftPos)
+          rightOnes = wm.levels[level].rank1UncheckedDepth1(rightPos)
+        elif depth == 2:
+          startOnes = wm.levels[level].rank1UncheckedDepth2(start)
+          leftOnes = wm.levels[level].rank1UncheckedDepth2(leftPos)
+          rightOnes = wm.levels[level].rank1UncheckedDepth2(rightPos)
+        elif depth == 3:
+          startOnes = wm.levels[level].rank1UncheckedDepth3(start)
+          leftOnes = wm.levels[level].rank1UncheckedDepth3(leftPos)
+          rightOnes = wm.levels[level].rank1UncheckedDepth3(rightPos)
+        elif depth == 4:
+          startOnes = wm.levels[level].rank1UncheckedDepth4(start)
+          leftOnes = wm.levels[level].rank1UncheckedDepth4(leftPos)
+          rightOnes = wm.levels[level].rank1UncheckedDepth4(rightPos)
+        elif depth == 5:
+          startOnes = wm.levels[level].rank1UncheckedDepth5(start)
+          leftOnes = wm.levels[level].rank1UncheckedDepth5(leftPos)
+          rightOnes = wm.levels[level].rank1UncheckedDepth5(rightPos)
+        elif depth == 6:
+          startOnes = wm.levels[level].rank1UncheckedDepth6(start)
+          leftOnes = wm.levels[level].rank1UncheckedDepth6(leftPos)
+          rightOnes = wm.levels[level].rank1UncheckedDepth6(rightPos)
+        elif depth == 7:
+          startOnes = wm.levels[level].rank1UncheckedDepth7(start)
+          leftOnes = wm.levels[level].rank1UncheckedDepth7(leftPos)
+          rightOnes = wm.levels[level].rank1UncheckedDepth7(rightPos)
+        else:
+          startOnes = wm.levels[level].rank1UncheckedDepth8(start)
+          leftOnes = wm.levels[level].rank1UncheckedDepth8(leftPos)
+          rightOnes = wm.levels[level].rank1UncheckedDepth8(rightPos)
+        if ((value shr shift) and 1'u64) == 0:
+          start -= startOnes
+          leftPos -= leftOnes
+          rightPos -= rightOnes
+        else:
+          start = wm.zeroCounts[level] + startOnes
+          leftPos = wm.zeroCounts[level] + leftOnes
+          rightPos = wm.zeroCounts[level] + rightOnes
+      result.leftRank = leftPos - start
+      result.rightRank = rightPos - start
+
+  case int(wm.levels[0].level)
+  of 0: run(0)
+  of 1: run(1)
+  of 2: run(2)
+  of 3: run(3)
+  of 4: run(4)
+  of 5: run(5)
+  of 6: run(6)
+  of 7: run(7)
+  else: run(8)
+
 func separateCountLessThan(wm: WaveletMatrix, left, right: int64,
                            value: uint64): int64 =
   template run(depth: static[int]) =
@@ -252,6 +321,8 @@ proc runCase(c: BenchCase) =
     let value = queryValues[i]
     doAssert separateRangeRank(wm, value, left, right) ==
       wm.rank(value, left, right)
+    doAssert separateWmRankPair(wm, value, left, right) ==
+      wm.rankPair(value, left, right)
     doAssert separateCountLessThan(wm, left, right, value) ==
       wm.countLessThan(left, right, value)
     if right > left:
@@ -267,6 +338,18 @@ proc runCase(c: BenchCase) =
       for i in 0..<queryCount:
         sink = sink xor uint64(wm.rank(
           queryValues[i], ranges.lefts[i], ranges.rights[i]))))
+
+  let rankPair = measurePair(
+    (block:
+      for i in 0..<queryCount:
+        let item = separateWmRankPair(
+          wm, queryValues[i], ranges.lefts[i], ranges.rights[i])
+        sink = sink xor uint64(item.leftRank) xor uint64(item.rightRank)),
+    (block:
+      for i in 0..<queryCount:
+        let item = wm.rankPair(
+          queryValues[i], ranges.lefts[i], ranges.rights[i])
+        sink = sink xor uint64(item.leftRank) xor uint64(item.rightRank)))
 
   let lessThan = measurePair(
     (block:
@@ -291,6 +374,7 @@ proc runCase(c: BenchCase) =
             ranges.lefts[i], ranges.rights[i], ks[i])))
 
   emit(c, "rangeRank", rangeRank)
+  emit(c, "rankPair", rankPair)
   emit(c, "countLessThan", lessThan)
   emit(c, "quantile", quantile)
 
