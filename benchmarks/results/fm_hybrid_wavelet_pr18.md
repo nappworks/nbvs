@@ -18,7 +18,7 @@
 HybridのBWT容量はBinary WM比で1.0361倍だった。scalarのqueryは2 runとも
 Hybridが高速だった。SIMDは`accessRank`、`rankPair`、suffix、restoreで2 runとも
 Hybridが高速で、substringは1 runで0.9570倍へ悪化したが、もう1 runでは1.0929倍へ
-改善した。buildはscalarで同等、SIMDで約5〜7%遅かった。
+改善した。buildはscalarで同等、SIMDで約5〜8%遅かった。
 
 query全体の傾向、levelを9段から5段へ削減できること、および容量増が約3.6%に
 留まることから、非RLE時の`fbpAuto`にHybridを採用する現行方針を維持する。
