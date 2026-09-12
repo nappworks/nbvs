@@ -1,12 +1,17 @@
 import std/[math, strutils]
 import nbvs/[fm_dictionary, packed_array, succinct_bit_vector,
-  wavelet_matrix, run_length_bwt, succinct_radix_trie]
+  wavelet_matrix, hybrid_wavelet_matrix_9, quad_vector, quad_vector_view,
+  run_length_bwt, succinct_radix_trie]
 
 type
   WaveletBacking = object
     levels: seq[seq[uint64]]
     views: seq[SuccinctBitVectorView]
     zeros: seq[int64]
+
+  HybridBacking = object
+    levels: array[HybridWavelet9QuadLevels, seq[uint64]]
+    lastBits: seq[uint64]
 
   TrieBacking = object
     internalBits, hasSuffixBits, terminalBits: seq[uint64]
@@ -22,6 +27,7 @@ type
 
   FmViewBacking = object
     bwt, runIndex: WaveletBacking
+    hybrid: HybridBacking
     runStarts: seq[uint64]
     runSymbols: seq[FmSymbol]
     symbolOffsets, symbolPrefixes: seq[uint32]
@@ -62,6 +68,29 @@ proc waveletView(source: WaveletMatrix,
     cast[ptr UncheckedArray[SuccinctBitVectorView]](backing.views.memory),
     backing.views.len, backing.zeros.memory,
     backing.zeros.len * sizeof(int64))
+
+proc quadView(source: QuadVector,
+              storage: var seq[uint64]): QuadVectorView =
+  let required = requiredQuadVectorViewBytes(source.lenOfSymbols)
+  storage = newSeq[uint64]((required + QuadVectorViewAlignment + 7) div 8)
+  let base = cast[uint](storage.memory)
+  let aligned = (base + uint(QuadVectorViewAlignment - 1)) and
+    not uint(QuadVectorViewAlignment - 1)
+  let offset = int(aligned - base)
+  result = initQuadVectorView(cast[pointer](aligned),
+    storage.len * sizeof(uint64) - offset, source.lenOfSymbols)
+  for pos in 0'i64..<source.lenOfSymbols:
+    result[pos] = source[pos]
+  result.build()
+
+proc hybridView(source: HybridWaveletMatrix9,
+                backing: var HybridBacking): HybridWaveletMatrix9View =
+  var levels: array[HybridWavelet9QuadLevels, QuadVectorView]
+  for level in 0..<HybridWavelet9QuadLevels:
+    levels[level] = quadView(source.levels[level], backing.levels[level])
+  let lastBits = succinctView(source.lastBits, backing.lastBits)
+  initHybridWaveletMatrix9View(source.n, levels, source.bucketStarts,
+    lastBits, source.lastZeroCount)
 
 proc trieView(source: SuccinctRadixTrie,
               backing: var TrieBacking): SuccinctRadixTrieView =
@@ -106,10 +135,14 @@ proc trieView(source: SuccinctRadixTrie,
 proc fmView(source: FmDictionary,
             backing: var FmViewBacking): FmDictionaryView =
   var bwt: WaveletMatrixView
+  var hybridBwt: HybridWaveletMatrix9View
   var runLengthBwt: RunLengthBwtView
-  if source.backendKind == fbWavelet:
+  case source.backendKind
+  of fbWavelet:
     bwt = waveletView(source.bwt, backing.bwt)
-  else:
+  of fbHybridWavelet:
+    hybridBwt = hybridView(source.hybridBwt, backing.hybrid)
+  of fbRunLength:
     let runStarts = succinctView(source.runLengthBwt.runStarts,
       backing.runStarts)
     let runIndex = waveletView(source.runLengthBwt.runSymbolIndex,
@@ -125,7 +158,7 @@ proc fmView(source: FmDictionary,
       backing.symbolPrefixes.memory,
       backing.symbolPrefixes.len * sizeof(uint32))
   initFmDictionaryView(FmDictionaryViewParts(
-    bwt: bwt, runLengthBwt: runLengthBwt,
+    bwt: bwt, hybridBwt: hybridBwt, runLengthBwt: runLengthBwt,
     backendKind: source.backendKind,
     bwtRunCount: source.bwtRunCount,
     maximumBwtRunLength: source.maximumBwtRunLength,
@@ -198,7 +231,7 @@ let corpus = @["", "a", "apple", "application", "banana", "bandana",
 let patterns = ["", "a", "app", "apple", "ana", "na", "missing",
   "東京", "\0", repeat('x', 299), repeat('x', 301)]
 
-for preference in [fbpWavelet, fbpRunLength, fbpAuto]:
+for preference in [fbpWavelet, fbpHybridWavelet, fbpRunLength, fbpAuto]:
   let heap = genFmDictionary(corpus, FmDictionaryBuildOptions(
     validateDistinct: true, fmBackend: preference))
   var backing: FmViewBacking
