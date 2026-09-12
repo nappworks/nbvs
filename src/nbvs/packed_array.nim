@@ -214,6 +214,20 @@ func set*(pa: var PackedArrayView, i: int64, value: uint64) =
   pa.checkIndex(i)
   setImpl(pa.data, pa.bitWidth, i, value)
 
+func setUnchecked*(pa: var PackedArray, index: int, value: uint64) {.inline.} =
+  ## indexの境界検査を省いて値を書き込みます。
+  ##
+  ## 呼び出し側は `index in 0 ..< pa.len` を保証する必要があります。
+  ## 値のbit幅検査は通常の `set` と同様に行います。
+  setImpl(dataPointer(pa), pa.bitWidth, int64(index), value)
+
+func setUnchecked*(pa: var PackedArrayView, index: int, value: uint64) {.inline.} =
+  ## indexの境界検査を省いて値を書き込みます。
+  ##
+  ## 呼び出し側は `index in 0 ..< pa.len` を保証する必要があります。
+  ## 値のbit幅検査は通常の `set` と同様に行います。
+  setImpl(pa.data, pa.bitWidth, int64(index), value)
+
 func `[]=`*(pa: var PackedArray, i: int64, value: uint64) =
   ## `set(pa, i, value)` のaliasです。
   pa.set(i, value)

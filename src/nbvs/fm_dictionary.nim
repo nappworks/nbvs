@@ -6,7 +6,7 @@ import std/[algorithm, bitops, sets]
 when defined(nbvsFmBenchmark):
   import std/[monotimes, times]
 import bit_vector, packed_array, succinct_bit_vector, succinct_radix_trie,
-  wavelet_matrix, run_length_bwt
+  wavelet_matrix, hybrid_wavelet_matrix_9, run_length_bwt
 import internal/[fm_symbols, suffix_array]
 
 export fm_symbols
@@ -18,11 +18,12 @@ type
 
   FmBackendPreference* = enum
     ## FM-indexのBWT表現を指定します。
-    fbpAuto, fbpWavelet, fbpRunLength
+    ## AutoはRLE容量判定後、通常BWTには9-bit hybrid Waveletを使用します。
+    fbpAuto, fbpWavelet, fbpHybridWavelet, fbpRunLength
 
   FmBackendKind* = enum
     ## 構築済みFmDictionaryが使用するBWT表現です。
-    fbWavelet, fbRunLength
+    fbWavelet, fbHybridWavelet, fbRunLength
 
   FmInterval* = object
     ## FM-index検索結果の半開区間を表します。
@@ -54,7 +55,8 @@ type
 
   FmDictionary* = object
     ## FM-indexとRadix Trieを組み合わせて検索と復元を提供するDictionaryです。
-    bwt*: WaveletMatrix ## BWT symbol列を保持する固定9-bit Wavelet Matrix。
+    bwt*: WaveletMatrix ## 比較・明示指定用の固定9-bit Binary Wavelet Matrix。
+    hybridBwt*: HybridWaveletMatrix9 ## 4 QuadVector + 1 SBVの固定9-bit BWT。
     runLengthBwt*: RunLengthBwt ## RLE選択時のBWT。Wavelet選択時は空です。
     backendKind*: FmBackendKind ## 実際に選択されたBWT表現。
     bwtRunCount*: uint32 ## BWTのrun数。
@@ -71,6 +73,7 @@ type
   FmDictionaryView* = object
     ## 下位Viewを束ね、external memoryを所有しないread-only Dictionaryです。
     bwt*: WaveletMatrixView
+    hybridBwt*: HybridWaveletMatrix9View
     runLengthBwt*: RunLengthBwtView
     backendKind*: FmBackendKind
     bwtRunCount*, maximumBwtRunLength*: uint32
@@ -83,6 +86,7 @@ type
   FmDictionaryViewParts* = object
     ## `FmDictionaryView` を構成する下位Viewとscalar metadataです。
     bwt*: WaveletMatrixView
+    hybridBwt*: HybridWaveletMatrix9View
     runLengthBwt*: RunLengthBwtView
     backendKind*: FmBackendKind
     bwtRunCount*, maximumBwtRunLength*: uint32
@@ -130,13 +134,19 @@ func initFmDictionaryView*(parts: FmDictionaryViewParts): FmDictionaryView =
       parts.dictionaryIdToEndAnchor.len != int64(parts.dictionaryCount) or
       parts.radixTrie.idToTerminal.len != int64(parts.dictionaryCount):
     raise newException(ValueError, "invalid FM Dictionary view metadata")
-  if parts.backendKind == fbWavelet:
+  case parts.backendKind
+  of fbWavelet:
     if parts.bwt.n <= 0 or parts.bwt.bitWidth != SymbolBitWidth:
       raise newException(ValueError, "invalid Wavelet BWT view")
-  elif parts.runLengthBwt.n <= 0:
-    raise newException(ValueError, "invalid run-length BWT view")
+  of fbHybridWavelet:
+    if parts.hybridBwt.n <= 0:
+      raise newException(ValueError, "invalid hybrid Wavelet BWT view")
+  of fbRunLength:
+    if parts.runLengthBwt.n <= 0:
+      raise newException(ValueError, "invalid run-length BWT view")
   result = FmDictionaryView(
-    bwt: parts.bwt, runLengthBwt: parts.runLengthBwt,
+    bwt: parts.bwt, hybridBwt: parts.hybridBwt,
+    runLengthBwt: parts.runLengthBwt,
     backendKind: parts.backendKind, bwtRunCount: parts.bwtRunCount,
     maximumBwtRunLength: parts.maximumBwtRunLength,
     estimatedWaveletBytes: parts.estimatedWaveletBytes,
@@ -158,29 +168,41 @@ func estimateWaveletMatrixBytes(length: int64): int64 =
 func succinctBytes[B: SuccinctBitVector | SuccinctBitVectorView](bits: B): int64
 
 func bwtLength[D: FmDictionary | FmDictionaryView](dict: D): int64 {.inline.} =
-  if dict.backendKind == fbRunLength: dict.runLengthBwt.n else: dict.bwt.n
+  case dict.backendKind
+  of fbWavelet: dict.bwt.n
+  of fbHybridWavelet: dict.hybridBwt.n
+  of fbRunLength: dict.runLengthBwt.n
 
 func bwtRankPair[D: FmDictionary | FmDictionaryView](dict: D, symbol: FmSymbol, left,
                  right: int64): tuple[leftRank, rightRank: int64] {.inline.} =
-  if dict.backendKind == fbRunLength:
-    dict.runLengthBwt.rankPair(symbol, left, right)
-  else:
+  case dict.backendKind
+  of fbWavelet:
     dict.bwt.rankPair(uint64(symbol), left, right)
+  of fbHybridWavelet:
+    dict.hybridBwt.rankPair(uint64(symbol), left, right)
+  of fbRunLength:
+    dict.runLengthBwt.rankPair(symbol, left, right)
 
 func bwtAccessRank[D: FmDictionary | FmDictionaryView](dict: D,
                    position: int64): tuple[value: uint64,
                      rankBefore: int64] {.inline.} =
-  if dict.backendKind == fbRunLength:
-    dict.runLengthBwt.accessRank(position)
-  else:
+  case dict.backendKind
+  of fbWavelet:
     dict.bwt.accessRank(position)
+  of fbHybridWavelet:
+    dict.hybridBwt.accessRank(position)
+  of fbRunLength:
+    dict.runLengthBwt.accessRank(position)
 
 func bwtSelect[D: FmDictionary | FmDictionaryView](dict: D, symbol: FmSymbol,
                ordinal: int64): int64 {.inline.} =
-  if dict.backendKind == fbRunLength:
-    dict.runLengthBwt.select(symbol, ordinal)
-  else:
+  case dict.backendKind
+  of fbWavelet:
     dict.bwt.select(uint64(symbol), ordinal)
+  of fbHybridWavelet:
+    dict.hybridBwt.select(uint64(symbol), ordinal)
+  of fbRunLength:
+    dict.runLengthBwt.select(symbol, ordinal)
 
 proc genFmDictionary*(strings: openArray[string],
                       options = DefaultFmDictionaryBuildOptions): FmDictionary =
@@ -291,12 +313,17 @@ proc genFmDictionary*(strings: openArray[string],
   # 推定値だけで選択し、完成後に両表現を保持しない。
   let n = uint64(symbolCount)
   let runs = uint64(result.bwtRunCount)
-  result.estimatedWaveletBytes = uint64(estimateWaveletMatrixBytes(
-    int64(n)))
+  let binaryWaveletEstimate = uint64(estimateWaveletMatrixBytes(int64(n)))
+  let hybridWaveletEstimate =
+    uint64(estimateHybridWaveletMatrix9Bytes(int64(n)))
+  result.estimatedWaveletBytes =
+    case options.fmBackend
+    of fbpWavelet: binaryWaveletEstimate
+    of fbpHybridWavelet, fbpRunLength, fbpAuto: hybridWaveletEstimate
   result.estimatedRunLengthBytes = uint64(estimatedMemoryUsage(
     int64(n), int64(runs)))
   let useRunLength = case options.fmBackend
-    of fbpWavelet: false
+    of fbpWavelet, fbpHybridWavelet: false
     of fbpRunLength: true
     of fbpAuto:
       result.estimatedRunLengthBytes * 100 <=
@@ -305,8 +332,15 @@ proc genFmDictionary*(strings: openArray[string],
     result.backendKind = fbRunLength
     result.runLengthBwt = genRunLengthBwt(bwtSymbols)
   else:
-    result.backendKind = fbWavelet
-    result.bwt = genWaveletMatrix(bwtSymbols, SymbolBitWidth)
+    case options.fmBackend
+    of fbpWavelet:
+      result.backendKind = fbWavelet
+      result.bwt = genWaveletMatrix(bwtSymbols, SymbolBitWidth)
+    of fbpHybridWavelet, fbpAuto:
+      result.backendKind = fbHybridWavelet
+      result.hybridBwt = genHybridWaveletMatrix9(bwtSymbols)
+    of fbpRunLength:
+      doAssert false
 
 func len*[D: FmDictionary | FmDictionaryView](dict: D): int {.inline.} =
   ## Dictionaryのエントリ数を返します。
@@ -324,18 +358,21 @@ func stats*[D: FmDictionary | FmDictionaryView](dict: D): FmDictionaryStats =
   result.maximumRunLength = int64(dict.maximumBwtRunLength)
   result.estimatedWaveletBytes = int64(dict.estimatedWaveletBytes)
   result.estimatedRleBytes = int64(dict.estimatedRunLengthBytes)
-  if dict.backendKind == fbWavelet:
+  case dict.backendKind
+  of fbWavelet:
     for level in 0..<dict.bwt.bitWidth:
       result.actualWaveletBytes += succinctBytes(dict.bwt.levels[level])
     result.actualWaveletBytes += int64(dict.bwt.zeroCounts.len * sizeof(int64))
-    if result.estimatedWaveletBytes > 0:
-      result.waveletEstimateErrorRatio = result.actualWaveletBytes.float /
-        result.estimatedWaveletBytes.float
-  else:
+  of fbHybridWavelet:
+    result.actualWaveletBytes = hybridWaveletMatrix9Bytes(dict.hybridBwt)
+  of fbRunLength:
     result.actualRleBytes = dict.runLengthBwt.memoryUsage
-    if result.estimatedRleBytes > 0:
-      result.rleEstimateErrorRatio = result.actualRleBytes.float /
-        result.estimatedRleBytes.float
+  if dict.backendKind != fbRunLength and result.estimatedWaveletBytes > 0:
+    result.waveletEstimateErrorRatio = result.actualWaveletBytes.float /
+      result.estimatedWaveletBytes.float
+  elif dict.backendKind == fbRunLength and result.estimatedRleBytes > 0:
+    result.rleEstimateErrorRatio = result.actualRleBytes.float /
+      result.estimatedRleBytes.float
 
 func succinctBytes[B: SuccinctBitVector | SuccinctBitVectorView](bits: B): int64 =
   int64(bits.data.len * sizeof(uint64) +
@@ -356,11 +393,14 @@ func memoryUsage*[D: FmDictionary | FmDictionaryView](dict: D): FmDictionaryMemo
   result.cTableBytes = packedBytes(dict.cTable)
   result.anchorBytes = packedBytes(dict.startAnchorToEncodedId) +
     packedBytes(dict.dictionaryIdToEndAnchor)
-  if dict.backendKind == fbWavelet:
+  case dict.backendKind
+  of fbWavelet:
     for level in 0..<dict.bwt.bitWidth:
       result.bwtBytes += succinctBytes(dict.bwt.levels[level])
     result.bwtBytes += int64(dict.bwt.zeroCounts.len * sizeof(int64))
-  else:
+  of fbHybridWavelet:
+    result.bwtBytes = hybridWaveletMatrix9Bytes(dict.hybridBwt)
+  of fbRunLength:
     result.runSymbolsBytes = int64(dict.runLengthBwt.runSymbols.len *
       sizeof(FmSymbol))
     result.runBoundaryBytes = succinctBytes(dict.runLengthBwt.runStarts)
@@ -390,6 +430,14 @@ func backwardStepWavelet[D: FmDictionary | FmDictionaryView](dict: D, symbol: Fm
   result.left = base + ranks.leftRank
   result.right = base + ranks.rightRank
 
+func backwardStepHybrid[D: FmDictionary | FmDictionaryView](
+    dict: D, symbol: FmSymbol, interval: FmInterval): FmInterval {.inline.} =
+  let base = int64(dict.cTable.getUnchecked(int(symbol)))
+  let ranks = dict.hybridBwt.rankPair(
+    uint64(symbol), interval.left, interval.right)
+  result.left = base + ranks.leftRank
+  result.right = base + ranks.rightRank
+
 func backwardStepRunLength[D: FmDictionary | FmDictionaryView](dict: D, symbol: FmSymbol,
                            interval: FmInterval): FmInterval {.inline.} =
   let base = int64(dict.cTable.getUnchecked(int(symbol)))
@@ -406,6 +454,14 @@ func backwardSearchBytesWavelet[D: FmDictionary | FmDictionaryView](dict: D,
     if result.left >= result.right:
       return
 
+func backwardSearchBytesHybrid[D: FmDictionary | FmDictionaryView](
+    dict: D, pattern: string): FmInterval =
+  result = FmInterval(left: 0, right: dict.hybridBwt.n)
+  for index in countdown(pattern.high, 0):
+    result = dict.backwardStepHybrid(encodeByte(byte(pattern[index])), result)
+    if result.left >= result.right:
+      return
+
 func backwardSearchBytesRunLength[D: FmDictionary | FmDictionaryView](dict: D,
                                   pattern: string): FmInterval =
   result = FmInterval(left: 0, right: dict.runLengthBwt.n)
@@ -414,11 +470,15 @@ func backwardSearchBytesRunLength[D: FmDictionary | FmDictionaryView](dict: D,
     if result.left >= result.right:
       return
 
-func backwardSearchBytes[D: FmDictionary | FmDictionaryView](dict: D, pattern: string): FmInterval =
-  if dict.backendKind == fbRunLength:
-    dict.backwardSearchBytesRunLength(pattern)
-  else:
+func backwardSearchBytes[D: FmDictionary | FmDictionaryView](dict: D,
+    pattern: string): FmInterval =
+  case dict.backendKind
+  of fbWavelet:
     dict.backwardSearchBytesWavelet(pattern)
+  of fbHybridWavelet:
+    dict.backwardSearchBytesHybrid(pattern)
+  of fbRunLength:
+    dict.backwardSearchBytesRunLength(pattern)
 
 func backwardSearchExact[D: FmDictionary | FmDictionaryView](dict: D, value: string): FmInterval =
   result = FmInterval(left: 0, right: dict.bwtLength)
@@ -434,19 +494,28 @@ func backwardSearchPrefix[D: FmDictionary | FmDictionaryView](dict: D, prefix: s
   if result.left < result.right:
     result = dict.backwardStep(SeparatorSymbol, result)
 
-func backwardSearchSuffix[D: FmDictionary | FmDictionaryView](dict: D, suffix: string): FmInterval =
-  if dict.backendKind == fbRunLength:
-    result = FmInterval(left: 0, right: dict.runLengthBwt.n)
-    result = dict.backwardStepRunLength(SeparatorSymbol, result)
-    for index in countdown(suffix.high, 0):
-      result = dict.backwardStepRunLength(encodeByte(byte(suffix[index])), result)
-      if result.left >= result.right:
-        return
-  else:
+func backwardSearchSuffix[D: FmDictionary | FmDictionaryView](dict: D,
+    suffix: string): FmInterval =
+  case dict.backendKind
+  of fbWavelet:
     result = FmInterval(left: 0, right: dict.bwt.n)
     result = dict.backwardStepWavelet(SeparatorSymbol, result)
     for index in countdown(suffix.high, 0):
       result = dict.backwardStepWavelet(encodeByte(byte(suffix[index])), result)
+      if result.left >= result.right:
+        return
+  of fbHybridWavelet:
+    result = FmInterval(left: 0, right: dict.hybridBwt.n)
+    result = dict.backwardStepHybrid(SeparatorSymbol, result)
+    for index in countdown(suffix.high, 0):
+      result = dict.backwardStepHybrid(encodeByte(byte(suffix[index])), result)
+      if result.left >= result.right:
+        return
+  of fbRunLength:
+    result = FmInterval(left: 0, right: dict.runLengthBwt.n)
+    result = dict.backwardStepRunLength(SeparatorSymbol, result)
+    for index in countdown(suffix.high, 0):
+      result = dict.backwardStepRunLength(encodeByte(byte(suffix[index])), result)
       if result.left >= result.right:
         return
 
@@ -458,6 +527,13 @@ func lfStep[D: FmDictionary | FmDictionaryView](dict: D, row: int64): LfStepResu
 
 func lfStepWavelet[D: FmDictionary | FmDictionaryView](dict: D, row: int64): LfStepResult {.inline.} =
   let item = dict.bwt.accessRankUnchecked(row)
+  result.symbol = FmSymbol(item.value)
+  result.nextRow = int64(dict.cTable.getUnchecked(int(item.value))) +
+    item.rankBefore
+
+func lfStepHybrid[D: FmDictionary | FmDictionaryView](
+    dict: D, row: int64): LfStepResult {.inline.} =
+  let item = dict.hybridBwt.accessRankUnchecked(row)
   result.symbol = FmSymbol(item.value)
   result.nextRow = int64(dict.cTable.getUnchecked(int(item.value))) +
     item.rankBefore
@@ -503,15 +579,23 @@ func dictionaryIdFromMatchRowWavelet[D: FmDictionary | FmDictionaryView](dict: D
                                      initialRow: int64): int64 =
   dictionaryIdFromMatchRowImpl(dict.lfStepWavelet(row))
 
+func dictionaryIdFromMatchRowHybrid[D: FmDictionary | FmDictionaryView](
+    dict: D, initialRow: int64): int64 =
+  dictionaryIdFromMatchRowImpl(dict.lfStepHybrid(row))
+
 func dictionaryIdFromMatchRowRunLength[D: FmDictionary | FmDictionaryView](dict: D,
                                        initialRow: int64): int64 =
   dictionaryIdFromMatchRowImpl(dict.lfStepRunLength(row))
 
-func dictionaryIdFromMatchRow[D: FmDictionary | FmDictionaryView](dict: D, initialRow: int64): int64 =
-  if dict.backendKind == fbRunLength:
-    dict.dictionaryIdFromMatchRowRunLength(initialRow)
-  else:
+func dictionaryIdFromMatchRow[D: FmDictionary | FmDictionaryView](
+    dict: D, initialRow: int64): int64 =
+  case dict.backendKind
+  of fbWavelet:
     dict.dictionaryIdFromMatchRowWavelet(initialRow)
+  of fbHybridWavelet:
+    dict.dictionaryIdFromMatchRowHybrid(initialRow)
+  of fbRunLength:
+    dict.dictionaryIdFromMatchRowRunLength(initialRow)
 
 when defined(nbvsFmBenchmark):
   template countedMatchRowImpl(stepCall: untyped): untyped =
@@ -536,10 +620,13 @@ when defined(nbvsFmBenchmark):
 
   func dictionaryIdFromMatchRowCounted(dict: FmDictionary,
       initialRow: int64, steps: var int64): int64 =
-    if dict.backendKind == fbRunLength:
-      countedMatchRowImpl(dict.lfStepRunLength(row))
-    else:
+    case dict.backendKind
+    of fbWavelet:
       countedMatchRowImpl(dict.lfStepWavelet(row))
+    of fbHybridWavelet:
+      countedMatchRowImpl(dict.lfStepHybrid(row))
+    of fbRunLength:
+      countedMatchRowImpl(dict.lfStepRunLength(row))
 
 func findExactFm*[D: FmDictionary | FmDictionaryView](dict: D, value: string): int64 =
   ## FM-indexで完全一致するDictionary IDを返します。

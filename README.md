@@ -126,6 +126,7 @@ including rank/select queries, Elias-Fano encoding, and wavelet matrices.
 - `BitVector`: simple mutable byte-backed bit vector.
 - `PackedArray`: fixed-width packed unsigned integer array.
 - `SuccinctBitVector`: portable bit vector with `rank` and `select`; an AVX2/BMI2 backend is available with `-d:nbvsSimd`.
+- `QuadVector`: four-symbol (`0..3`) 2-bit vector with `access`, `rank`, and `select`; payload and auxiliaries use `PackedArray`.
 - `EliasFano`: Elias-Fano encoding for nondecreasing `uint64` sequences.
 - `WaveletMatrix`: rank/select, quantile, and range-frequency index for `uint64` sequences.
 - `ReversedWaveletMatrix`: LSB-first wavelet matrix with access, rank, and select.
@@ -188,6 +189,7 @@ Or import individual modules:
 import nbvs/bit_vector
 import nbvs/packed_array
 import nbvs/succinct_bit_vector
+import nbvs/quad_vector
 import nbvs/elias_fano
 import nbvs/wavelet_matrix
 import nbvs/wavelet_select_cursor
@@ -316,15 +318,61 @@ Rank/select semantics:
 | `select0Nth(nth)` | Position of the 1-based `nth` `0`, or `-1`. |
 
 After any mutation through `setBit`, `clearBit`, or `[]=`, call `build()` again before `rank` or `select`.
-The scalar backend stores an additional word-pair rank prefix, increasing
-`SuccinctBitVector` storage by about 6.25% of the raw bit data. The SIMD
-backend keeps its existing AVX2-specific prefix layout.
+Both scalar and SIMD backends use the same shared hierarchical `selectStorage`
+for rank/select metadata and do not automatically create `wordPairPrefix` or
+`blockPairPrefix`. The backend-specific difference is limited to block-local
+processing: scalar popcount/bit clearing versus AVX2/BMI2 operations.
 
 ```nim
 sbv[10] = false
 sbv.build()
 doAssert sbv.rank1(1000) == 2
 ```
+
+### QuadVector
+
+`QuadVector` stores symbols in `0..3` using two bits per symbol in a `PackedArray`.
+After mutation, call `build()` before rank/select queries.
+
+```nim
+import nbvs/quad_vector
+
+var qv = genQuadVector(8)
+for i, value in [0'u8, 1, 2, 3, 0, 1, 2, 3]:
+  qv[int64(i)] = value
+qv.build()
+
+doAssert qv.access(2) == 2
+doAssert qv.rank2(8) == 2
+doAssert qv.select3(1) == 7
+```
+
+Rank/select semantics:
+
+| API | Semantics |
+| --- | --- |
+| `rank(symbol, pos)` | Number of `symbol` values in `[0, pos)`. |
+| `rankIncl(symbol, pos)` | Number of `symbol` values in `[0, pos]`. |
+| `rank0` .. `rank3` | Symbol-specific rank wrappers. |
+| `rank0Incl` .. `rank3Incl` | Symbol-specific inclusive-rank wrappers. |
+| `select(symbol, k)` | Position of the 0-based `k`-th occurrence, or `-1`. |
+| `select0` .. `select3` | Symbol-specific select wrappers. |
+
+The payload uses a 2-bit `PackedArray`. Rank metadata uses 4096-symbol
+superblocks divided into 512-symbol blocks, and select stores a sampled
+superblock id every 1024 occurrences for each symbol. The target auxiliary
+storage is 7.8125% of the 2-bit payload: 6.25% for rank plus 1.5625% for select,
+excluding object/sequence headers and tail rounding.
+
+The portable backend uses 64-bit SWAR equality masks and popcount. With
+`-d:nbvsSimd`, block-local scans process 128 packed symbols at a time with AVX2,
+and BMI2 `PDEP` selects the final matching 2-bit lane. The public API and packed
+auxiliary representation are shared by both backends.
+
+The reproducible SBV/QV comparison uses fixed seeds, one warmup, seven measured
+runs, and reports the median for several sizes and distributions. Run it with
+`nimble benchSbvQv` (scalar) or `nimble benchSbvQvSimd` (AVX2/BMI2). The recorded
+results and environment are in `benchmarks/results/sbv_quad_vector_comparison.md`.
 
 ### EliasFano
 
@@ -502,20 +550,25 @@ touched-word bitmap at 256 results while preserving ascending Dictionary IDs.
 
 `FmDictionaryBuildOptions(validateDistinct: false)` skips the temporary
 duplicate-checking hash set when the caller already guarantees distinct input.
-The default remains `true`. Set `fmBackend` to `fbpWavelet` or `fbpRunLength`
-for reproducible comparisons; `fbpAuto` (the default) selects RLE only when its
-estimated storage is clearly smaller. `FmDictionary.stats()` reports run
-statistics, estimated/actual backend bytes, and estimation error ratios, while
-`memoryUsage()` reports the selected backend's storage without retaining both
-final payloads. The RLE payload derives lengths from run boundaries and does
+The default remains `true`. Set `fmBackend` to `fbpWavelet`,
+`fbpHybridWavelet`, or `fbpRunLength` for reproducible comparisons.
+`fbpWavelet` keeps the fixed 9-bit Binary Wavelet Matrix for A/B compatibility.
+`fbpHybridWavelet` uses the exact 9-bit mixed-radix layout
+`SuccinctBitVector(bit 8) -> 4 x QuadVector(bits 7..0)`; it does not pad the
+alphabet to 10 bits. `fbpAuto` (the default) selects RLE only when its estimated
+storage is clearly smaller and otherwise uses the hybrid backend.
+`FmDictionary.stats()` reports run statistics, estimated/actual backend bytes,
+and estimation error ratios, while `memoryUsage()` reports the selected
+backend's storage without retaining both final payloads. The RLE payload derives lengths from run boundaries and does
 not retain a `runLengths` array. Its fused `rankPair` includes a same-run path.
 Code that directly read the former public `RunLengthBwt.runLengths` field must
 derive each length from adjacent `runStarts.select1` positions (using `n` for
 the final boundary); the dictionary search APIs are unchanged.
 
 Suffix and substring backward search now dispatches once per query to a
-Wavelet- or RLE-specialized loop. LF traversal uses the corresponding checked-
-free internal path after the FM row range has already been established.
+Binary-Wavelet-, Hybrid-Wavelet-, or RLE-specialized loop. LF traversal uses
+the corresponding checked-free internal path after the FM row range has
+already been established.
 `accessRankUnchecked` is also available for advanced callers, but its caller
 must guarantee `0 <= position < n`; normal code should use `accessRank`.
 
@@ -620,7 +673,7 @@ natural-name-like corpora:
 nimble benchFmDistributions
 ```
 
-Compare internal-node lookup, Elias-Fano first-child offsets, subtree-chain
+Compare internal-node lookup, Elias-Fano first-child offset, subtree-chain
 child navigation, block-packed parents, and terminal-ordinal mapping:
 
 ```sh
@@ -669,6 +722,7 @@ compact bit vector と succinct data structure を Nim 向けに提供します�
 - `BitVector`: 基本的な可変 byte-backed bit vector。
 - `PackedArray`: 固定ビット幅の packed unsigned integer array。
 - `SuccinctBitVector`: `rank` / `select` 対応のportable bit vector。`-d:nbvsSimd` でAVX2/BMI2 backendを利用できます。
+- `QuadVector`: `0..3` の4値を2-bitで保持し、`access` / `rank` / `select` に対応。payloadと補助構造に `PackedArray` を使用します。
 - `EliasFano`: 非減少 `uint64` 列の Elias-Fano 符号化。
 - `WaveletMatrix`: `uint64` 列の rank/select、quantile、値域頻度 index。
 - `ReversedWaveletMatrix`: access、rank、select 対応の LSB-first Wavelet Matrix。
@@ -731,6 +785,7 @@ import nbvs
 import nbvs/bit_vector
 import nbvs/packed_array
 import nbvs/succinct_bit_vector
+import nbvs/quad_vector
 import nbvs/elias_fano
 import nbvs/wavelet_matrix
 import nbvs/wavelet_select_cursor
@@ -859,15 +914,60 @@ doAssert sbv.select1(3) == -1
 | `select0Nth(nth)` | 1-based で `nth` 番目の `0` の位置。存在しなければ `-1`。 |
 
 更新後は再度 `build()` してください。
-scalar backendはword-pair rank prefixを追加で保持するため、
-`SuccinctBitVector`の格納量が生bit data比で約6.25%増加します。
-SIMD backendは既存のAVX2専用prefix構成を維持します。
+scalar/SIMD backendは同じ階層 `selectStorage` をrank/select metadataとして共有し、
+`wordPairPrefix` / `blockPairPrefix` を自動生成・利用しません。backendごとの差は
+block内処理だけで、scalarはpopcount / bit clearing、SIMDはAVX2/BMI2を使用します。
 
 ```nim
 sbv[10] = false
 sbv.build()
 doAssert sbv.rank1(1000) == 2
 ```
+
+### QuadVector
+
+`QuadVector` は `0..3` の4値シンボルを1要素2 bitで `PackedArray` に保持し、
+`access` / `rank` / `select` を提供します。値を変更した後、rank/selectを使う前に
+`build()` を呼びます。
+
+```nim
+import nbvs/quad_vector
+
+var qv = genQuadVector(8)
+for i, value in [0'u8, 1, 2, 3, 0, 1, 2, 3]:
+  qv[int64(i)] = value
+qv.build()
+
+doAssert qv.access(2) == 2
+doAssert qv.rank2(8) == 2
+doAssert qv.select3(1) == 7
+```
+
+`rank` / `select` の意味です。
+
+| API | 意味 |
+| --- | --- |
+| `rank(symbol, pos)` | `[0, pos)` に含まれる `symbol` の個数。 |
+| `rankIncl(symbol, pos)` | `[0, pos]` に含まれる `symbol` の個数。 |
+| `rank0` .. `rank3` | 各シンボル専用のrank wrapper。 |
+| `rank0Incl` .. `rank3Incl` | 各シンボル専用のinclusive rank wrapper。 |
+| `select(symbol, k)` | 0-basedで `k` 番目の出現位置。存在しなければ `-1`。 |
+| `select0` .. `select3` | 各シンボル専用のselect wrapper。 |
+
+payloadは2-bit `PackedArray` です。rank補助構造は4096-symbol superblockと
+512-symbol blockを使い、selectは各シンボル1024出現ごとにsampled superblock idを
+保持します。補助構造の目標容量は2-bit payload比7.8125%で、内訳はrank 6.25%、
+select 1.5625%です。object/sequence headerと末尾の丸めは除きます。
+
+portable backendは64-bit SWAR equality maskとpopcountを使います。
+`-d:nbvsSimd` 指定時はblock内をAVX2で128 packed symbolずつ走査し、最後の一致する
+2-bit laneの選択にBMI2 `PDEP`を使います。public APIとpacked補助構造は
+scalar/SIMDで共通です。
+
+再現可能なSBV/QV比較では固定seed、1回のwarmup、7回の測定と中央値を使用し、
+複数のサイズと分布を測定します。scalarは `nimble benchSbvQv`、AVX2/BMI2は
+`nimble benchSbvQvSimd` で実行できます。保存済みの結果と環境は
+`benchmarks/results/sbv_quad_vector_comparison.md` にあります。
 
 ### EliasFano
 

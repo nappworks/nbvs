@@ -1,6 +1,7 @@
 import std/[memfiles, os, strutils, tempfiles]
-import nbvs/[bit_vector, packed_array, succinct_bit_vector, elias_fano,
-  wavelet_matrix, reversed_wavelet_matrix, wavelet_matching_runs]
+import nbvs/[bit_vector, packed_array, succinct_bit_vector, quad_vector,
+  quad_vector_view, elias_fano, wavelet_matrix, reversed_wavelet_matrix,
+  wavelet_matching_runs]
 import ./test_common
 
 proc storageForSuccinct(bitLength: int64): seq[uint64] =
@@ -89,6 +90,88 @@ block succinctBitVectorMmapPersistence:
       bitLength, built = true)
     doAssert reopened.totalOnes == 4
     doAssert reopened.select1(3) == 2048
+  finally:
+    mapped.close()
+
+block quadVectorViewCompatibilityAndMmapPersistence:
+  var empty = initQuadVectorView(nil, 0, 0)
+  empty.build()
+  doAssert empty.rank0(0) == 0
+  doAssert empty.select0(0) == -1
+
+  const symbolCount = 9001'i64
+  let requiredBytes = requiredQuadVectorViewBytes(symbolCount)
+  let (file, path) = createTempFile("nbvs_qv_view_", ".bin")
+  file.close()
+  defer: removeFile(path)
+
+  var heap = genQuadVector(symbolCount)
+  var mapped = memfiles.open(path, mode = fmReadWrite,
+    newFileSize = requiredBytes)
+  try:
+    var view = initQuadVectorView(mapped.mem, mapped.size, symbolCount)
+    doAssert cast[uint](view.rankMetadata.data) mod
+      uint(QuadVectorViewAlignment) == 0'u
+
+    for position in 0'i64..<symbolCount:
+      let value = uint8((position xor (position shr 3)) and 3'i64)
+      heap[position] = value
+      view[position] = value
+
+    heap.build()
+    view.build()
+    doAssert view.totalCounts == heap.totalCounts
+    doAssert $view == $heap
+
+    for position in [0'i64, 1, 31, 32, 511, 512, 4095, 4096,
+                     8191, 9000, 9001]:
+      for symbol in 0..3:
+        doAssert view.rank(symbol, position) == heap.rank(symbol, position)
+    for position in [0'i64, 1, 31, 32, 511, 512, 4095, 4096, 8191, 9000]:
+      doAssert view.access(position) == heap.access(position)
+
+    for symbol in 0..3:
+      let total = heap.totalCounts[symbol]
+      if total > 0:
+        for ordinal in [0'i64, min(1'i64, total - 1), total div 2, total - 1]:
+          doAssert view.select(symbol, ordinal) == heap.select(symbol, ordinal)
+      doAssert view.select(symbol, total) == -1
+  finally:
+    mapped.close()
+
+  mapped = memfiles.open(path, mode = fmReadWrite)
+  try:
+    let reopened = initQuadVectorView(mapped.mem, mapped.size,
+      symbolCount, built = true)
+    doAssert reopened.totalCounts == heap.totalCounts
+    for symbol in 0..3:
+      doAssert reopened.rank(symbol, symbolCount) == heap.totalCounts[symbol]
+      let total = heap.totalCounts[symbol]
+      if total > 0:
+        doAssert reopened.select(symbol, 0) == heap.select(symbol, 0)
+        doAssert reopened.select(symbol, total - 1) ==
+          heap.select(symbol, total - 1)
+    doAssert reopened.access(4096) == heap.access(4096)
+  finally:
+    mapped.close()
+
+block quadVectorViewValidation:
+  expectRaises(ValueError):
+    discard initQuadVectorView(nil, 0, 1)
+
+  const symbolCount = 4097'i64
+  let requiredBytes = requiredQuadVectorViewBytes(symbolCount)
+  let (file, path) = createTempFile("nbvs_qv_view_align_", ".bin")
+  file.close()
+  defer: removeFile(path)
+  var mapped = memfiles.open(path, mode = fmReadWrite,
+    newFileSize = requiredBytes + QuadVectorViewAlignment)
+  try:
+    expectRaises(ValueError):
+      discard initQuadVectorView(mapped.mem, requiredBytes - 1, symbolCount)
+    let misaligned = cast[pointer](cast[uint](mapped.mem) + 1'u)
+    expectRaises(ValueError):
+      discard initQuadVectorView(misaligned, mapped.size - 1, symbolCount)
   finally:
     mapped.close()
 

@@ -29,6 +29,36 @@ task benchSimd, "Run SIMD SuccinctBitVector benchmarks":
 task benchMemory, "Report SuccinctBitVector logical memory":
   exec "nim c --path:src -d:release --mm:arc -r benchmarks/bench_memory.nim"
 
+task benchSbvQv, "Compare scalar SuccinctBitVector and QuadVector performance":
+  exec "nim c --path:src -d:release --mm:arc -r benchmarks/sbv_quad_vector_comparison.nim"
+
+task benchSbvQvSimd, "Compare SIMD SuccinctBitVector and QuadVector performance":
+  exec "nim c --path:src -d:release --mm:arc -d:nbvsSimd -r benchmarks/sbv_quad_vector_comparison.nim"
+
+task benchWmQwm, "Compare scalar WaveletMatrix and QuadWaveletMatrix end-to-end":
+  exec "nim c --path:src -d:release --mm:arc -r benchmarks/wm_quad_wavelet_matrix_comparison.nim"
+
+task benchWmQwmSimd, "Compare SIMD WaveletMatrix and QuadWaveletMatrix end-to-end":
+  exec "nim c --path:src -d:release --mm:arc -d:nbvsSimd -r benchmarks/wm_quad_wavelet_matrix_comparison.nim"
+
+task benchWmDepthAb, "A/B scalar WM generic vs fixed-depth rank dispatch":
+  exec "nim c --path:src -d:release --mm:arc -r benchmarks/wm_fixed_depth_ab.nim"
+
+task benchWmDepthAbSimd, "A/B SIMD WM generic vs fixed-depth rank dispatch":
+  exec "nim c --path:src -d:release --mm:arc -d:nbvsSimd -r benchmarks/wm_fixed_depth_ab.nim"
+
+task benchWmAccessRankFusionAb, "A/B scalar WM unfused vs fused SBV access-rank":
+  exec "nim c --path:src -d:release --mm:arc -r benchmarks/wm_access_rank_fusion_ab.nim"
+
+task benchWmAccessRankFusionAbSimd, "A/B SIMD WM unfused vs fused SBV access-rank":
+  exec "nim c --path:src -d:release --mm:arc -d:nbvsSimd -r benchmarks/wm_access_rank_fusion_ab.nim"
+
+task benchWmRankPairAb, "A/B scalar WM separate ranks vs fixed-depth rank pairs":
+  exec "nim c --path:src -d:release --mm:arc -r benchmarks/wm_rank_pair_ab.nim"
+
+task benchWmRankPairAbSimd, "A/B SIMD WM separate ranks vs fixed-depth rank pairs":
+  exec "nim c --path:src -d:release --mm:arc -d:nbvsSimd -r benchmarks/wm_rank_pair_ab.nim"
+
 task benchFmDictionary, "Run FmDictionary benchmarks":
   exec "nim c --path:src -d:release --mm:arc -r benchmarks/fm_dictionary_bench.nim"
 
@@ -67,3 +97,9 @@ task benchFmRev5, "Measure FM query phases and tail latency":
 
 task benchFmRev5Perf, "Build the rev5 Linux perf workload":
   exec "nim c --path:src -d:release -d:nbvsFmBenchmark --mm:arc benchmarks/fm_dictionary_rev5.nim"
+
+task benchFmHybridAb, "A/B scalar Binary WM vs 4QV+SBV FM backend":
+  exec "nim c --path:src -d:release --mm:arc -r benchmarks/fm_hybrid_wavelet_ab.nim"
+
+task benchFmHybridAbSimd, "A/B SIMD Binary WM vs 4QV+SBV FM backend":
+  exec "nim c --path:src -d:release --mm:arc -d:nbvsSimd -r benchmarks/fm_hybrid_wavelet_ab.nim"

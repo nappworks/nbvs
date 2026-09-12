@@ -196,6 +196,129 @@ block directRankAndSelectInternals:
   doAssert sbv.selectIn512ZerosAvx2(0, 1) == 2
   doAssert sbv.selectIn512ZerosTail(512, 1) == 513
 
+block fixedDepthRankMatchesGeneric:
+  for length in [512'i64, 513, 8193, 65537, 524289, 4194305]:
+    var sbv = genSuccinctBitVector(length)
+    for pos in countup(0'i64, length - 1, 9973'i64):
+      sbv[pos] = true
+    sbv[length - 1] = true
+    sbv.build()
+
+    for pos in [0'i64, 1, min(511'i64, length),
+                min(8192'i64, length), length div 2, length]:
+      let expected = sbv.rank1Unchecked(pos)
+      case int(sbv.level)
+      of 0: doAssert sbv.rank1UncheckedDepth0(pos) == expected
+      of 1: doAssert sbv.rank1UncheckedDepth1(pos) == expected
+      of 2: doAssert sbv.rank1UncheckedDepth2(pos) == expected
+      of 3: doAssert sbv.rank1UncheckedDepth3(pos) == expected
+      of 4: doAssert sbv.rank1UncheckedDepth4(pos) == expected
+      of 5: doAssert sbv.rank1UncheckedDepth5(pos) == expected
+      else: doAssert false
+
+block fusedAccessRankMatchesSeparate:
+  for length in [1'i64, 512, 513, 8193, 65537, 524289, 4194305]:
+    var sbv = genSuccinctBitVector(length)
+    for pos in countup(0'i64, length - 1, 9973'i64):
+      sbv[pos] = true
+    sbv[length - 1] = true
+    sbv.build()
+
+    let positions = [0'i64, min(1'i64, length - 1),
+                     min(511'i64, length - 1),
+                     min(8192'i64, length - 1),
+                     length div 2, length - 1]
+    for pos in positions:
+      let expectedBit = sbv[pos]
+      let expectedRank = sbv.rank1Unchecked(pos)
+      let generic = sbv.accessRank1Unchecked(pos)
+      doAssert generic.bit == expectedBit
+      doAssert generic.rankBefore == expectedRank
+
+      case int(sbv.level)
+      of 0:
+        let item = sbv.accessRank1UncheckedDepth0(pos)
+        doAssert item.bit == expectedBit
+        doAssert item.rankBefore == expectedRank
+      of 1:
+        let item = sbv.accessRank1UncheckedDepth1(pos)
+        doAssert item.bit == expectedBit
+        doAssert item.rankBefore == expectedRank
+      of 2:
+        let item = sbv.accessRank1UncheckedDepth2(pos)
+        doAssert item.bit == expectedBit
+        doAssert item.rankBefore == expectedRank
+      of 3:
+        let item = sbv.accessRank1UncheckedDepth3(pos)
+        doAssert item.bit == expectedBit
+        doAssert item.rankBefore == expectedRank
+      of 4:
+        let item = sbv.accessRank1UncheckedDepth4(pos)
+        doAssert item.bit == expectedBit
+        doAssert item.rankBefore == expectedRank
+      of 5:
+        let item = sbv.accessRank1UncheckedDepth5(pos)
+        doAssert item.bit == expectedBit
+        doAssert item.rankBefore == expectedRank
+      else:
+        doAssert false
+
+block fixedDepthRankPairMatchesSeparate:
+  for length in [1'i64, 512, 513, 8193, 65537, 524289, 4194305]:
+    var sbv = genSuccinctBitVector(length)
+    for pos in 0'i64..<length:
+      if (pos * 17 + 3) mod 29 < 11:
+        sbv[pos] = true
+    sbv.build()
+
+    let ranges = [
+      (0'i64, 0'i64),
+      (0'i64, min(1'i64, length)),
+      (0'i64, min(512'i64, length)),
+      (min(1'i64, length), min(63'i64, length)),
+      (min(63'i64, length), min(65'i64, length)),
+      (min(511'i64, length), min(512'i64, length)),
+      (min(511'i64, length), min(513'i64, length)),
+      (length div 2, length),
+      (max(0'i64, length - 511), length)
+    ]
+    for (left, right) in ranges:
+      if left > right:
+        continue
+      let expectedLeft = sbv.rank1Unchecked(left)
+      let expectedRight = sbv.rank1Unchecked(right)
+      let generic = sbv.rank1PairUnchecked(left, right)
+      doAssert generic.leftRank == expectedLeft
+      doAssert generic.rightRank == expectedRight
+
+      case int(sbv.level)
+      of 0:
+        let item = sbv.rank1PairUncheckedDepth0(left, right)
+        doAssert item.leftRank == expectedLeft
+        doAssert item.rightRank == expectedRight
+      of 1:
+        let item = sbv.rank1PairUncheckedDepth1(left, right)
+        doAssert item.leftRank == expectedLeft
+        doAssert item.rightRank == expectedRight
+      of 2:
+        let item = sbv.rank1PairUncheckedDepth2(left, right)
+        doAssert item.leftRank == expectedLeft
+        doAssert item.rightRank == expectedRight
+      of 3:
+        let item = sbv.rank1PairUncheckedDepth3(left, right)
+        doAssert item.leftRank == expectedLeft
+        doAssert item.rightRank == expectedRight
+      of 4:
+        let item = sbv.rank1PairUncheckedDepth4(left, right)
+        doAssert item.leftRank == expectedLeft
+        doAssert item.rightRank == expectedRight
+      of 5:
+        let item = sbv.rank1PairUncheckedDepth5(left, right)
+        doAssert item.leftRank == expectedLeft
+        doAssert item.rightRank == expectedRight
+      else:
+        doAssert false
+
 block selectLeafWordBoundaries:
   var ones = genSuccinctBitVector(512)
   var onePositions: seq[int64] = @[]

@@ -1,0 +1,5 @@
+preference,corpus,count,avg_len,pattern_len,backend,query_kind,hit_bucket,queries,interval_width,occurrences,unique_ids,lf_steps,backward_search_ns,lf_traversal_ns,materialization_ns,ordering_ns,p50_ns,p90_ns,p95_ns,p99_ns,max_ns
+0,random,100000,16,8,fbHybridWavelet,suffix,0,10000,0,0,0,7,11356,10960,0,56,22001,31901,41401,82703,856030
+1,random,100000,16,8,fbWavelet,suffix,0,10000,0,0,0,7,12283,10332,0,49,20201,37101,43301,77703,549520
+2,random,100000,16,8,fbHybridWavelet,suffix,0,10000,0,0,0,7,9807,9249,0,60,16500,30601,35601,65802,246909
+3,random,100000,16,8,fbRunLength,suffix,0,10000,0,0,0,7,10355,12279,0,50,19200,39801,47002,85203,401614

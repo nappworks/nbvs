@@ -110,19 +110,27 @@ proc measure(kind: CorpusKind, values: seq[string], averageLength: int,
   for _ in 0..<QueryIterations:
     let left = int64(nextRandom(state) mod uint64(dictionaryStats.bwtLength))
     let right = min(dictionaryStats.bwtLength, left + 64)
-    let ranks = if dict.backendKind == fbRunLength:
-      dict.runLengthBwt.rankPair(encodeByte(byte('a')), left, right)
-    else:
-      dict.bwt.rankPair(uint64(encodeByte(byte('a'))), left, right)
+    let ranks =
+      case dict.backendKind
+      of fbWavelet:
+        dict.bwt.rankPair(uint64(encodeByte(byte('a'))), left, right)
+      of fbHybridWavelet:
+        dict.hybridBwt.rankPair(uint64(encodeByte(byte('a'))), left, right)
+      of fbRunLength:
+        dict.runLengthBwt.rankPair(encodeByte(byte('a')), left, right)
     sink = sink xor uint64(ranks.leftRank + ranks.rightRank)
   let rankPairNs = elapsedNs(started)
   started = getMonoTime()
   for _ in 0..<QueryIterations:
     let position = int64(nextRandom(state) mod uint64(dictionaryStats.bwtLength))
-    let item = if dict.backendKind == fbRunLength:
-      dict.runLengthBwt.accessRank(position)
-    else:
-      dict.bwt.accessRank(position)
+    let item =
+      case dict.backendKind
+      of fbWavelet:
+        dict.bwt.accessRank(position)
+      of fbHybridWavelet:
+        dict.hybridBwt.accessRank(position)
+      of fbRunLength:
+        dict.runLengthBwt.accessRank(position)
     sink = sink xor item.value xor uint64(item.rankBefore)
   let accessRankNs = elapsedNs(started)
 
@@ -151,7 +159,7 @@ proc run(count, averageLength: int, corpusFilter = -1,
     if corpusFilter >= 0 and ord(kind) != corpusFilter:
       continue
     let values = makeCorpus(kind, count, averageLength)
-    for preference in [fbpWavelet, fbpRunLength, fbpAuto]:
+    for preference in [fbpWavelet, fbpHybridWavelet, fbpRunLength, fbpAuto]:
       if preferenceFilter >= 0 and ord(preference) != preferenceFilter:
         continue
       measure(kind, values, averageLength, preference)
@@ -182,7 +190,7 @@ when isMainModule:
       run(count, averageLength, corpusFilter, preferenceFilter)
     else:
       raise newException(ValueError,
-        "corpus filter must be -1..9 and preference filter -1..2")
+        "corpus filter must be -1..9 and preference filter -1..3")
   else:
     for count in [10_000, 100_000, 1_000_000]:
       for averageLength in [8, 16, 32, 64]:
