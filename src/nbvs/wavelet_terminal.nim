@@ -1,7 +1,7 @@
-## Terminal-coordinate helpers for `WaveletMatrix` and `WaveletMatrixView`.
+## `WaveletMatrix` / `WaveletMatrixView` のterminal coordinate操作です。
 ##
-## These APIs expose the position or interval reached after traversing all
-## Wavelet Matrix levels. Positions are 0-based and intervals are half-open.
+## Wavelet Matrixの全levelを通過した後に到達するpositionまたはintervalを
+## 公開します。positionは0-based、intervalはhalf-openです。
 
 import wavelet_matrix
 import succinct_bit_vector
@@ -21,9 +21,9 @@ func bitAtUncheckedTerminal[B: SuccinctBitVector | SuccinctBitVectorView](
 
 func terminalPositionUnchecked*[W: WaveletMatrix | WaveletMatrixView](wm: W,
     position: int64): int64 =
-  ## Returns the position reached after traversing all Wavelet Matrix levels.
+  ## Wavelet Matrixの全levelを通過した後に到達するpositionを返します。
   ##
-  ## The caller must guarantee `0 <= position < wm.n`.
+  ## 呼び出し側は `0 <= position < wm.n` を保証する必要があります。
   result = position
   for level in 0..<wm.bitWidth:
     let ones = wm.levels[level].rank1Unchecked(result)
@@ -34,7 +34,7 @@ func terminalPositionUnchecked*[W: WaveletMatrix | WaveletMatrixView](wm: W,
 
 func terminalPosition*[W: WaveletMatrix | WaveletMatrixView](wm: W,
     position: int64): int64 =
-  ## Checked version of `terminalPositionUnchecked`.
+  ## `terminalPositionUnchecked` の境界検証付きAPIです。
   if position < 0 or position >= wm.n:
     raise newException(IndexDefect, "index out of bounds")
   wm.terminalPositionUnchecked(position)
@@ -42,10 +42,9 @@ func terminalPosition*[W: WaveletMatrix | WaveletMatrixView](wm: W,
 func accessWithTerminalPositionUnchecked*[
     W: WaveletMatrix | WaveletMatrixView](wm: W,
     position: int64): tuple[value: uint64, terminalPosition: int64] =
-  ## Returns the value at `position` and its terminal Wavelet position in one
-  ## forward traversal.
+  ## `position` のvalueとterminal positionを1回のforward traversalで返します。
   ##
-  ## The caller must guarantee `0 <= position < wm.n`.
+  ## 呼び出し側は `0 <= position < wm.n` を保証する必要があります。
   result.terminalPosition = position
   for level in 0..<wm.bitWidth:
     let shift = wm.bitWidth - level - 1
@@ -59,15 +58,15 @@ func accessWithTerminalPositionUnchecked*[
 func accessWithTerminalPosition*[
     W: WaveletMatrix | WaveletMatrixView](wm: W,
     position: int64): tuple[value: uint64, terminalPosition: int64] =
-  ## Checked version of `accessWithTerminalPositionUnchecked`.
+  ## `accessWithTerminalPositionUnchecked` の境界検証付きAPIです。
   if position < 0 or position >= wm.n:
     raise newException(IndexDefect, "index out of bounds")
   wm.accessWithTerminalPositionUnchecked(position)
 
 func terminalInterval*[W: WaveletMatrix | WaveletMatrixView](wm: W,
     value: uint64): tuple[left, right: int64] =
-  ## Returns the half-open interval occupied by `value` after traversing all
-  ## Wavelet Matrix levels. An absent value yields an empty interval.
+  ## `value` が全level通過後のWavelet permutation上で占めるhalf-open
+  ## intervalを返します。存在しないvalueでは空intervalを返します。
   if wm.n == 0 or not wm.valueFitsTerminal(value):
     return
 
