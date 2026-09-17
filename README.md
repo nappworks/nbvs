@@ -192,6 +192,7 @@ import nbvs/succinct_bit_vector
 import nbvs/quad_vector
 import nbvs/elias_fano
 import nbvs/wavelet_matrix
+import nbvs/wavelet_terminal
 import nbvs/wavelet_select_cursor
 import nbvs/reversed_wavelet_matrix
 import nbvs/fm_dictionary
@@ -434,6 +435,9 @@ doAssert wm.valueInRangeAt(4, 2, 8) # inclusive value range
 | --- | --- |
 | `genWaveletMatrix(xs)` | Builds an immutable index over `xs`. |
 | `wm[i]` / `access(i)` | Returns the original value at index `i`. |
+| `terminalPosition(position)` | Returns the position reached after traversing every Wavelet Matrix level. |
+| `accessWithTerminalPosition(position)` | Returns the value and terminal position in one forward traversal. |
+| `terminalInterval(value)` | Returns the half-open interval occupied by `value` in the final Wavelet permutation; absent values produce an empty interval. |
 | `matchesAt(position, value)` | Tests equality and stops at the first mismatching bit. |
 | `valueInRangeAt(position, low, high)` | Tests the inclusive range `[low, high]` with prefix pruning. |
 | `rank(value, pos)` | Counts `value` in `[0, pos)`. |
@@ -464,7 +468,9 @@ The enumeration APIs also have whole-sequence overloads without
 `left, right`. All ranges are half-open. The `collect` variants do not guarantee
 an order, while the variants without `collect` guarantee ascending value order.
 `matchesAtUnchecked` and `valueInRangeAtUnchecked` omit position validation and
-require `0 <= position < n`. The same APIs are available on `WaveletMatrixView`.
+require `0 <= position < n`. `terminalPositionUnchecked` and
+`accessWithTerminalPositionUnchecked` have the same precondition. The terminal
+APIs are also available on `WaveletMatrixView`.
 
 `matchingRunsItems(value, left, right)` enumerates maximal matching physical
 intervals in ascending position order. `matchingRuns` collects them into a
@@ -788,6 +794,7 @@ import nbvs/succinct_bit_vector
 import nbvs/quad_vector
 import nbvs/elias_fano
 import nbvs/wavelet_matrix
+import nbvs/wavelet_terminal
 import nbvs/wavelet_select_cursor
 import nbvs/reversed_wavelet_matrix
 import nbvs/fm_dictionary
@@ -1029,6 +1036,9 @@ doAssert wm.valueInRangeAt(4, 2, 8) # 値のinclusive range
 | --- | --- |
 | `genWaveletMatrix(xs)` | `xs` の不変 index を構築します。 |
 | `wm[i]` / `access(i)` | 元の列の index `i` の値を返します。 |
+| `terminalPosition(position)` | Wavelet Matrixの全levelを通過した後に到達するpositionを返します。 |
+| `accessWithTerminalPosition(position)` | 1回のforward traversalで値とterminal positionを返します。 |
+| `terminalInterval(value)` | 最終Wavelet permutationで`value`が占める半開区間を返します。存在しない値では空区間です。 |
 | `matchesAt(position, value)` | 最初の不一致bitで終了して等値を判定します。 |
 | `valueInRangeAt(position, low, high)` | prefixを枝刈りしてinclusive range `[low, high]` を判定します。 |
 | `rank(value, pos)` | `[0, pos)` にある `value` の個数。 |
@@ -1059,8 +1069,9 @@ doAssert wm.valueInRangeAt(4, 2, 8) # 値のinclusive range
 あります。すべての範囲は半開区間です。`collect` 系は順序を保証せず、
 非 `collect` 系は値の昇順を保証します。
 `matchesAtUnchecked` と `valueInRangeAtUnchecked` は位置検証を省くため、
-`0 <= position < n` を呼び出し側が保証します。同じAPIを
-`WaveletMatrixView`でも利用できます。
+`0 <= position < n` を呼び出し側が保証します。
+`terminalPositionUnchecked` と `accessWithTerminalPositionUnchecked` も同じ
+事前条件です。terminal APIは`WaveletMatrixView`でも利用できます。
 
 `matchingRunsItems(value, left, right)`は一致する極大な物理位置区間を位置の
 昇順で列挙します。`matchingRuns`はsequenceとして収集し、`collectMatchingRuns`は
