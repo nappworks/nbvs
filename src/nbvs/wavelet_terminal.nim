@@ -8,7 +8,12 @@ import succinct_bit_vector
 
 func valueFitsTerminal[W: WaveletMatrix | WaveletMatrixView](wm: W,
     value: uint64): bool {.inline.} =
-  wm.bitWidth == 64 or (wm.bitWidth > 0 and (value shr wm.bitWidth) == 0)
+  if wm.bitWidth == 0:
+    value == 0
+  elif wm.bitWidth == 64:
+    true
+  else:
+    (value shr wm.bitWidth) == 0
 
 func bitAtUncheckedTerminal[B: SuccinctBitVector | SuccinctBitVectorView](
     bits: B, pos: int64): bool {.inline.} =
