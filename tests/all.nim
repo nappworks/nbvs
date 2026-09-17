@@ -13,6 +13,7 @@ import ./thybrid_wavelet_matrix_9
 import ./tbit_vector_select_cursor
 import ./telias_fano
 import ./twavelet_matrix
+import ./twavelet_terminal
 import ./treversed_wavelet_matrix
 import ./twavelet_position_match
 import ./twavelet_select_cursor
