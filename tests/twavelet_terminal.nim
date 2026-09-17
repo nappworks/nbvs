@@ -1,4 +1,4 @@
-import ../src/nbvs/[wavelet_matrix, wavelet_terminal, succinct_bit_vector]
+import ../src/nbvs
 
 proc initWaveletView(wm: WaveletMatrix,
     levelStorage: var seq[seq[uint64]],
