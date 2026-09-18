@@ -115,7 +115,7 @@ block mixedCycles:
 block deterministicLargePermutation:
   const n = 4096
   var values = newSeq[uint64](n)
-  # gcd(4051, 4096) == 1, so this affine mapping is a permutation.
+  # gcd(4051, 4096) == 1 なので、このaffine mappingはpermutationになります。
   for i in 0..<n:
     values[i] = uint64((i * 4051 + 17) mod n)
   checkPermutation(values, 32)
