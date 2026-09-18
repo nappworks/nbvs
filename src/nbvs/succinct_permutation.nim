@@ -236,7 +236,7 @@ func inverseUnchecked*[P: SuccinctPermutation | SuccinctPermutationView](
 
 func inverse*[P: SuccinctPermutation | SuccinctPermutationView](
     permutation: P, value: uint64): uint64 =
-  ## Returns the unique index whose forward image is `value`.
+  ## forward imageが `value` になる一意なindexを返します。
   permutation.checkValue(value)
   result = permutation.inverseUnchecked(value)
 
