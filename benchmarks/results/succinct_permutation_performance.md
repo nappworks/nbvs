@@ -43,13 +43,15 @@ nimble benchSuccinctPermutationSimd
 
 ## 解釈
 
-既定stride 32では、1,048,576要素の論理格納容量は完全packed inverse方式の
-54.2%で、約45.8%削減されました。forward accessは同じpacked payloadを読むため
+既定stride 8では、1,048,576要素の論理格納容量は完全packed inverse方式の
+58.8%で、約41.2%削減されました。forward accessは同じpacked payloadを読むため
 基準実装と同程度です。
 
 inverse lookupは容量との明確なtrade-offがあります。stride 8から128へ広げると
 容量比は58.8%から53.0%へ改善しますが、scalarのinverse時間は約1.17 usから
-13.59 usへ増加しました。既定stride 32はscalarで約3.63 us/queryです。
+13.59 usへ増加しました。既定stride 8はscalarで約1.17 us/queryです。
+stride 32へ広げても容量比の改善は58.8%から54.2%の4.6ポイントに留まる一方、
+scalar inverseは約3.1倍の3.63 us/queryまで増えるため、既定値は8とします。
 
 buildは入力検証、cycle抽出、landmark用rank/select構築を含むため、完全inverseを
 直接構築する基準より約2.2–2.7倍遅い結果でした。SIMDはlandmark rankを含む
