@@ -8,7 +8,7 @@
 ## * 各landmarkは同じcycle上の直前のlandmarkを保持します。
 ##
 ## `access(i)` はO(1)です。生成されたinverse indexでは `inverse(value)` は
-## 最大 `inverseStride` 回のforward traversalで完了します。既定strideは32です。
+## 最大 `inverseStride` 回のforward traversalで完了します。既定strideは8です。
 ##
 ## `SuccinctPermutationView` は `PackedArrayView` と
 ## `SuccinctBitVectorView` を合成する非所有Viewです。backing memoryは所有しません。
@@ -17,7 +17,7 @@ import packed_array
 import succinct_bit_vector
 
 const
-  DefaultSuccinctPermutationInverseStride* = 32
+  DefaultSuccinctPermutationInverseStride* = 8
 
 type
   SuccinctPermutation* = object
