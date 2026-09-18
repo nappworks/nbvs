@@ -11,6 +11,7 @@
 ## * `nbvs/hybrid_wavelet_matrix_9`
 ## * `nbvs/bit_vector_select_cursor`
 ## * `nbvs/elias_fano`
+## * `nbvs/succinct_permutation`
 ## * `nbvs/wavelet_matrix`
 ## * `nbvs/wavelet_terminal`
 ## * `nbvs/reversed_wavelet_matrix`
@@ -22,7 +23,7 @@
 
 import nbvs/[bit_vector, packed_array, succinct_bit_vector, quad_vector,
   quad_vector_view, quad_wavelet_matrix, hybrid_wavelet_matrix_9,
-  bit_vector_select_cursor, elias_fano,
+  bit_vector_select_cursor, elias_fano, succinct_permutation,
   wavelet_matrix, wavelet_terminal, reversed_wavelet_matrix,
   wavelet_position_match, wavelet_select_cursor, wavelet_matching_runs,
   run_length_bwt, succinct_radix_trie, fm_dictionary]
@@ -36,6 +37,7 @@ export quad_wavelet_matrix
 export hybrid_wavelet_matrix_9
 export bit_vector_select_cursor
 export elias_fano
+export succinct_permutation
 export wavelet_matrix
 export wavelet_terminal
 export reversed_wavelet_matrix
