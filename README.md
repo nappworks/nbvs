@@ -419,9 +419,7 @@ permutation. Long cycles receive sparse inverse landmarks; cycles no longer than
 ```nim
 import nbvs/succinct_permutation
 
-let permutation = genSuccinctPermutation(
-  @[2'u64, 0, 3, 1],
-  inverseStride = 32)
+let permutation = genSuccinctPermutation(@[2'u64, 0, 3, 1])
 
 doAssert permutation[0] == 2
 doAssert permutation.inverse(2) == 0
@@ -437,8 +435,9 @@ doAssert permutation.inverse(1) == 3
 | `toSeq()` | Decodes the forward permutation. |
 | `initSuccinctPermutationView(...)` | Composes non-owning packed and succinct subviews. |
 
-Forward lookup is O(1). Generated inverse indexes complete inverse lookup within
-at most `inverseStride` forward traversals. Increasing
+Forward lookup is O(1). The default `inverseStride` is 8. Generated inverse
+indexes complete inverse lookup within at most `inverseStride` forward
+traversals. Increasing
 `inverseStride` reduces inverse metadata and increases the bounded inverse
 traversal cost. Identity and other short-cycle permutations can use zero inverse
 landmarks.
@@ -1054,9 +1053,7 @@ cycleには逆引き用metadataを持ちません。
 ```nim
 import nbvs/succinct_permutation
 
-let permutation = genSuccinctPermutation(
-  @[2'u64, 0, 3, 1],
-  inverseStride = 32)
+let permutation = genSuccinctPermutation(@[2'u64, 0, 3, 1])
 
 doAssert permutation[0] == 2
 doAssert permutation.inverse(2) == 0
@@ -1072,8 +1069,9 @@ doAssert permutation.inverse(1) == 3
 | `toSeq()` | forward permutationをdecodeします。 |
 | `initSuccinctPermutationView(...)` | 非所有のpacked/succinct下位Viewを合成します。 |
 
-forward lookupはO(1)です。生成されたinverse indexでは、inverse lookupは
-最大 `inverseStride` 回のforward traversalで完了します。
+forward lookupはO(1)です。既定の `inverseStride` は8です。
+生成されたinverse indexでは、inverse lookupは最大 `inverseStride` 回の
+forward traversalで完了します。
 `inverseStride` を大きくするとinverse metadataは減り、bounded traversal costは
 増えます。identityや短cycleだけの置換ではinverse landmarkを0個にできます。
 
