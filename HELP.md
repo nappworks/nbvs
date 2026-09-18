@@ -67,6 +67,20 @@ doAssert ef.upperBound(3) == 3
 doAssert ef.predecessor(9) == 3
 ```
 
+### SuccinctPermutation
+
+Use `SuccinctPermutation` for a static permutation when forward lookup must stay
+O(1) but keeping a second full inverse array is undesirable.
+
+```nim
+let p = genSuccinctPermutation(@[2'u64, 0, 3, 1])
+doAssert p[0] == 2
+doAssert p.inverse(2) == 0
+```
+
+The forward permutation is packed once. Inverse lookup uses sparse landmarks on
+long cycles; `inverseStride` controls the inverse metadata / traversal trade-off.
+
 ### WaveletMatrix
 
 Use `WaveletMatrix` for rank/select, quantile, and range queries over an
@@ -106,6 +120,7 @@ doAssert rwm.valueCounts[0] == (value: 1'u64, frequency: 2'i64)
 - `EliasFano` input must be nondecreasing.
 - `EliasFano` uses an exclusive universe: every `x` must satisfy `x < universe`.
 - `PackedArray` rejects values that do not fit in `bitWidth`.
+- `SuccinctPermutation` input must contain each value in `0 ..< n` exactly once.
 - `WaveletMatrix` ranges use half-open `[left, right)` / `[lower, upper)` semantics.
 
 ## Generate API docs
