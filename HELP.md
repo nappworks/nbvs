@@ -80,6 +80,7 @@ doAssert p.inverse(2) == 0
 
 The forward permutation is packed once. Inverse lookup uses sparse landmarks on
 long cycles; `inverseStride` controls the inverse metadata / traversal trade-off.
+The default `inverseStride` is 8.
 
 ### WaveletMatrix
 
