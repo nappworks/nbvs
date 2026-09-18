@@ -438,7 +438,7 @@ doAssert permutation.inverse(1) == 3
 | `initSuccinctPermutationView(...)` | Composes non-owning packed and succinct subviews. |
 
 Forward lookup is O(1). Generated inverse indexes complete inverse lookup within
-fewer than `2 * inverseStride` forward traversals. Increasing
+at most `inverseStride` forward traversals. Increasing
 `inverseStride` reduces inverse metadata and increases the bounded inverse
 traversal cost. Identity and other short-cycle permutations can use zero inverse
 landmarks.
@@ -1073,7 +1073,7 @@ doAssert permutation.inverse(1) == 3
 | `initSuccinctPermutationView(...)` | 非所有のpacked/succinct下位Viewを合成します。 |
 
 forward lookupはO(1)です。生成されたinverse indexでは、inverse lookupは
-`2 * inverseStride` 未満のforward traversalで完了します。
+最大 `inverseStride` 回のforward traversalで完了します。
 `inverseStride` を大きくするとinverse metadataは減り、bounded traversal costは
 増えます。identityや短cycleだけの置換ではinverse landmarkを0個にできます。
 
