@@ -78,6 +78,14 @@ block emptyAndSingleton:
   checkPermutation(@[], 4)
   checkPermutation(@[0'u64], 4)
 
+block defaultInverseStride:
+  let values = @[1'u64, 2, 3, 4, 5, 6, 7, 8, 0]
+  let permutation = genSuccinctPermutation(values)
+  doAssert permutation.inverseStride == 8
+  doAssert permutation.landmarkCount == 2
+  for index, value in values:
+    doAssert permutation.inverse(value) == uint64(index)
+
 block identityUsesNoLandmarks:
   var values = newSeq[uint64](128)
   for i in 0..<values.len:
