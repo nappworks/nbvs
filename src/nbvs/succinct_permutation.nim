@@ -7,9 +7,8 @@
 ## * longer cycles mark every `inverseStride`-th node;
 ## * each landmark stores the previous landmark on that cycle.
 ##
-## `access(i)` is O(1).  `inverse(value)` follows at most one stride to a
-## landmark and at most one additional stride from the previous landmark to the
-## predecessor.  The default stride is 32.
+## `access(i)` is O(1).  Generated inverse indexes complete `inverse(value)`
+## within at most `inverseStride` forward traversals.  The default stride is 32.
 ##
 ## `SuccinctPermutationView` composes `PackedArrayView` and
 ## `SuccinctBitVectorView` instances.  It does not own backing memory.
@@ -215,7 +214,7 @@ func inverseUnchecked*[P: SuccinctPermutation | SuccinctPermutationView](
   ## Returns the unique index whose forward image is `value`.
   ##
   ## The caller must guarantee `value < n`.  Generated permutations complete
-  ## inverse lookup in fewer than `2 * inverseStride` forward traversals.
+  ## inverse lookup within at most `inverseStride` forward traversals.
   if permutation.n <= 1:
     return value
 
