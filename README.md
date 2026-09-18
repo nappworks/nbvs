@@ -409,6 +409,39 @@ Important API:
 | `items` | Iterates over values. |
 | `toSeq()` | Decodes to `seq[uint64]`. |
 
+### SuccinctPermutation
+
+`SuccinctPermutation` stores a static permutation over `0 ..< n` once in a
+`PackedArray` and supports inverse lookup without storing a full inverse
+permutation. Long cycles receive sparse inverse landmarks; cycles no longer than
+`inverseStride` need no inverse metadata.
+
+```nim
+import nbvs/succinct_permutation
+
+let permutation = genSuccinctPermutation(@[2'u64, 0, 3, 1])
+
+doAssert permutation[0] == 2
+doAssert permutation.inverse(2) == 0
+doAssert permutation.inverse(1) == 3
+```
+
+| API | Description |
+| --- | --- |
+| `genSuccinctPermutation(xs, inverseStride)` | Builds a validated static permutation. |
+| `p[i]` / `access(i)` | Returns the forward image of `i`. |
+| `inverse(value)` | Returns the unique index mapped to `value`. |
+| `landmarkCount()` | Returns the number of sparse inverse landmarks. |
+| `toSeq()` | Decodes the forward permutation. |
+| `initSuccinctPermutationView(...)` | Composes non-owning packed and succinct subviews. |
+
+Forward lookup is O(1). The default `inverseStride` is 8. Generated inverse
+indexes complete inverse lookup within at most `inverseStride` forward
+traversals. Increasing
+`inverseStride` reduces inverse metadata and increases the bounded inverse
+traversal cost. Identity and other short-cycle permutations can use zero inverse
+landmarks.
+
 ### WaveletMatrix
 
 `WaveletMatrix` indexes an arbitrary `uint64` sequence. Position and value
@@ -644,7 +677,7 @@ its cost depends on the value distribution rather than being `O(bitWidth)`.
 ### External-memory views
 
 `BitVectorView`, `SuccinctBitVectorView`, `EliasFanoView`,
-`WaveletMatrixView`, and `ReversedWaveletMatrixView` provide the corresponding
+`SuccinctPermutationView`, `WaveletMatrixView`, and `ReversedWaveletMatrixView` provide the corresponding
 public operations without owning their backing memory. They can reference mmap
 regions, shared-memory segments, or application-managed buffers. The caller
 must keep every buffer and the Wavelet level-descriptor array alive and at a
@@ -1010,6 +1043,38 @@ doAssert ef.toSeq == xs
 | `items` | 値を順に iterate します。 |
 | `toSeq()` | `seq[uint64]` に decode します。 |
 
+### SuccinctPermutation
+
+`SuccinctPermutation` は `0 ..< n` 上の静的な置換を1本の
+`PackedArray` に保持し、完全な逆置換配列を持たずに逆引きを提供します。
+長いcycleだけに疎なinverse landmarkを置き、長さが `inverseStride` 以下の
+cycleには逆引き用metadataを持ちません。
+
+```nim
+import nbvs/succinct_permutation
+
+let permutation = genSuccinctPermutation(@[2'u64, 0, 3, 1])
+
+doAssert permutation[0] == 2
+doAssert permutation.inverse(2) == 0
+doAssert permutation.inverse(1) == 3
+```
+
+| API | 説明 |
+| --- | --- |
+| `genSuccinctPermutation(xs, inverseStride)` | 妥当性検査済みの静的置換を構築します。 |
+| `p[i]` / `access(i)` | `i` のforward imageを返します。 |
+| `inverse(value)` | `value` へ写る一意なindexを返します。 |
+| `landmarkCount()` | 疎なinverse landmark数を返します。 |
+| `toSeq()` | forward permutationをdecodeします。 |
+| `initSuccinctPermutationView(...)` | 非所有のpacked/succinct下位Viewを合成します。 |
+
+forward lookupはO(1)です。既定の `inverseStride` は8です。
+生成されたinverse indexでは、inverse lookupは最大 `inverseStride` 回の
+forward traversalで完了します。
+`inverseStride` を大きくするとinverse metadataは減り、bounded traversal costは
+増えます。identityや短cycleだけの置換ではinverse landmarkを0個にできます。
+
 ### WaveletMatrix
 
 `WaveletMatrix` は任意順序の `uint64` 列を index 化します。位置範囲と
@@ -1231,7 +1296,7 @@ RWMの `rankLessThan(value, pos)` は、LSB-firstの出現subtreeを走査し、
 ### 外部メモリView
 
 `BitVectorView`、`SuccinctBitVectorView`、`EliasFanoView`、
-`WaveletMatrixView`、`ReversedWaveletMatrixView` は、backing memoryを
+`SuccinctPermutationView`、`WaveletMatrixView`、`ReversedWaveletMatrixView` は、backing memoryを
 所有せずに対応する公開操作を提供します。mmap領域、共有memory segment、
 アプリケーション管理bufferを参照できます。Viewの使用中は、すべてのbufferと
 Wavelet level descriptor配列を呼び出し側が有効かつ同じaddressに保つ必要があります。

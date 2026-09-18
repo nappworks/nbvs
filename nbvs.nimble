@@ -92,6 +92,12 @@ task benchWmPositionPredicate, "Benchmark Wavelet Matrix position predicates":
 task benchWmSelectCursor, "Benchmark repeated Wavelet Matrix select queries":
   exec "nim c --path:src -d:release --mm:arc -r benchmarks/wm_select_cursor_perf.nim"
 
+task benchSuccinctPermutation, "Benchmark SuccinctPermutation against a packed inverse":
+  exec "nim c --path:src -d:release --mm:arc -r benchmarks/succinct_permutation_perf.nim"
+
+task benchSuccinctPermutationSimd, "Benchmark SuccinctPermutation with AVX2/BMI2":
+  exec "nim c --path:src -d:release --mm:arc -d:nbvsSimd -r benchmarks/succinct_permutation_perf.nim"
+
 task benchFmRev5, "Measure FM query phases and tail latency":
   exec "nim c --path:src -d:release -d:nbvsFmBenchmark --mm:arc -r benchmarks/fm_dictionary_rev5.nim 1000000 16 0 0 100000 8 1 tail"
 
