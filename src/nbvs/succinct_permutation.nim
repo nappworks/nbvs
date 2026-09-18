@@ -1,17 +1,17 @@
-## Packed static permutation with a sparse inverse index.
+## 疎な逆引きindexを持つpacked static permutationです。
 ##
-## `SuccinctPermutation` stores the forward permutation once in a
-## `PackedArray`.  Inverse lookup is accelerated by sparse cycle landmarks:
+## `SuccinctPermutation` はforward permutationを1本の
+## `PackedArray` に保持し、疎なcycle landmarkでinverse lookupを高速化します。
 ##
-## * cycles whose length is at most `inverseStride` store no inverse metadata;
-## * longer cycles mark every `inverseStride`-th node;
-## * each landmark stores the previous landmark on that cycle.
+## * 長さが `inverseStride` 以下のcycleにはinverse metadataを持ちません。
+## * 長いcycleでは `inverseStride` ごとにnodeをlandmarkとして記録します。
+## * 各landmarkは同じcycle上の直前のlandmarkを保持します。
 ##
-## `access(i)` is O(1).  Generated inverse indexes complete `inverse(value)`
-## within at most `inverseStride` forward traversals.  The default stride is 32.
+## `access(i)` はO(1)です。生成されたinverse indexでは `inverse(value)` は
+## 最大 `inverseStride` 回のforward traversalで完了します。既定strideは32です。
 ##
-## `SuccinctPermutationView` composes `PackedArrayView` and
-## `SuccinctBitVectorView` instances.  It does not own backing memory.
+## `SuccinctPermutationView` は `PackedArrayView` と
+## `SuccinctBitVectorView` を合成する非所有Viewです。backing memoryは所有しません。
 
 import packed_array
 import succinct_bit_vector
@@ -21,7 +21,7 @@ const
 
 type
   SuccinctPermutation* = object
-    ## Owning static permutation.
+    ## backing storageを所有する静的permutationです。
     n*: int64
     inverseStride*: int
     values*: PackedArray
@@ -29,10 +29,10 @@ type
     previousLandmarks*: PackedArray
 
   SuccinctPermutationView* = object
-    ## Non-owning view over a static permutation and its sparse inverse index.
+    ## 静的permutationと疎なinverse indexを参照する非所有Viewです。
     ##
-    ## The caller must keep all backing memory alive and at stable addresses for
-    ## the lifetime of this view.
+    ## 呼び出し側は、このViewの使用中すべてのbacking memoryを有効かつ
+    ## 同じaddressに保つ必要があります。
     n*: int64
     inverseStride*: int
     values*: PackedArrayView
@@ -40,9 +40,9 @@ type
     previousLandmarks*: PackedArrayView
 
 func permutationBitWidth*(n: int64): int =
-  ## Returns the minimum fixed width required to store values in `0 ..< n`.
+  ## `0 ..< n` の値を保持するために必要な最小固定bit幅を返します。
   ##
-  ## Empty and singleton permutations use width 0.
+  ## 空permutationと1要素permutationではbit幅0を使用します。
   if n < 0:
     raise newException(ValueError, "n must be non-negative")
   if n <= 1:
@@ -56,10 +56,10 @@ func permutationBitWidth*(n: int64): int =
 func initSuccinctPermutationView*(n: int64, inverseStride: int,
     values: PackedArrayView, landmarks: SuccinctBitVectorView,
     previousLandmarks: PackedArrayView): SuccinctPermutationView =
-  ## Creates a non-owning permutation view from already initialized subviews.
+  ## 初期化済みの下位Viewから非所有permutation Viewを構築します。
   ##
-  ## This validates structural metadata only.  It does not scan the packed
-  ## permutation or inverse metadata.
+  ## 構造metadataだけを検証します。packed permutationやinverse metadataの
+  ## 全走査は行いません。
   if n < 0:
     raise newException(ValueError, "n must be non-negative")
   if inverseStride <= 0:
@@ -86,11 +86,11 @@ func initSuccinctPermutationView*(n: int64, inverseStride: int,
 func genSuccinctPermutation*(xs: openArray[uint64],
     inverseStride = DefaultSuccinctPermutationInverseStride):
     SuccinctPermutation =
-  ## Builds a packed static permutation over `0 ..< xs.len`.
+  ## `0 ..< xs.len` 上のpacked static permutationを構築します。
   ##
-  ## `xs[i]` is the forward image of `i`.  Every value must occur exactly
-  ## once.  `inverseStride` controls the inverse-space/time trade-off and must
-  ## be positive.
+  ## `xs[i]` は `i` のforward imageです。各値はちょうど1回だけ出現する必要が
+  ## あります。`inverseStride` はinverse lookupの容量/時間trade-offを制御し、
+  ## 正の値でなければなりません。
   if inverseStride <= 0:
     raise newException(ValueError, "inverseStride must be positive")
 
@@ -126,12 +126,12 @@ func genSuccinctPermutation*(xs: openArray[uint64],
       cycle.add current
       current = xs[int(current)]
 
-    # A validated permutation can only close the cycle at its starting node.
+    # 検証済みpermutationではcycleは開始nodeにだけ戻ります。
     if current != uint64(start):
       raise newException(ValueError, "permutation cycle structure is inconsistent")
 
-    # Short cycles are cheap enough to invert by walking until they close, so
-    # they need no inverse metadata.
+    # 短いcycleは閉じるまでforwardに辿っても十分安価なので、
+    # inverse metadataを持ちません。
     if cycle.len <= inverseStride:
       continue
 
@@ -154,14 +154,14 @@ func genSuccinctPermutation*(xs: openArray[uint64],
     genPackedArray(int64(landmarkPairs.len), width)
 
   for pair in landmarkPairs:
-    # rank1(node) is the 0-based ordinal of a set bit at node because rank1 is
-    # defined on the half-open range [0, node).
+    # rank1は半開区間 [0, node) を数えるため、set bitであるnodeに対する
+    # rank1(node) はそのlandmarkの0-based ordinalになります。
     let ordinal = result.landmarks.rank1(int64(pair.node))
     result.previousLandmarks[ordinal] = pair.previous
 
 func checkIndex*[P: SuccinctPermutation | SuccinctPermutationView](
     permutation: P, index: int64) =
-  ## Raises `IndexDefect` when `index` is outside `0 ..< n`.
+  ## `index` が `0 ..< n` の範囲外なら `IndexDefect` を送出します。
   if index < 0 or index >= permutation.n:
     raise newException(IndexDefect, "Index out of bounds")
 
@@ -172,25 +172,25 @@ func checkValue[P: SuccinctPermutation | SuccinctPermutationView](
 
 func access*[P: SuccinctPermutation | SuccinctPermutationView](
     permutation: P, index: int64): uint64 =
-  ## Returns the forward image at `index`.
+  ## `index` のforward imageを返します。
   permutation.checkIndex(index)
   result = permutation.values[index]
 
 func accessUnchecked*[P: SuccinctPermutation | SuccinctPermutationView](
     permutation: P, index: int): uint64 {.inline.} =
-  ## Returns the forward image without checking `index`.
+  ## `index` の境界検査を行わずforward imageを返します。
   ##
-  ## The caller must guarantee `index in 0 ..< n`.
+  ## 呼び出し側は `index in 0 ..< n` を保証する必要があります。
   result = permutation.values.getUnchecked(index)
 
 func `[]`*[P: SuccinctPermutation | SuccinctPermutationView](
     permutation: P, index: int64): uint64 =
-  ## Alias for `access(permutation, index)`.
+  ## `access(permutation, index)` のaliasです。
   result = permutation.access(index)
 
 func landmarkCount*[P: SuccinctPermutation | SuccinctPermutationView](
     permutation: P): int64 {.inline.} =
-  ## Returns the number of sparse inverse landmarks.
+  ## 疎なinverse landmark数を返します。
   result = permutation.landmarks.totalOnes
 
 func scanFromPreviousLandmark[
@@ -211,10 +211,10 @@ func scanFromPreviousLandmark[
 
 func inverseUnchecked*[P: SuccinctPermutation | SuccinctPermutationView](
     permutation: P, value: uint64): uint64 =
-  ## Returns the unique index whose forward image is `value`.
+  ## forward imageが `value` になる一意なindexを返します。
   ##
-  ## The caller must guarantee `value < n`.  Generated permutations complete
-  ## inverse lookup within at most `inverseStride` forward traversals.
+  ## 呼び出し側は `value < n` を保証する必要があります。生成されたpermutationでは
+  ## inverse lookupは最大 `inverseStride` 回のforward traversalで完了します。
   if permutation.n <= 1:
     return value
 
@@ -225,7 +225,7 @@ func inverseUnchecked*[P: SuccinctPermutation | SuccinctPermutationView](
   for _ in 0..<permutation.inverseStride:
     let next = permutation.values[int64(current)]
     if next == value:
-      # This is a short cycle with no inverse landmarks.
+      # inverse landmarkを持たない短いcycleです。
       return current
 
     current = next
@@ -242,13 +242,13 @@ func inverse*[P: SuccinctPermutation | SuccinctPermutationView](
 
 iterator items*[P: SuccinctPermutation | SuccinctPermutationView](
     permutation: P): uint64 =
-  ## Iterates over forward permutation values in index order.
+  ## forward permutationの値をindex順にiterateします。
   for index in 0'i64..<permutation.n:
     yield permutation.values[index]
 
 func toSeq*[P: SuccinctPermutation | SuccinctPermutationView](
     permutation: P): seq[uint64] =
-  ## Decodes the forward permutation into an unpacked sequence.
+  ## forward permutationをunpackedなsequenceへdecodeします。
   result = newSeq[uint64](int(permutation.n))
   for index in 0'i64..<permutation.n:
     result[int(index)] = permutation.values[index]
