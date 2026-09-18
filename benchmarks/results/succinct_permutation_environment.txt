@@ -1,0 +1,14 @@
+Date: 2026-09-18 UTC
+Git commit: f2677de4efa5276735162166a546145f929957f5
+Working tree before benchmark changes: clean
+Nim: 2.2.10 (bfeb3146d1638b39f69007a4ae5a23e23ae4e5ef)
+C compiler: GCC 15.2.0
+OS: Linux 5.15.146.1-microsoft-standard-WSL2 x86_64
+CPU: Intel Core i5-8365U (4 cores / 8 threads, AVX2/BMI2)
+CPU frequency policy: unfixed (WSL2 virtual environment)
+Memory: 7.6 GiB
+Memory manager: ARC
+Build flags: -d:release --mm:arc
+SIMD flags: -d:release --mm:arc -d:nbvsSimd
+Workload: one deterministic long cycle; 200,000 fixed-seed queries
+Measurement: one warmup and seven measured iterations; p50
