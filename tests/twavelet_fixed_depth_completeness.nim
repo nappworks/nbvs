@@ -75,7 +75,10 @@ block wmRwmFixedDepthCompleteness:
       naiveLessThan(values, 128'u64, left, right)
     doAssert rwm.rankLessThan(128'u64, int64(right)) ==
       naiveLessThan(values, 128'u64, 0, right)
-    doAssert rwm.occPosition(target, int64(right)) >= rightRank
+    let expectedOccPosition =
+      naiveLessThan(values, target, 0, item.length) + rightRank
+    doAssert rwm.occPosition(target, int64(right)) ==
+      expectedOccPosition
 
     var firstTarget = -1
     for index, value in values:
