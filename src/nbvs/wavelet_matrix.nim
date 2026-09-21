@@ -17,6 +17,8 @@ type
 
   TraversalNode = tuple[level: int, left, right: int64, value: uint64]
 
+const WaveletTraversalStackCapacity = 66
+
   WaveletMatrix* = object
     ## Rank/select-capable representation of a `uint64` sequence.
     n*: int64               ## Number of values.
@@ -500,28 +502,56 @@ iterator collectValueCountsItems*[W: WaveletMatrix | WaveletMatrixView](wm: W,
                                   left, right: int64): ValueCount =
   ## `[left, right)` の異なる値と頻度を内部探索順で逐次返します。
   ##
-  ## 探索時間は概ね `O(σ * bitWidth)`、明示スタックの追加領域は
-  ## 探索中のノード数に依存します。`σ` は異なる値の数です。
+  ## WM levelは同一長のSBVを持つため、rank dictionary depthをtraversal開始時に
+  ## 1回だけdispatchし、各nodeでは固定depth rankを使用します。
   wm.checkRange(left, right)
-  var stack: seq[TraversalNode] =
-    @[(level: 0, left: left, right: right, value: 0'u64)]
-  while stack.len > 0:
-    let node = stack.pop()
-    if node.left >= node.right:
-      continue
-    if node.level == wm.bitWidth:
-      yield (value: node.value, frequency: node.right - node.left)
-      continue
+  if left < right:
+    if wm.bitWidth == 0:
+      yield (value: 0'u64, frequency: right - left)
+    else:
+      template runTraversal(rankFn: untyped) =
+        block:
+          var stack: array[WaveletTraversalStackCapacity, TraversalNode]
+          var stackLen = 1
+          stack[0] = (level: 0, left: left, right: right, value: 0'u64)
+          while stackLen > 0:
+            dec stackLen
+            let node = stack[stackLen]
+            if node.left >= node.right:
+              continue
+            if node.level == wm.bitWidth:
+              yield (value: node.value, frequency: node.right - node.left)
+              continue
 
-    let shift = wm.bitWidth - node.level - 1
-    let leftOnes = wm.levels[node.level].rank1Unchecked(node.left)
-    let rightOnes = wm.levels[node.level].rank1Unchecked(node.right)
-    let oneLeft = wm.zeroCounts[node.level] + leftOnes
-    let oneRight = wm.zeroCounts[node.level] + rightOnes
-    stack.add (level: node.level + 1, left: oneLeft, right: oneRight,
-      value: node.value or (1'u64 shl shift))
-    stack.add (level: node.level + 1, left: node.left - leftOnes,
-      right: node.right - rightOnes, value: node.value)
+            let shift = wm.bitWidth - node.level - 1
+            let leftOnes = rankFn(wm.levels[node.level], node.left)
+            let rightOnes = rankFn(wm.levels[node.level], node.right)
+            let oneLeft = wm.zeroCounts[node.level] + leftOnes
+            let oneRight = wm.zeroCounts[node.level] + rightOnes
+
+            if oneLeft < oneRight:
+              stack[stackLen] = (
+                level: node.level + 1, left: oneLeft, right: oneRight,
+                value: node.value or (1'u64 shl shift))
+              inc stackLen
+            let zeroLeft = node.left - leftOnes
+            let zeroRight = node.right - rightOnes
+            if zeroLeft < zeroRight:
+              stack[stackLen] = (
+                level: node.level + 1, left: zeroLeft, right: zeroRight,
+                value: node.value)
+              inc stackLen
+
+      case int(wm.levels[0].level)
+      of 0: runTraversal(rank1UncheckedDepth0)
+      of 1: runTraversal(rank1UncheckedDepth1)
+      of 2: runTraversal(rank1UncheckedDepth2)
+      of 3: runTraversal(rank1UncheckedDepth3)
+      of 4: runTraversal(rank1UncheckedDepth4)
+      of 5: runTraversal(rank1UncheckedDepth5)
+      of 6: runTraversal(rank1UncheckedDepth6)
+      of 7: runTraversal(rank1UncheckedDepth7)
+      else: runTraversal(rank1UncheckedDepth8)
 
 iterator collectValueCountsItems*[W: WaveletMatrix | WaveletMatrixView](wm: W): ValueCount =
   ## 列全体の異なる値と頻度を内部探索順で逐次返します。
@@ -534,29 +564,58 @@ iterator collectValueCountFinalIntervalsItems*[
   ## `[left, right)` の異なる値・頻度と、同じWM探索で到達したterminal
   ## intervalを逐次返します。
   ##
-  ## `collectValueCountsItems` の後で値ごとに再度WMを辿る必要がある用途向けです。
+  ## rank dictionary depthはtraversal開始時に1回だけdispatchします。
   ## terminal intervalは最終level後のWavelet permutation上のhalf-open rangeです。
   wm.checkRange(left, right)
-  var stack: seq[TraversalNode] =
-    @[(level: 0, left: left, right: right, value: 0'u64)]
-  while stack.len > 0:
-    let node = stack.pop()
-    if node.left >= node.right:
-      continue
-    if node.level == wm.bitWidth:
-      yield (value: node.value, frequency: node.right - node.left,
-        left: node.left, right: node.right)
-      continue
+  if left < right:
+    if wm.bitWidth == 0:
+      yield (value: 0'u64, frequency: right - left,
+        left: left, right: right)
+    else:
+      template runTraversal(rankFn: untyped) =
+        block:
+          var stack: array[WaveletTraversalStackCapacity, TraversalNode]
+          var stackLen = 1
+          stack[0] = (level: 0, left: left, right: right, value: 0'u64)
+          while stackLen > 0:
+            dec stackLen
+            let node = stack[stackLen]
+            if node.left >= node.right:
+              continue
+            if node.level == wm.bitWidth:
+              yield (value: node.value, frequency: node.right - node.left,
+                left: node.left, right: node.right)
+              continue
 
-    let shift = wm.bitWidth - node.level - 1
-    let leftOnes = wm.levels[node.level].rank1Unchecked(node.left)
-    let rightOnes = wm.levels[node.level].rank1Unchecked(node.right)
-    let oneLeft = wm.zeroCounts[node.level] + leftOnes
-    let oneRight = wm.zeroCounts[node.level] + rightOnes
-    stack.add (level: node.level + 1, left: oneLeft, right: oneRight,
-      value: node.value or (1'u64 shl shift))
-    stack.add (level: node.level + 1, left: node.left - leftOnes,
-      right: node.right - rightOnes, value: node.value)
+            let shift = wm.bitWidth - node.level - 1
+            let leftOnes = rankFn(wm.levels[node.level], node.left)
+            let rightOnes = rankFn(wm.levels[node.level], node.right)
+            let oneLeft = wm.zeroCounts[node.level] + leftOnes
+            let oneRight = wm.zeroCounts[node.level] + rightOnes
+
+            if oneLeft < oneRight:
+              stack[stackLen] = (
+                level: node.level + 1, left: oneLeft, right: oneRight,
+                value: node.value or (1'u64 shl shift))
+              inc stackLen
+            let zeroLeft = node.left - leftOnes
+            let zeroRight = node.right - rightOnes
+            if zeroLeft < zeroRight:
+              stack[stackLen] = (
+                level: node.level + 1, left: zeroLeft, right: zeroRight,
+                value: node.value)
+              inc stackLen
+
+      case int(wm.levels[0].level)
+      of 0: runTraversal(rank1UncheckedDepth0)
+      of 1: runTraversal(rank1UncheckedDepth1)
+      of 2: runTraversal(rank1UncheckedDepth2)
+      of 3: runTraversal(rank1UncheckedDepth3)
+      of 4: runTraversal(rank1UncheckedDepth4)
+      of 5: runTraversal(rank1UncheckedDepth5)
+      of 6: runTraversal(rank1UncheckedDepth6)
+      of 7: runTraversal(rank1UncheckedDepth7)
+      else: runTraversal(rank1UncheckedDepth8)
 
 iterator collectValueCountFinalIntervalsItems*[
     W: WaveletMatrix | WaveletMatrixView](wm: W): ValueCountFinalInterval =
