@@ -220,20 +220,4 @@ nimble benchWmRwmFixedDepthQueryAbSimd
 git diff --check
 ```
 
-## shikiDBとの境界
-
-このPRはpacked/Wavelet mechanicsのみを扱う。
-
-shikiDB側へ残す:
-
-- NULL semantics
-- terminal DELETE semantics
-- Segment dictionary decode
-- SUM reduction
-- GlobalValueId / SegmentValueId
-- canonical physical coordinate
-
-nbvs #21 merge後、shikiDB #103はdependency pinを更新し、
-DB semanticsを維持したままnbvs primitive consumeへ修正する。
-
 GitHub Actionsは使用しない。
