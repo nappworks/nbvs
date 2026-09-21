@@ -25,6 +25,11 @@ The underlying QuadVector rank dictionary uses one 64-byte metadata record per
 and its rank before the requested position. `rankPair` similarly computes two
 rank endpoints in one traversal.
 
+Range-oriented queries use QuadVector pair/all-rank primitives. `rankAllUnchecked`
+returns the four symbol prefixes with one metadata/tail traversal, while
+`rankAllPairUnchecked` returns the four left/right prefixes together. QWM uses
+these primitives for `quantile`, `countLessThan`, and 4-way value enumeration.
+
 ## Basic API
 
 ```nim
@@ -49,6 +54,21 @@ doAssert qwm64.levelCount == 32
 The current API includes `access`, `accessRank`, `rank`, `rankPair`,
 `rankIncl`, `rankLessThan`, `occPosition`, `select`, `selectNth`, `quantile`,
 `countLessThan`, `rangeFreq`, `predecessor`, `successor`, `items`, and `toSeq`.
+
+It also provides streaming value enumeration APIs:
+
+```nim
+for item in qwm.valueCountsItems(0, qwm.n):
+  echo item.value, " ", item.frequency
+
+for item in qwm.collectValueCountFinalIntervalsItems(0, qwm.n):
+  echo item.value, " ", item.frequency, " [", item.left, ",", item.right, ")"
+```
+
+`collectValueCountsItems`, `valueCountsItems`, `collectDistinctValuesItems`, and
+`distinctValuesItems` traverse the 4-way tree directly. Since the traversal is
+MSB-first and pushes symbols in reverse stack order, `valueCountsItems` and
+`distinctValuesItems` are emitted in numeric order without a final sort.
 
 ## mmap / external-memory view
 
@@ -113,9 +133,13 @@ for Binary WaveletMatrix and QuadWaveletMatrix. Before timing, sampled
 ```sh
 nimble benchWmQwm
 nimble benchWmQwmSimd
+nimble benchQwmPairEnumerationAb
+nimble benchQwmPairEnumerationAbSimd
 ```
 
-The benchmark reports build latency, payload/auxiliary bytes, and p50 latency for
-`access`, `accessRank`, `rank`, and `select`. Cases include 65K, 1M, and 16M
-values plus 16/32/64-bit fixed-width inputs so cache-size and level-count effects
-can be separated.
+The end-to-end benchmark reports build latency, payload/auxiliary bytes, and p50
+latency for `access`, `accessRank`, `rank`, and `select`. The QWM A/B benchmark
+keeps the previous separate-rank query code inside the same executable and compares
+it with pair/all-rank execution for range rank, rankPair, select, quantile,
+countLessThan, full value counts, and range value counts. Cases include 65K and
+1M rows with low/high cardinality, and are run in both scalar and SIMD modes.
