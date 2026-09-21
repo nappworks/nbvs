@@ -416,6 +416,31 @@ else:
                          startPos, endPos, occurrence: int64): int64 {.inline.} =
     qv.selectSymbolRangeScalar(symbol, startPos, endPos, occurrence)
 
+func countSymbolsBetween(qv: QuadVectorView,
+                         startPos, endPos: int64):
+    array[4, int64] {.inline.} =
+  ## 任意の半開区間を4 symbol同時に数えます。両端だけ短いscalar処理とし、
+  ## 中央のword-aligned領域はbackend固有の4値集計へ渡します。
+  if endPos <= startPos:
+    return
+
+  var cursor = startPos
+  let startLane = int(cursor and 31'i64)
+  if startLane != 0:
+    let wordEnd = min(endPos, (cursor and not 31'i64) + 32'i64)
+    while cursor < wordEnd:
+      inc result[int(qv.symbolUnchecked(cursor))]
+      inc cursor
+
+  let alignedEnd = endPos and not 31'i64
+  if cursor < alignedEnd:
+    result.addCounts(qv.countSymbolsRange(cursor, alignedEnd))
+    cursor = alignedEnd
+
+  while cursor < endPos:
+    inc result[int(qv.symbolUnchecked(cursor))]
+    inc cursor
+
 func bindSelectSamples(qv: var QuadVectorView) =
   var wordOffset = 0
   for symbol in 0..3:
@@ -641,7 +666,7 @@ func rankAllPairUnchecked*(qv: QuadVectorView, left, right: int64):
   let rightBlock = (right - 1'i64) shr ViewRankBlockShift
   if leftBlock == rightBlock:
     result.leftRanks = qv.rankAllUnchecked(left)
-    let delta = qv.countSymbolsRange(left, right)
+    let delta = qv.countSymbolsBetween(left, right)
     result.rightRanks = result.leftRanks
     result.rightRanks.addCounts(delta)
   else:
