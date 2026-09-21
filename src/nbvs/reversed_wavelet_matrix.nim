@@ -13,6 +13,8 @@ export ValueCount
 type
   TraversalNode = tuple[level: int, left, right: int64, value: uint64]
 
+const ReversedWaveletTraversalStackCapacity = 66
+
   ReversedWaveletMatrix* = object
     ## Immutable LSB-first wavelet matrix.
     n*: int64
@@ -131,14 +133,28 @@ func bitAtUnchecked[B: SuccinctBitVector | SuccinctBitVectorView](
 func access*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, i: int64): uint64 =
   ## Returns the value at index `i`.
   rwm.checkIndex(i)
-  var pos = i
-  for level in 0..<rwm.bitWidth:
-    let ones = rwm.levels[level].rank1Unchecked(pos)
-    if rwm.levels[level].bitAtUnchecked(pos):
-      result = result or (1'u64 shl level)
-      pos = rwm.zeroCounts[level] + ones
-    else:
-      pos -= ones
+
+  template runAccess(rankFn: untyped) =
+    block:
+      var pos = i
+      for level in 0..<rwm.bitWidth:
+        let ones = rankFn(rwm.levels[level], pos)
+        if rwm.levels[level].bitAtUnchecked(pos):
+          result = result or (1'u64 shl level)
+          pos = rwm.zeroCounts[level] + ones
+        else:
+          pos -= ones
+
+  case int(rwm.levels[0].level)
+  of 0: runAccess(rank1UncheckedDepth0)
+  of 1: runAccess(rank1UncheckedDepth1)
+  of 2: runAccess(rank1UncheckedDepth2)
+  of 3: runAccess(rank1UncheckedDepth3)
+  of 4: runAccess(rank1UncheckedDepth4)
+  of 5: runAccess(rank1UncheckedDepth5)
+  of 6: runAccess(rank1UncheckedDepth6)
+  of 7: runAccess(rank1UncheckedDepth7)
+  else: runAccess(rank1UncheckedDepth8)
 
 func `[]`*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, i: int64): uint64 =
   ## Alias for `access(rwm, i)`.
@@ -149,16 +165,30 @@ func rank*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, value: 
   rwm.checkPosition(pos)
   if rwm.n == 0 or not rwm.valueFits(value):
     return 0
-  var left = 0'i64
-  var right = pos
-  for level in 0..<rwm.bitWidth:
-    if ((value shr level) and 1'u64) == 0:
-      left -= rwm.levels[level].rank1Unchecked(left)
-      right -= rwm.levels[level].rank1Unchecked(right)
-    else:
-      left = rwm.zeroCounts[level] + rwm.levels[level].rank1Unchecked(left)
-      right = rwm.zeroCounts[level] + rwm.levels[level].rank1Unchecked(right)
-  result = right - left
+
+  template runRank(rankFn: untyped) =
+    block:
+      var left = 0'i64
+      var right = pos
+      for level in 0..<rwm.bitWidth:
+        if ((value shr level) and 1'u64) == 0:
+          left -= rankFn(rwm.levels[level], left)
+          right -= rankFn(rwm.levels[level], right)
+        else:
+          left = rwm.zeroCounts[level] + rankFn(rwm.levels[level], left)
+          right = rwm.zeroCounts[level] + rankFn(rwm.levels[level], right)
+      result = right - left
+
+  case int(rwm.levels[0].level)
+  of 0: runRank(rank1UncheckedDepth0)
+  of 1: runRank(rank1UncheckedDepth1)
+  of 2: runRank(rank1UncheckedDepth2)
+  of 3: runRank(rank1UncheckedDepth3)
+  of 4: runRank(rank1UncheckedDepth4)
+  of 5: runRank(rank1UncheckedDepth5)
+  of 6: runRank(rank1UncheckedDepth6)
+  of 7: runRank(rank1UncheckedDepth7)
+  else: runRank(rank1UncheckedDepth8)
 
 func occPosition*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, value: uint64,
                   pos: int64): int64 =
@@ -175,14 +205,27 @@ func occPosition*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, 
 
   # LSBからの安定分割を完了すると数値昇順になるため、右境界の
   # 最終写像位置が直接 `C[value] + Occ(value, pos)` になる。
-  var right = pos
-  for level in 0..<rwm.bitWidth:
-    let ones = rwm.levels[level].rank1Unchecked(right)
-    if ((value shr level) and 1'u64) == 0:
-      right -= ones
-    else:
-      right = rwm.zeroCounts[level] + ones
-  result = right
+  template runOccPosition(rankFn: untyped) =
+    block:
+      var right = pos
+      for level in 0..<rwm.bitWidth:
+        let ones = rankFn(rwm.levels[level], right)
+        if ((value shr level) and 1'u64) == 0:
+          right -= ones
+        else:
+          right = rwm.zeroCounts[level] + ones
+      result = right
+
+  case int(rwm.levels[0].level)
+  of 0: runOccPosition(rank1UncheckedDepth0)
+  of 1: runOccPosition(rank1UncheckedDepth1)
+  of 2: runOccPosition(rank1UncheckedDepth2)
+  of 3: runOccPosition(rank1UncheckedDepth3)
+  of 4: runOccPosition(rank1UncheckedDepth4)
+  of 5: runOccPosition(rank1UncheckedDepth5)
+  of 6: runOccPosition(rank1UncheckedDepth6)
+  of 7: runOccPosition(rank1UncheckedDepth7)
+  else: runOccPosition(rank1UncheckedDepth8)
 
 func rank*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, value: uint64,
            left, right: int64): int64 =
@@ -191,16 +234,29 @@ func rank*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, value: 
   if left == right or rwm.n == 0 or not rwm.valueFits(value):
     return 0
 
-  var lo = left
-  var hi = right
-  for level in 0..<rwm.bitWidth:
-    if ((value shr level) and 1'u64) == 0:
-      lo -= rwm.levels[level].rank1Unchecked(lo)
-      hi -= rwm.levels[level].rank1Unchecked(hi)
-    else:
-      lo = rwm.zeroCounts[level] + rwm.levels[level].rank1Unchecked(lo)
-      hi = rwm.zeroCounts[level] + rwm.levels[level].rank1Unchecked(hi)
-  result = hi - lo
+  template runRankRange(rankFn: untyped) =
+    block:
+      var lo = left
+      var hi = right
+      for level in 0..<rwm.bitWidth:
+        if ((value shr level) and 1'u64) == 0:
+          lo -= rankFn(rwm.levels[level], lo)
+          hi -= rankFn(rwm.levels[level], hi)
+        else:
+          lo = rwm.zeroCounts[level] + rankFn(rwm.levels[level], lo)
+          hi = rwm.zeroCounts[level] + rankFn(rwm.levels[level], hi)
+      result = hi - lo
+
+  case int(rwm.levels[0].level)
+  of 0: runRankRange(rank1UncheckedDepth0)
+  of 1: runRankRange(rank1UncheckedDepth1)
+  of 2: runRankRange(rank1UncheckedDepth2)
+  of 3: runRankRange(rank1UncheckedDepth3)
+  of 4: runRankRange(rank1UncheckedDepth4)
+  of 5: runRankRange(rank1UncheckedDepth5)
+  of 6: runRankRange(rank1UncheckedDepth6)
+  of 7: runRankRange(rank1UncheckedDepth7)
+  else: runRankRange(rank1UncheckedDepth8)
 
 func rankIncl*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, value: uint64,
                pos: int64): int64 =
@@ -212,25 +268,39 @@ func select*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, value
   ## Returns the position of the 0-based `k`-th occurrence, or `-1`.
   if k < 0 or rwm.n == 0 or not rwm.valueFits(value):
     return -1
-  var left = 0'i64
-  var right = rwm.n
-  for level in 0..<rwm.bitWidth:
-    if ((value shr level) and 1'u64) == 0:
-      left -= rwm.levels[level].rank1Unchecked(left)
-      right -= rwm.levels[level].rank1Unchecked(right)
-    else:
-      left = rwm.zeroCounts[level] + rwm.levels[level].rank1Unchecked(left)
-      right = rwm.zeroCounts[level] + rwm.levels[level].rank1Unchecked(right)
-  if k >= right - left:
-    return -1
 
-  var pos = left + k
-  for level in countdown(rwm.bitWidth - 1, 0):
-    if ((value shr level) and 1'u64) == 0:
-      pos = rwm.levels[level].select0(pos)
-    else:
-      pos = rwm.levels[level].select1(pos - rwm.zeroCounts[level])
-  result = pos
+  template runSelectForward(rankFn: untyped) =
+    block:
+      var left = 0'i64
+      var right = rwm.n
+      for level in 0..<rwm.bitWidth:
+        if ((value shr level) and 1'u64) == 0:
+          left -= rankFn(rwm.levels[level], left)
+          right -= rankFn(rwm.levels[level], right)
+        else:
+          left = rwm.zeroCounts[level] + rankFn(rwm.levels[level], left)
+          right = rwm.zeroCounts[level] + rankFn(rwm.levels[level], right)
+      if k >= right - left:
+        return -1
+
+      var pos = left + k
+      for level in countdown(rwm.bitWidth - 1, 0):
+        if ((value shr level) and 1'u64) == 0:
+          pos = rwm.levels[level].select0(pos)
+        else:
+          pos = rwm.levels[level].select1(pos - rwm.zeroCounts[level])
+      result = pos
+
+  case int(rwm.levels[0].level)
+  of 0: runSelectForward(rank1UncheckedDepth0)
+  of 1: runSelectForward(rank1UncheckedDepth1)
+  of 2: runSelectForward(rank1UncheckedDepth2)
+  of 3: runSelectForward(rank1UncheckedDepth3)
+  of 4: runSelectForward(rank1UncheckedDepth4)
+  of 5: runSelectForward(rank1UncheckedDepth5)
+  of 6: runSelectForward(rank1UncheckedDepth6)
+  of 7: runSelectForward(rank1UncheckedDepth7)
+  else: runSelectForward(rank1UncheckedDepth8)
 
 func selectNth*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, value: uint64,
                 nth: int64): int64 =
@@ -250,13 +320,13 @@ func remainingMask(bitWidth, level: int): uint64 {.inline.} =
     else: (1'u64 shl bitWidth) - 1'u64
   fullMask and not lowMask
 
-func countLessThanNode[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, level: int,
-                       left, right: int64, partial, value: uint64): int64 =
+func countLessThanNodeFixed[Depth: static[int],
+    W: ReversedWaveletMatrix | ReversedWaveletMatrixView](
+    rwm: W, level: int, left, right: int64,
+    partial, value: uint64): int64 =
   if left >= right:
     return 0
 
-  # All values below this node lie between partial and partial|remainingMask.
-  # These bounds let the LSB-first traversal accept or reject whole subtrees.
   if partial >= value:
     return 0
   if (partial or remainingMask(rwm.bitWidth, level)) < value:
@@ -264,16 +334,28 @@ func countLessThanNode[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm
   if level == rwm.bitWidth:
     return right - left
 
-  let leftOnes = rwm.levels[level].rank1Unchecked(left)
-  let rightOnes = rwm.levels[level].rank1Unchecked(right)
+  template rankAt(bits, position: untyped): untyped =
+    when Depth == 0: rank1UncheckedDepth0(bits, position)
+    elif Depth == 1: rank1UncheckedDepth1(bits, position)
+    elif Depth == 2: rank1UncheckedDepth2(bits, position)
+    elif Depth == 3: rank1UncheckedDepth3(bits, position)
+    elif Depth == 4: rank1UncheckedDepth4(bits, position)
+    elif Depth == 5: rank1UncheckedDepth5(bits, position)
+    elif Depth == 6: rank1UncheckedDepth6(bits, position)
+    elif Depth == 7: rank1UncheckedDepth7(bits, position)
+    else: rank1UncheckedDepth8(bits, position)
+
+  let leftOnes = rankAt(rwm.levels[level], left)
+  let rightOnes = rankAt(rwm.levels[level], right)
   let zeroLeft = left - leftOnes
   let zeroRight = right - rightOnes
-  result = rwm.countLessThanNode(level + 1, zeroLeft, zeroRight,
-    partial, value)
+  result = countLessThanNodeFixed[Depth](
+    rwm, level + 1, zeroLeft, zeroRight, partial, value)
 
   let oneLeft = rwm.zeroCounts[level] + leftOnes
   let oneRight = rwm.zeroCounts[level] + rightOnes
-  result += rwm.countLessThanNode(level + 1, oneLeft, oneRight,
+  result += countLessThanNodeFixed[Depth](
+    rwm, level + 1, oneLeft, oneRight,
     partial or (1'u64 shl level), value)
 
 func rankLessThan*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W, value: uint64,
@@ -288,7 +370,16 @@ func rankLessThan*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W,
     return 0
   if not rwm.valueFits(value):
     return pos
-  result = rwm.countLessThanNode(0, 0, pos, 0, value)
+  case int(rwm.levels[0].level)
+  of 0: result = countLessThanNodeFixed[0](rwm, 0, 0, pos, 0, value)
+  of 1: result = countLessThanNodeFixed[1](rwm, 0, 0, pos, 0, value)
+  of 2: result = countLessThanNodeFixed[2](rwm, 0, 0, pos, 0, value)
+  of 3: result = countLessThanNodeFixed[3](rwm, 0, 0, pos, 0, value)
+  of 4: result = countLessThanNodeFixed[4](rwm, 0, 0, pos, 0, value)
+  of 5: result = countLessThanNodeFixed[5](rwm, 0, 0, pos, 0, value)
+  of 6: result = countLessThanNodeFixed[6](rwm, 0, 0, pos, 0, value)
+  of 7: result = countLessThanNodeFixed[7](rwm, 0, 0, pos, 0, value)
+  else: result = countLessThanNodeFixed[8](rwm, 0, 0, pos, 0, value)
 
 iterator collectValueCountsItems*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W,
                                   left, right: int64): ValueCount =
@@ -296,24 +387,48 @@ iterator collectValueCountsItems*[W: ReversedWaveletMatrix | ReversedWaveletMatr
   ##
   ## 頻度は葉の区間長から求め、追加の走査は行いません。
   rwm.checkRange(left, right)
-  var stack: seq[TraversalNode] =
-    @[(level: 0, left: left, right: right, value: 0'u64)]
-  while stack.len > 0:
-    let node = stack.pop()
-    if node.left >= node.right:
-      continue
-    if node.level == rwm.bitWidth:
-      yield (value: node.value, frequency: node.right - node.left)
-      continue
+  if left < right:
+    template runTraversal(rankFn: untyped) =
+      block:
+        var stack: array[ReversedWaveletTraversalStackCapacity, TraversalNode]
+        var stackLen = 1
+        stack[0] = (level: 0, left: left, right: right, value: 0'u64)
+        while stackLen > 0:
+          dec stackLen
+          let node = stack[stackLen]
+          if node.left >= node.right:
+            continue
+          if node.level == rwm.bitWidth:
+            yield (value: node.value, frequency: node.right - node.left)
+            continue
 
-    let leftOnes = rwm.levels[node.level].rank1Unchecked(node.left)
-    let rightOnes = rwm.levels[node.level].rank1Unchecked(node.right)
-    let oneLeft = rwm.zeroCounts[node.level] + leftOnes
-    let oneRight = rwm.zeroCounts[node.level] + rightOnes
-    stack.add (level: node.level + 1, left: oneLeft, right: oneRight,
-      value: node.value or (1'u64 shl node.level))
-    stack.add (level: node.level + 1, left: node.left - leftOnes,
-      right: node.right - rightOnes, value: node.value)
+          let leftOnes = rankFn(rwm.levels[node.level], node.left)
+          let rightOnes = rankFn(rwm.levels[node.level], node.right)
+          let oneLeft = rwm.zeroCounts[node.level] + leftOnes
+          let oneRight = rwm.zeroCounts[node.level] + rightOnes
+          if oneLeft < oneRight:
+            stack[stackLen] = (
+              level: node.level + 1, left: oneLeft, right: oneRight,
+              value: node.value or (1'u64 shl node.level))
+            inc stackLen
+          let zeroLeft = node.left - leftOnes
+          let zeroRight = node.right - rightOnes
+          if zeroLeft < zeroRight:
+            stack[stackLen] = (
+              level: node.level + 1, left: zeroLeft, right: zeroRight,
+              value: node.value)
+            inc stackLen
+
+    case int(rwm.levels[0].level)
+    of 0: runTraversal(rank1UncheckedDepth0)
+    of 1: runTraversal(rank1UncheckedDepth1)
+    of 2: runTraversal(rank1UncheckedDepth2)
+    of 3: runTraversal(rank1UncheckedDepth3)
+    of 4: runTraversal(rank1UncheckedDepth4)
+    of 5: runTraversal(rank1UncheckedDepth5)
+    of 6: runTraversal(rank1UncheckedDepth6)
+    of 7: runTraversal(rank1UncheckedDepth7)
+    else: runTraversal(rank1UncheckedDepth8)
 
 iterator collectValueCountsItems*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W): ValueCount =
   ## 列全体の異なる値と頻度を内部探索順で逐次返します。
@@ -364,24 +479,48 @@ iterator collectDistinctValuesItems*[W: ReversedWaveletMatrix | ReversedWaveletM
   ##
   ## 頻度を計算せず、存在するノードだけを直接探索します。
   rwm.checkRange(left, right)
-  var stack: seq[TraversalNode] =
-    @[(level: 0, left: left, right: right, value: 0'u64)]
-  while stack.len > 0:
-    let node = stack.pop()
-    if node.left >= node.right:
-      continue
-    if node.level == rwm.bitWidth:
-      yield node.value
-      continue
+  if left < right:
+    template runTraversal(rankFn: untyped) =
+      block:
+        var stack: array[ReversedWaveletTraversalStackCapacity, TraversalNode]
+        var stackLen = 1
+        stack[0] = (level: 0, left: left, right: right, value: 0'u64)
+        while stackLen > 0:
+          dec stackLen
+          let node = stack[stackLen]
+          if node.left >= node.right:
+            continue
+          if node.level == rwm.bitWidth:
+            yield node.value
+            continue
 
-    let leftOnes = rwm.levels[node.level].rank1Unchecked(node.left)
-    let rightOnes = rwm.levels[node.level].rank1Unchecked(node.right)
-    let oneLeft = rwm.zeroCounts[node.level] + leftOnes
-    let oneRight = rwm.zeroCounts[node.level] + rightOnes
-    stack.add (level: node.level + 1, left: oneLeft, right: oneRight,
-      value: node.value or (1'u64 shl node.level))
-    stack.add (level: node.level + 1, left: node.left - leftOnes,
-      right: node.right - rightOnes, value: node.value)
+          let leftOnes = rankFn(rwm.levels[node.level], node.left)
+          let rightOnes = rankFn(rwm.levels[node.level], node.right)
+          let oneLeft = rwm.zeroCounts[node.level] + leftOnes
+          let oneRight = rwm.zeroCounts[node.level] + rightOnes
+          if oneLeft < oneRight:
+            stack[stackLen] = (
+              level: node.level + 1, left: oneLeft, right: oneRight,
+              value: node.value or (1'u64 shl node.level))
+            inc stackLen
+          let zeroLeft = node.left - leftOnes
+          let zeroRight = node.right - rightOnes
+          if zeroLeft < zeroRight:
+            stack[stackLen] = (
+              level: node.level + 1, left: zeroLeft, right: zeroRight,
+              value: node.value)
+            inc stackLen
+
+    case int(rwm.levels[0].level)
+    of 0: runTraversal(rank1UncheckedDepth0)
+    of 1: runTraversal(rank1UncheckedDepth1)
+    of 2: runTraversal(rank1UncheckedDepth2)
+    of 3: runTraversal(rank1UncheckedDepth3)
+    of 4: runTraversal(rank1UncheckedDepth4)
+    of 5: runTraversal(rank1UncheckedDepth5)
+    of 6: runTraversal(rank1UncheckedDepth6)
+    of 7: runTraversal(rank1UncheckedDepth7)
+    else: runTraversal(rank1UncheckedDepth8)
 
 iterator collectDistinctValuesItems*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W): uint64 =
   ## 列全体の異なる値を内部探索順で逐次返します。
