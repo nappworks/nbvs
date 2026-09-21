@@ -1,0 +1,11 @@
+query,legacy_ns,fixed_depth_ns,speedup
+wm_rank_range,970863,829954,1.1698
+wm_rank_pair,1155774,1029967,1.1221
+wm_count_less_than,908559,911759,0.9965
+wm_quantile,959362,824253,1.1639
+rwm_access,579437,590038,0.9820
+rwm_rank,719746,641642,1.1217
+rwm_rank_range,980164,839754,1.1672
+rwm_select,1399690,1288184,1.0866
+rwm_occ_position,629341,549335,1.1456
+rwm_rank_less_than,3609334,3394820,1.0632

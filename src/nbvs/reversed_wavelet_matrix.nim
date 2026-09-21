@@ -350,12 +350,12 @@ func countLessThanNodeFixed[Depth: static[int],
   let rightOnes = rankAt(rwm.levels[level], right)
   let zeroLeft = left - leftOnes
   let zeroRight = right - rightOnes
-  result = countLessThanNodeFixed[Depth](
+  result = countLessThanNodeFixed[Depth, W](
     rwm, level + 1, zeroLeft, zeroRight, partial, value)
 
   let oneLeft = rwm.zeroCounts[level] + leftOnes
   let oneRight = rwm.zeroCounts[level] + rightOnes
-  result += countLessThanNodeFixed[Depth](
+  result += countLessThanNodeFixed[Depth, W](
     rwm, level + 1, oneLeft, oneRight,
     partial or (1'u64 shl level), value)
 
@@ -372,15 +372,15 @@ func rankLessThan*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W,
   if not rwm.valueFits(value):
     return pos
   case int(rwm.levels[0].level)
-  of 0: result = countLessThanNodeFixed[0](rwm, 0, 0, pos, 0, value)
-  of 1: result = countLessThanNodeFixed[1](rwm, 0, 0, pos, 0, value)
-  of 2: result = countLessThanNodeFixed[2](rwm, 0, 0, pos, 0, value)
-  of 3: result = countLessThanNodeFixed[3](rwm, 0, 0, pos, 0, value)
-  of 4: result = countLessThanNodeFixed[4](rwm, 0, 0, pos, 0, value)
-  of 5: result = countLessThanNodeFixed[5](rwm, 0, 0, pos, 0, value)
-  of 6: result = countLessThanNodeFixed[6](rwm, 0, 0, pos, 0, value)
-  of 7: result = countLessThanNodeFixed[7](rwm, 0, 0, pos, 0, value)
-  else: result = countLessThanNodeFixed[8](rwm, 0, 0, pos, 0, value)
+  of 0: result = countLessThanNodeFixed[0, W](rwm, 0, 0, pos, 0, value)
+  of 1: result = countLessThanNodeFixed[1, W](rwm, 0, 0, pos, 0, value)
+  of 2: result = countLessThanNodeFixed[2, W](rwm, 0, 0, pos, 0, value)
+  of 3: result = countLessThanNodeFixed[3, W](rwm, 0, 0, pos, 0, value)
+  of 4: result = countLessThanNodeFixed[4, W](rwm, 0, 0, pos, 0, value)
+  of 5: result = countLessThanNodeFixed[5, W](rwm, 0, 0, pos, 0, value)
+  of 6: result = countLessThanNodeFixed[6, W](rwm, 0, 0, pos, 0, value)
+  of 7: result = countLessThanNodeFixed[7, W](rwm, 0, 0, pos, 0, value)
+  else: result = countLessThanNodeFixed[8, W](rwm, 0, 0, pos, 0, value)
 
 iterator collectValueCountsItems*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](rwm: W,
                                   left, right: int64): ValueCount =
