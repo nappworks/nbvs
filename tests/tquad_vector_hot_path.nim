@@ -31,6 +31,19 @@ block fusedAccessRankAndRankPair:
       doAssert pair.leftRank == qv.rankUnchecked(symbol, bounds[0])
       doAssert pair.rightRank == qv.rankUnchecked(symbol, bounds[1])
 
+  for bounds in [(0'i64, 0'i64), (0'i64, 31'i64), (17'i64, 31'i64),
+                 (31'i64, 32'i64), (100'i64, 500'i64),
+                 (500'i64, 513'i64), (4090'i64, 4100'i64),
+                 (8192'i64, 9001'i64)]:
+    let leftRanks = qv.rankAllUnchecked(bounds[0])
+    let pair = qv.rankAllPairUnchecked(bounds[0], bounds[1])
+    for symbol in 0..3:
+      doAssert leftRanks[symbol] == qv.rankUnchecked(symbol, bounds[0])
+      doAssert pair.leftRanks[symbol] ==
+        qv.rankUnchecked(symbol, bounds[0])
+      doAssert pair.rightRanks[symbol] ==
+        qv.rankUnchecked(symbol, bounds[1])
+
 block uncheckedSelectMatchesPublicApi:
   const N = 262_144
   var qv = genQuadVector(N)
