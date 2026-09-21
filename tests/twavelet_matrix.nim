@@ -255,6 +255,55 @@ block fullWidth:
       doAssert wm.occPosition(value, int64(pos)) ==
         naiveOccPosition(xs, value, pos)
 
+block fixedDepthValueEnumeration:
+  let zeroWidth = genWaveletMatrix(@[0'u64, 0, 0, 0], 0)
+  doAssert zeroWidth.collectValueCounts() ==
+    @[(value: 0'u64, frequency: 4'i64)]
+  doAssert zeroWidth.collectValueCounts(1, 3) ==
+    @[(value: 0'u64, frequency: 2'i64)]
+  doAssert zeroWidth.collectValueCountFinalIntervals(1, 3) ==
+    @[(value: 0'u64, frequency: 2'i64, left: 1'i64, right: 3'i64)]
+
+  for item in [
+      (length: 257, expectedDepth: 0),
+      (length: 4_097, expectedDepth: 1),
+      (length: 65_536, expectedDepth: 2),
+      (length: 65_537, expectedDepth: 3)]:
+    var xs = newSeq[uint64](item.length)
+    for i in 0..<xs.len:
+      xs[i] = uint64((i * 37 + i div 11) mod 257)
+
+    let wm = genWaveletMatrix(xs, 9)
+    doAssert wm.bitWidth == 9
+    doAssert int(wm.levels[0].level) == item.expectedDepth
+
+    let left = min(13, xs.len)
+    let right = max(left, xs.len - min(17, xs.len))
+    var expected = newSeq[int64](257)
+    for i in left..<right:
+      inc expected[int(xs[i])]
+
+    var collected: seq[ValueCount]
+    var intervals: seq[ValueCountFinalInterval]
+    for value in wm.collectValueCountsItems(int64(left), int64(right)):
+      collected.add value
+    for value in wm.collectValueCountFinalIntervalsItems(
+        int64(left), int64(right)):
+      intervals.add value
+
+    doAssert collected.len == intervals.len
+    var expectedValue = 0
+    for i, value in expected:
+      if value > 0:
+        doAssert collected[expectedValue] ==
+          (value: uint64(i), frequency: value)
+        doAssert intervals[expectedValue].value == uint64(i)
+        doAssert intervals[expectedValue].frequency == value
+        doAssert intervals[expectedValue].right -
+          intervals[expectedValue].left == value
+        inc expectedValue
+    doAssert expectedValue == collected.len
+
 block valueEnumerations:
   let cases = [
     @[1'u64, 3, 4, 1],
