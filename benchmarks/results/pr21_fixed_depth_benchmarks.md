@@ -50,6 +50,49 @@ QWM は `quantile` と `full_value_counts` / `range_value_counts` で大きく�
 - [QWM pair/all-rank scalar](qwm_pair_enumeration_ab_scalar.csv)
 - [QWM pair/all-rank SIMD](qwm_pair_enumeration_ab_simd.csv)
 
+## QWM 回帰修正後の再測定
+
+QWMのquery shape別dispatchを見直し、`rankPair` と `select` は近い2端点が同一
+512-symbol blockにある場合だけ `rankPairUnchecked` の差分scanを使い、それ以外は
+individual rankへfallbackするようにしました。`countLessThan` は対象symbol数が0〜2の
+場合にpair path、3の場合に現行のall-rank pathを使います。`quantile`、
+`full_value_counts`、`range_value_counts` はall-rank pathを維持しています。
+
+Heap `QuadVector` と mmap `QuadVectorView` は共通のQWM generic traversalを通るため、
+同じdispatch方針が両方へ適用されます。persistence layout、既存public semantics、
+WM/RWMの実装は変更していません。
+
+測定は修正後バイナリを各backend 3 process trials実行し、中央値を保存しています。
+CPU affinityはcore 0、Nim 2.2.10、Linux amd64、release、ARC、SIMDはAVX2/BMI2です。
+ベンチマーク対象HEAD SHAは、結果を確定したcommitのSHAに更新します。
+
+### 優先性能ゲート
+
+| backend / case | query | 修正前 speedup | 修正後 speedup | 判定 |
+|:---|:---|---:|---:|:---:|
+| scalar / 1,048,576 rows / card=256 | countLessThan | 0.8783 | 1.3089 | 非回帰 |
+| scalar / 1,048,576 rows / card=256 | rankPair | 0.8942 | 1.2707 | 非回帰 |
+| SIMD / 1,048,576 rows / card=256 | countLessThan | 0.7525 | 1.1536 | 非回帰 |
+| SIMD / 1,048,576 rows / card=65,536 | countLessThan | 0.7125 | 1.0614 | 非回帰 |
+| SIMD / 1,048,576 rows / card=65,536 | rankPair | 0.8118 | 1.2769 | 非回帰 |
+| SIMD / 1,048,576 rows / card=65,536 | select | 0.8784 | 1.3064 | 非回帰 |
+
+### 修正後の全体集計
+
+| backend | ケース数 | speedup 平均 | 最小 | 最大 | 改善/同等 | 回帰 |
+|:---|---:|---:|---:|---:|---:|---:|
+| QWM scalar | 28 | 1.4206 | 0.7382 | 2.4993 | 24 | 4 |
+| QWM SIMD | 28 | 1.1951 | 0.8658 | 1.9566 | 21 | 7 |
+
+小さい入力の `rank_range` / `select` などにはCPU負荷とquery shapeに依存する小さな
+揺れが残りますが、優先性能ゲートはすべて非回帰です。all-rank pathを維持した
+`quantile`、`full_value_counts`、`range_value_counts` の大幅改善も保持しています。
+
+修正後CSV:
+
+- [QWM scalar](qwm_pair_enumeration_ab_scalar.csv)
+- [QWM SIMD](qwm_pair_enumeration_ab_simd.csv)
+
 ## Guardrail 結果
 
 既存の WM fixed-depth A/B と WM/QWM end-to-end も同じ環境で再測定しました。

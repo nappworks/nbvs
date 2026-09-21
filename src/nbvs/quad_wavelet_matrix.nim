@@ -342,7 +342,7 @@ func accessRank*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
   wm.accessRankUnchecked(pos)
 
 func rank*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
-    wm: W, value: uint64, pos: int64): int64 =
+    wm: W, value: uint64, pos: int64): int64 {.inline.} =
   ## `[0,pos)`に含まれるvalueの出現数です。
   wm.checkPosition(pos)
   if wm.n == 0 or not wm.valueFits(value):
@@ -355,13 +355,12 @@ func rank*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
   for level in 0..<wm.levelCount:
     let symbol = int((value shr wm.levelShift(level)) and 3'u64)
     let start = wm.bucketStarts[level][symbol]
-    let ranks = wm.levels[level].rankPairUnchecked(symbol, left, right)
-    left = start + ranks.leftRank
-    right = start + ranks.rightRank
+    left = start + wm.levels[level].rankUnchecked(symbol, left)
+    right = start + wm.levels[level].rankUnchecked(symbol, right)
   result = right - left
 
 func rank*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
-    wm: W, value: uint64, left, right: int64): int64 =
+    wm: W, value: uint64, left, right: int64): int64 {.inline.} =
   ## `[left,right)`に含まれるvalueの出現数です。
   wm.checkRange(left, right)
   if left == right or wm.n == 0 or not wm.valueFits(value):
@@ -374,14 +373,13 @@ func rank*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
   for level in 0..<wm.levelCount:
     let symbol = int((value shr wm.levelShift(level)) and 3'u64)
     let start = wm.bucketStarts[level][symbol]
-    let ranks = wm.levels[level].rankPairUnchecked(symbol, lo, hi)
-    lo = start + ranks.leftRank
-    hi = start + ranks.rightRank
+    lo = start + wm.levels[level].rankUnchecked(symbol, lo)
+    hi = start + wm.levels[level].rankUnchecked(symbol, hi)
   result = hi - lo
 
 func rankPair*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
     wm: W, value: uint64, left, right: int64):
-    tuple[leftRank, rightRank: int64] =
+    tuple[leftRank, rightRank: int64] {.inline.} =
   ## `rank(value,left)`と`rank(value,right)`を1 traversalで返します。
   wm.checkRange(left, right)
   if wm.n == 0 or not wm.valueFits(value):
@@ -397,11 +395,26 @@ func rankPair*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
   for level in 0..<wm.levelCount:
     let symbol = int((value shr wm.levelShift(level)) and 3'u64)
     let bucket = wm.bucketStarts[level][symbol]
-    let startLeft = wm.levels[level].rankPairUnchecked(
-      symbol, startPos, leftPos)
-    startPos = bucket + startLeft.leftRank
-    leftPos = bucket + startLeft.rightRank
-    rightPos = bucket + wm.levels[level].rankUnchecked(symbol, rightPos)
+    # 近い2端点が同一blockにある場合だけpairの差分scanを使う。
+    # それ以外はindividual rankを選び、広い区間でのpair固定費を避ける。
+    if (leftPos div QuadRankBlockSize) ==
+        ((rightPos - 1) div QuadRankBlockSize):
+      let leftRight = wm.levels[level].rankPairUnchecked(
+        symbol, leftPos, rightPos)
+      startPos = bucket + wm.levels[level].rankUnchecked(symbol, startPos)
+      leftPos = bucket + leftRight.leftRank
+      rightPos = bucket + leftRight.rightRank
+    elif (startPos div QuadRankBlockSize) ==
+        ((leftPos - 1) div QuadRankBlockSize):
+      let startLeft = wm.levels[level].rankPairUnchecked(
+        symbol, startPos, leftPos)
+      startPos = bucket + startLeft.leftRank
+      leftPos = bucket + startLeft.rightRank
+      rightPos = bucket + wm.levels[level].rankUnchecked(symbol, rightPos)
+    else:
+      startPos = bucket + wm.levels[level].rankUnchecked(symbol, startPos)
+      leftPos = bucket + wm.levels[level].rankUnchecked(symbol, leftPos)
+      rightPos = bucket + wm.levels[level].rankUnchecked(symbol, rightPos)
   result.leftRank = leftPos - startPos
   result.rightRank = rightPos - startPos
 
@@ -411,7 +424,7 @@ func rankIncl*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
   wm.rank(value, pos + 1)
 
 func select*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
-    wm: W, value: uint64, k: int64): int64 =
+    wm: W, value: uint64, k: int64): int64 {.inline.} =
   ## 0-basedでk番目のvalueの元配列positionを返します。なければ`-1`です。
   if k < 0 or wm.n == 0 or not wm.valueFits(value):
     return -1
@@ -423,9 +436,14 @@ func select*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
   for level in 0..<wm.levelCount:
     let symbol = int((value shr wm.levelShift(level)) and 3'u64)
     let start = wm.bucketStarts[level][symbol]
-    let ranks = wm.levels[level].rankPairUnchecked(symbol, left, right)
-    left = start + ranks.leftRank
-    right = start + ranks.rightRank
+    if (left div QuadRankBlockSize) ==
+        ((right - 1) div QuadRankBlockSize):
+      let ranks = wm.levels[level].rankPairUnchecked(symbol, left, right)
+      left = start + ranks.leftRank
+      right = start + ranks.rightRank
+    else:
+      left = start + wm.levels[level].rankUnchecked(symbol, left)
+      right = start + wm.levels[level].rankUnchecked(symbol, right)
   if k >= right - left:
     return -1
 
@@ -472,7 +490,7 @@ func quantile*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
     hi = start + ranks.rightRanks[symbol]
 
 func countLessThan*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
-    wm: W, left, right: int64, value: uint64): int64 =
+    wm: W, left, right: int64, value: uint64): int64 {.inline.} =
   ## `[left,right)`内のvalue未満の個数です。
   wm.checkRange(left, right)
   if left == right or value == 0:
@@ -487,12 +505,35 @@ func countLessThan*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
   var hi = right
   for level in 0..<wm.levelCount:
     let target = int((value shr wm.levelShift(level)) and 3'u64)
-    let ranks = wm.levels[level].rankAllPairUnchecked(lo, hi)
-    for symbol in 0..<target:
-      result += ranks.rightRanks[symbol] - ranks.leftRanks[symbol]
+    var targetLeft, targetRight: int64
+    case target
+    of 0:
+      let ranks = wm.levels[level].rankPairUnchecked(0, lo, hi)
+      targetLeft = ranks.leftRank
+      targetRight = ranks.rightRank
+    of 1:
+      let lowerRanks = wm.levels[level].rankPairUnchecked(0, lo, hi)
+      result += lowerRanks.rightRank - lowerRanks.leftRank
+      let targetRanks = wm.levels[level].rankPairUnchecked(1, lo, hi)
+      targetLeft = targetRanks.leftRank
+      targetRight = targetRanks.rightRank
+    of 2:
+      let lowerRanks = wm.levels[level].rankPairUnchecked(0, lo, hi)
+      result += lowerRanks.rightRank - lowerRanks.leftRank
+      let middleRanks = wm.levels[level].rankPairUnchecked(1, lo, hi)
+      result += middleRanks.rightRank - middleRanks.leftRank
+      let targetRanks = wm.levels[level].rankPairUnchecked(2, lo, hi)
+      targetLeft = targetRanks.leftRank
+      targetRight = targetRanks.rightRank
+    else:
+      let ranks = wm.levels[level].rankAllPairUnchecked(lo, hi)
+      for symbol in 0..<target:
+        result += ranks.rightRanks[symbol] - ranks.leftRanks[symbol]
+      targetLeft = ranks.leftRanks[target]
+      targetRight = ranks.rightRanks[target]
     let start = wm.bucketStarts[level][target]
-    lo = start + ranks.leftRanks[target]
-    hi = start + ranks.rightRanks[target]
+    lo = start + targetLeft
+    hi = start + targetRight
 
 func countLessThan*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
     wm: W, value: uint64, pos: int64): int64 =
