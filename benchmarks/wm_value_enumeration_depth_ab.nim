@@ -76,13 +76,13 @@ proc currentIntervalsChecksum(wm: WaveletMatrix, left, right: int64): uint64 =
 proc legacyRangeChecksum(wm: WaveletMatrix): uint64 =
   for probe in 0..<rangeProbeCount:
     let left = int64((probe * 977) mod max(1, int(wm.n) - rangeWidth))
-    let right = min(wm.n, left + rangeWidth)
+    let right = min(wm.n, left + int64(rangeWidth))
     result = result xor wm.legacyChecksum(left, right, true)
 
 proc currentRangeChecksum(wm: WaveletMatrix): uint64 =
   for probe in 0..<rangeProbeCount:
     let left = int64((probe * 977) mod max(1, int(wm.n) - rangeWidth))
-    let right = min(wm.n, left + rangeWidth)
+    let right = min(wm.n, left + int64(rangeWidth))
     result = result xor wm.currentIntervalsChecksum(left, right)
 
 func median(samples: var seq[int64]): int64 =
