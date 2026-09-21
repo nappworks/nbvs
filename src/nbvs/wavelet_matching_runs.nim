@@ -21,6 +21,7 @@ type
 const
   HybridProbeChecks = 96
   HybridLiftSpan = 32'i64
+  BitRunTraversalStackCapacity = 66
 
 func valueFits(bitWidth: int, value: uint64): bool {.inline.} =
   if bitWidth == 0:
@@ -29,6 +30,40 @@ func valueFits(bitWidth: int, value: uint64): bool {.inline.} =
     true
   else:
     (value shr bitWidth) == 0
+
+func terminalRangeForValue[
+    W: WaveletMatrix | WaveletMatrixView](
+    wm: W, value: uint64, left, right: int64):
+    tuple[left, right: int64] =
+  result.left = left
+  result.right = right
+  if wm.bitWidth == 0:
+    return
+
+  template runTerminalRange(rankFn: untyped) =
+    block:
+      for level in 0..<wm.bitWidth:
+        let shift = wm.bitWidth - level - 1
+        let targetOne = ((value shr shift) and 1'u64) != 0
+        let leftOnes = rankFn(wm.levels[level], result.left)
+        let rightOnes = rankFn(wm.levels[level], result.right)
+        if targetOne:
+          result.left = wm.zeroCounts[level] + leftOnes
+          result.right = wm.zeroCounts[level] + rightOnes
+        else:
+          result.left -= leftOnes
+          result.right -= rightOnes
+
+  case int(wm.levels[0].level)
+  of 0: runTerminalRange(rank1UncheckedDepth0)
+  of 1: runTerminalRange(rank1UncheckedDepth1)
+  of 2: runTerminalRange(rank1UncheckedDepth2)
+  of 3: runTerminalRange(rank1UncheckedDepth3)
+  of 4: runTerminalRange(rank1UncheckedDepth4)
+  of 5: runTerminalRange(rank1UncheckedDepth5)
+  of 6: runTerminalRange(rank1UncheckedDepth6)
+  of 7: runTerminalRange(rank1UncheckedDepth7)
+  else: runTerminalRange(rank1UncheckedDepth8)
 
 func parentInterval[W: WaveletMatrix | WaveletMatrixView](
     wm: W, value: uint64, node: ReverseRunNode):
@@ -112,37 +147,55 @@ iterator bitRunsItems*[B: SuccinctBitVector | SuccinctBitVectorView](
   if left < 0 or left > right or right > bits.lenOfBits:
     raise newException(IndexDefect, "range out of bounds")
   if left < right:
-    var stack: seq[MatchingRun] = @[(left: left, right: right)]
-    var pending = false
-    var pendingLeft = 0'i64
-    var pendingRight = 0'i64
+    template runBitRuns(rankFn: untyped) =
+      block:
+        var stack: array[BitRunTraversalStackCapacity, MatchingRun]
+        var stackLen = 1
+        stack[0] = (left: left, right: right)
+        var pending = false
+        var pendingLeft = 0'i64
+        var pendingRight = 0'i64
 
-    while stack.len > 0:
-      let node = stack.pop()
-      let ones = bits.rank1Unchecked(node.right) - bits.rank1Unchecked(node.left)
-      let length = node.right - node.left
-      let matching = if targetOne: ones else: length - ones
+        while stackLen > 0:
+          dec stackLen
+          let node = stack[stackLen]
+          let ones = rankFn(bits, node.right) - rankFn(bits, node.left)
+          let length = node.right - node.left
+          let matching = if targetOne: ones else: length - ones
 
-      if matching == 0:
-        continue
+          if matching == 0:
+            continue
 
-      if matching == length:
-        if pending and pendingRight == node.left:
-          pendingRight = node.right
-        else:
-          if pending:
-            yield (left: pendingLeft, right: pendingRight)
-          pending = true
-          pendingLeft = node.left
-          pendingRight = node.right
-        continue
+          if matching == length:
+            if pending and pendingRight == node.left:
+              pendingRight = node.right
+            else:
+              if pending:
+                yield (left: pendingLeft, right: pendingRight)
+              pending = true
+              pendingLeft = node.left
+              pendingRight = node.right
+            continue
 
-      let middle = node.left + (length shr 1)
-      stack.add (left: middle, right: node.right)
-      stack.add (left: node.left, right: middle)
+          let middle = node.left + (length shr 1)
+          stack[stackLen] = (left: middle, right: node.right)
+          inc stackLen
+          stack[stackLen] = (left: node.left, right: middle)
+          inc stackLen
 
-    if pending:
-      yield (left: pendingLeft, right: pendingRight)
+        if pending:
+          yield (left: pendingLeft, right: pendingRight)
+
+    case int(bits.level)
+    of 0: runBitRuns(rank1UncheckedDepth0)
+    of 1: runBitRuns(rank1UncheckedDepth1)
+    of 2: runBitRuns(rank1UncheckedDepth2)
+    of 3: runBitRuns(rank1UncheckedDepth3)
+    of 4: runBitRuns(rank1UncheckedDepth4)
+    of 5: runBitRuns(rank1UncheckedDepth5)
+    of 6: runBitRuns(rank1UncheckedDepth6)
+    of 7: runBitRuns(rank1UncheckedDepth7)
+    else: runBitRuns(rank1UncheckedDepth8)
 
 iterator bitRunsItems*[B: SuccinctBitVector | SuccinctBitVectorView](
     bits: B, targetOne: bool): MatchingRun =
@@ -178,21 +231,9 @@ iterator matchingRunsItems*[W: WaveletMatrix | WaveletMatrixView](
     raise newException(IndexDefect, "range out of bounds")
 
   if left < right and wm.n > 0 and valueFits(wm.bitWidth, value):
-    var terminalLeft = left
-    var terminalRight = right
-
-    # 所有型のlevelをletへコピーせず、内部seqの複製を避ける。
-    for level in 0..<wm.bitWidth:
-      let shift = wm.bitWidth - level - 1
-      let targetOne = ((value shr shift) and 1'u64) != 0
-      let leftOnes = wm.levels[level].rank1Unchecked(terminalLeft)
-      let rightOnes = wm.levels[level].rank1Unchecked(terminalRight)
-      if targetOne:
-        terminalLeft = wm.zeroCounts[level] + leftOnes
-        terminalRight = wm.zeroCounts[level] + rightOnes
-      else:
-        terminalLeft -= leftOnes
-        terminalRight -= rightOnes
+    let terminalRange = wm.terminalRangeForValue(value, left, right)
+    let terminalLeft = terminalRange.left
+    let terminalRight = terminalRange.right
 
     if terminalLeft < terminalRight:
       if wm.preferSequentialCursor(value, terminalLeft, terminalRight):
