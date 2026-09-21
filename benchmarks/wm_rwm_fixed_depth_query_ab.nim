@@ -116,6 +116,45 @@ func legacyRwmRankRange(rwm: ReversedWaveletMatrix, value: uint64,
       hi = rwm.zeroCounts[level] + rwm.levels[level].rank1Unchecked(hi)
   hi - lo
 
+func remainingMask(bitWidth, level: int): uint64 {.inline.} =
+  let lowMask =
+    if level == 0: 0'u64
+    elif level >= 64: uint64.high
+    else: (1'u64 shl level) - 1'u64
+  let fullMask =
+    if bitWidth == 64: uint64.high
+    else: (1'u64 shl bitWidth) - 1'u64
+  fullMask and not lowMask
+
+func legacyRwmCountLessThanNode(rwm: ReversedWaveletMatrix, level: int,
+    left, right: int64, partial, value: uint64): int64 =
+  if left >= right:
+    return 0
+  if partial >= value:
+    return 0
+  if (partial or remainingMask(rwm.bitWidth, level)) < value:
+    return right - left
+  if level == rwm.bitWidth:
+    return right - left
+
+  let leftOnes = rwm.levels[level].rank1Unchecked(left)
+  let rightOnes = rwm.levels[level].rank1Unchecked(right)
+  let zeroLeft = left - leftOnes
+  let zeroRight = right - rightOnes
+  result = legacyRwmCountLessThanNode(
+    rwm, level + 1, zeroLeft, zeroRight, partial, value)
+  let oneLeft = rwm.zeroCounts[level] + leftOnes
+  let oneRight = rwm.zeroCounts[level] + rightOnes
+  result += legacyRwmCountLessThanNode(
+    rwm, level + 1, oneLeft, oneRight,
+    partial or (1'u64 shl level), value)
+
+func legacyRwmRankLessThan(rwm: ReversedWaveletMatrix,
+    value: uint64, pos: int64): int64 =
+  if pos == 0 or value == 0:
+    return 0
+  legacyRwmCountLessThanNode(rwm, 0, 0, pos, 0, value)
+
 func legacyRwmOccPosition(rwm: ReversedWaveletMatrix, value: uint64,
     pos: int64): int64 =
   result = pos
@@ -182,6 +221,8 @@ proc main() =
       rwm.rank(value, left, right)
     doAssert legacyRwmOccPosition(rwm, value, position) ==
       rwm.occPosition(value, position)
+    doAssert legacyRwmRankLessThan(rwm, value, position) ==
+      rwm.rankLessThan(value, position)
 
   echo "query,legacy_ns,fixed_depth_ns,speedup"
 
@@ -269,6 +310,18 @@ proc main() =
       for position in positions:
         let value = values[int(position)]
         sink = sink xor uint64(rwm.occPosition(value, position)))))
+
+  let lessThanPositions = positions[0..<128]
+  emit("rwm_rank_less_than", measurePair(
+    (block:
+      for position in lessThanPositions:
+        let value = values[int(position)]
+        sink = sink xor uint64(legacyRwmRankLessThan(
+          rwm, value, position))),
+    (block:
+      for position in lessThanPositions:
+        let value = values[int(position)]
+        sink = sink xor uint64(rwm.rankLessThan(value, position)))))
 
   stderr.writeLine("sink=", sink)
 
