@@ -17,7 +17,6 @@ type
 
   TraversalNode = tuple[level: int, left, right: int64, value: uint64]
 
-const WaveletTraversalStackCapacity = 66
 
   WaveletMatrix* = object
     ## Rank/select-capable representation of a `uint64` sequence.
@@ -32,6 +31,8 @@ const WaveletTraversalStackCapacity = 66
     bitWidth*: int
     levels*: ExternalSpan[SuccinctBitVectorView]
     zeroCounts*: ExternalSpan[int64]
+
+const WaveletTraversalStackCapacity = 66
 
 func initWaveletMatrixView*(n: int64, bitWidth: int,
     levels: ptr UncheckedArray[SuccinctBitVectorView], levelCount: int,
