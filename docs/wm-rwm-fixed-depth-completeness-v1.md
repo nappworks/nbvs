@@ -186,11 +186,13 @@ benchmarks/wm_rwm_fixed_depth_query_ab.nim
 同一processで比較:
 
 - WM range rank
+- WM rankPair
 - WM countLessThan
 - WM quantile
 - RWM access
 - RWM rank
 - RWM range rank
+- RWM select
 - RWM occPosition
 - RWM rankLessThan
 
