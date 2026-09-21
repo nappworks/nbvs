@@ -618,6 +618,43 @@ func accessRank*(qv: QuadVector, pos: int64):
   qv.requireBuilt()
   result = qv.accessRankUnchecked(pos)
 
+func rankAllUnchecked*(qv: QuadVector, pos: int64):
+    array[4, int64] {.inline.} =
+  ## 4 symbolすべての `rank(symbol, pos)` を1回のmetadata/tail走査で返します。
+  if pos == qv.lenOfSymbols:
+    return qv.totalCounts
+
+  let superBlock = pos shr QuadRankSuperBlockShift
+  let offsetInSuper = pos and (QuadRankSuperBlockSize - 1'i64)
+  let blockIndex = offsetInSuper shr QuadRankBlockShift
+  for symbol in 0..3:
+    result[symbol] = qv.rankSuperAt(superBlock, symbol)
+    if blockIndex > 0:
+      result[symbol] += qv.rankBlockAt(superBlock, blockIndex, symbol)
+
+  let blockStart = pos and not (QuadRankBlockSize - 1'i64)
+  let tail = qv.countSymbolsRange(blockStart, pos)
+  result.addCounts(tail)
+
+func rankAllPairUnchecked*(qv: QuadVector, left, right: int64):
+    tuple[leftRanks, rightRanks: array[4, int64]] {.inline.} =
+  ## 4 symbolすべてについてleft/right rankを同時に返します。
+  if left == right:
+    result.leftRanks = qv.rankAllUnchecked(left)
+    result.rightRanks = result.leftRanks
+    return
+
+  let leftBlock = left shr QuadRankBlockShift
+  let rightBlock = (right - 1'i64) shr QuadRankBlockShift
+  if leftBlock == rightBlock:
+    result.leftRanks = qv.rankAllUnchecked(left)
+    let delta = qv.countSymbolsRange(left, right)
+    result.rightRanks = result.leftRanks
+    result.rightRanks.addCounts(delta)
+  else:
+    result.leftRanks = qv.rankAllUnchecked(left)
+    result.rightRanks = qv.rankAllUnchecked(right)
+
 func rankPairUnchecked*(qv: QuadVector, symbol: int,
                         left, right: int64):
     tuple[leftRank, rightRank: int64] {.inline.} =
