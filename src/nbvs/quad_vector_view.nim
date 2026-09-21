@@ -416,6 +416,58 @@ else:
                          startPos, endPos, occurrence: int64): int64 {.inline.} =
     qv.selectSymbolRangeScalar(symbol, startPos, endPos, occurrence)
 
+func countSymbolBetween(qv: QuadVectorView, symbol: int,
+                        startPos, endPos: int64): int64 {.inline.} =
+  ## 任意の `[startPos,endPos)` を1 symbolだけ数えます。
+  if endPos <= startPos:
+    return 0
+
+  var cursor = startPos
+  let startLane = int(cursor and 31'i64)
+  if startLane != 0:
+    let wordStart = cursor and not 31'i64
+    let wordEnd = min(endPos, wordStart + 32'i64)
+    let loMask = validLaneMask(startLane)
+    let hiMask = validLaneMask(int(wordEnd - wordStart))
+    let matches = matchingLaneMask(qv.data.data[int(wordStart shr 5)], symbol)
+    result += int64(countSetBits(matches and hiMask and not loMask))
+    cursor = wordEnd
+
+  let alignedEnd = endPos and not 31'i64
+  if cursor < alignedEnd:
+    result += qv.countSymbolRange(symbol, cursor, alignedEnd)
+    cursor = alignedEnd
+
+  if cursor < endPos:
+    let matches = matchingLaneMask(qv.data.data[int(cursor shr 5)], symbol) and
+      validLaneMask(int(endPos - cursor))
+    result += int64(countSetBits(matches))
+
+func countSymbolsBetween(qv: QuadVectorView,
+                         startPos, endPos: int64):
+    array[4, int64] {.inline.} =
+  ## 任意の半開区間を4 symbol同時に数えます。両端だけ短いscalar処理とし、
+  ## 中央のword-aligned領域はbackend固有の4値集計へ渡します。
+  if endPos <= startPos:
+    return
+
+  var cursor = startPos
+  let startLane = int(cursor and 31'i64)
+  if startLane != 0:
+    let wordEnd = min(endPos, (cursor and not 31'i64) + 32'i64)
+    while cursor < wordEnd:
+      inc result[int(qv.symbolUnchecked(cursor))]
+      inc cursor
+
+  let alignedEnd = endPos and not 31'i64
+  if cursor < alignedEnd:
+    result.addCounts(qv.countSymbolsRange(cursor, alignedEnd))
+    cursor = alignedEnd
+
+  while cursor < endPos:
+    inc result[int(qv.symbolUnchecked(cursor))]
+    inc cursor
+
 func bindSelectSamples(qv: var QuadVectorView) =
   var wordOffset = 0
   for symbol in 0..3:
@@ -592,6 +644,61 @@ func rankUnchecked*(qv: QuadVectorView, symbol: int,
     result += qv.rankBlockAt(superBlock, blockIndex, symbol)
   let blockStart = pos and not (QuadRankBlockSize - 1'i64)
   result += qv.countSymbolRange(symbol, blockStart, pos)
+
+func rankAllUnchecked*(qv: QuadVectorView, pos: int64):
+    array[4, int64] {.inline.} =
+  ## 4 symbolすべての `rank(symbol, pos)` を1回のmetadata/tail走査で返します。
+  if pos == qv.lenOfSymbols:
+    return qv.totalCounts
+
+  let superBlock = pos shr ViewRankSuperBlockShift
+  let offsetInSuper = pos and (QuadRankSuperBlockSize - 1'i64)
+  let blockIndex = offsetInSuper shr ViewRankBlockShift
+  for symbol in 0..3:
+    result[symbol] = qv.rankSuperAt(superBlock, symbol)
+    if blockIndex > 0:
+      result[symbol] += qv.rankBlockAt(superBlock, blockIndex, symbol)
+
+  let blockStart = pos and not (QuadRankBlockSize - 1'i64)
+  let tail = qv.countSymbolsRange(blockStart, pos)
+  result.addCounts(tail)
+
+func rankPairUnchecked*(qv: QuadVectorView, symbol: int,
+                        left, right: int64):
+    tuple[leftRank, rightRank: int64] {.inline.} =
+  ## Heap QuadVectorと同じpair-rank contractをViewへ提供します。
+  if left == right:
+    let rankValue = qv.rankUnchecked(symbol, left)
+    return (rankValue, rankValue)
+
+  let leftBlock = left shr ViewRankBlockShift
+  let rightBlock = (right - 1'i64) shr ViewRankBlockShift
+  if leftBlock == rightBlock:
+    result.leftRank = qv.rankUnchecked(symbol, left)
+    result.rightRank = result.leftRank +
+      qv.countSymbolBetween(symbol, left, right)
+  else:
+    result.leftRank = qv.rankUnchecked(symbol, left)
+    result.rightRank = qv.rankUnchecked(symbol, right)
+
+func rankAllPairUnchecked*(qv: QuadVectorView, left, right: int64):
+    tuple[leftRanks, rightRanks: array[4, int64]] {.inline.} =
+  ## 4 symbolすべてについてleft/right rankを同時に返します。
+  if left == right:
+    result.leftRanks = qv.rankAllUnchecked(left)
+    result.rightRanks = result.leftRanks
+    return
+
+  let leftBlock = left shr ViewRankBlockShift
+  let rightBlock = (right - 1'i64) shr ViewRankBlockShift
+  if leftBlock == rightBlock:
+    result.leftRanks = qv.rankAllUnchecked(left)
+    let delta = qv.countSymbolsBetween(left, right)
+    result.rightRanks = result.leftRanks
+    result.rightRanks.addCounts(delta)
+  else:
+    result.leftRanks = qv.rankAllUnchecked(left)
+    result.rightRanks = qv.rankAllUnchecked(right)
 
 func rank*(qv: QuadVectorView, symbol: int, pos: int64): int64 {.inline.} =
   checkSymbol(symbol)

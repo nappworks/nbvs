@@ -47,6 +47,24 @@ task benchWmDepthAb, "A/B scalar WM generic vs fixed-depth rank dispatch":
 task benchWmDepthAbSimd, "A/B SIMD WM generic vs fixed-depth rank dispatch":
   exec "nim c --path:src -d:release --mm:arc -d:nbvsSimd -r benchmarks/wm_fixed_depth_ab.nim"
 
+task benchWmValueEnumerationDepthAb, "A/B scalar WM value enumeration legacy vs fixed-depth":
+  exec "nim c --path:src -d:release --mm:arc -r benchmarks/wm_value_enumeration_depth_ab.nim"
+
+task benchWmValueEnumerationDepthAbSimd, "A/B SIMD WM value enumeration legacy vs fixed-depth":
+  exec "nim c --path:src -d:release --mm:arc -d:nbvsSimd -r benchmarks/wm_value_enumeration_depth_ab.nim"
+
+task benchWmRwmFixedDepthQueryAb, "A/B scalar WM/RWM generic vs fixed-depth core queries":
+  exec "nim c --path:src -d:release --mm:arc -r benchmarks/wm_rwm_fixed_depth_query_ab.nim"
+
+task benchWmRwmFixedDepthQueryAbSimd, "A/B SIMD WM/RWM generic vs fixed-depth core queries":
+  exec "nim c --path:src -d:release --mm:arc -d:nbvsSimd -r benchmarks/wm_rwm_fixed_depth_query_ab.nim"
+
+task benchQwmPairEnumerationAb, "A/B scalar QWM separate ranks vs pair/all-rank traversal":
+  exec "nim c --path:src -d:release --mm:arc -r benchmarks/qwm_pair_enumeration_ab.nim"
+
+task benchQwmPairEnumerationAbSimd, "A/B SIMD QWM separate ranks vs pair/all-rank traversal":
+  exec "nim c --path:src -d:release --mm:arc -d:nbvsSimd -r benchmarks/qwm_pair_enumeration_ab.nim"
+
 task benchWmAccessRankFusionAb, "A/B scalar WM unfused vs fused SBV access-rank":
   exec "nim c --path:src -d:release --mm:arc -r benchmarks/wm_access_rank_fusion_ab.nim"
 

@@ -38,21 +38,36 @@ func matchesAtUnchecked*[W: WaveletMatrix | WaveletMatrixView](
   ## exits as soon as a level bit differs from the requested value.
   if not valueFits(wm.bitWidth, value):
     return false
+  if wm.bitWidth == 0:
+    return true
 
-  var pos = position
-  for level in 0..<wm.bitWidth:
-    let shift = wm.bitWidth - level - 1
-    let actualOne = wm.levels[level].bitAtUnchecked(pos)
-    let expectedOne = ((value shr shift) and 1'u64) != 0
-    if actualOne != expectedOne:
-      return false
+  template runMatch(rankFn: untyped) =
+    block:
+      var pos = position
+      for level in 0..<wm.bitWidth:
+        let shift = wm.bitWidth - level - 1
+        let actualOne = wm.levels[level].bitAtUnchecked(pos)
+        let expectedOne = ((value shr shift) and 1'u64) != 0
+        if actualOne != expectedOne:
+          return false
 
-    let ones = wm.levels[level].rank1Unchecked(pos)
-    if actualOne:
-      pos = wm.zeroCounts[level] + ones
-    else:
-      pos -= ones
-  true
+        let ones = rankFn(wm.levels[level], pos)
+        if actualOne:
+          pos = wm.zeroCounts[level] + ones
+        else:
+          pos -= ones
+      return true
+
+  case int(wm.levels[0].level)
+  of 0: runMatch(rank1UncheckedDepth0)
+  of 1: runMatch(rank1UncheckedDepth1)
+  of 2: runMatch(rank1UncheckedDepth2)
+  of 3: runMatch(rank1UncheckedDepth3)
+  of 4: runMatch(rank1UncheckedDepth4)
+  of 5: runMatch(rank1UncheckedDepth5)
+  of 6: runMatch(rank1UncheckedDepth6)
+  of 7: runMatch(rank1UncheckedDepth7)
+  else: runMatch(rank1UncheckedDepth8)
 
 func matchesAt*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, position: int64, value: uint64): bool =
@@ -80,29 +95,43 @@ func valueInRangeAtUnchecked*[W: WaveletMatrix | WaveletMatrixView](
   let domainHigh = lowBitsMask(wm.bitWidth)
   if low == 0 and high >= domainHigh:
     return true
+  if wm.bitWidth == 0:
+    return low == 0
 
-  var pos = position
-  var prefix = 0'u64
-  for level in 0..<wm.bitWidth:
-    let shift = wm.bitWidth - level - 1
-    let actualOne = wm.levels[level].bitAtUnchecked(pos)
-    if actualOne:
-      prefix = prefix or (1'u64 shl shift)
+  template runRangeMatch(rankFn: untyped) =
+    block:
+      var pos = position
+      var prefix = 0'u64
+      for level in 0..<wm.bitWidth:
+        let shift = wm.bitWidth - level - 1
+        let actualOne = wm.levels[level].bitAtUnchecked(pos)
+        if actualOne:
+          prefix = prefix or (1'u64 shl shift)
 
-    let possibleLow = prefix
-    let possibleHigh = prefix or lowBitsMask(shift)
-    if possibleHigh < low or possibleLow > high:
-      return false
-    if low <= possibleLow and possibleHigh <= high:
+        let possibleLow = prefix
+        let possibleHigh = prefix or lowBitsMask(shift)
+        if possibleHigh < low or possibleLow > high:
+          return false
+        if low <= possibleLow and possibleHigh <= high:
+          return true
+
+        let ones = rankFn(wm.levels[level], pos)
+        if actualOne:
+          pos = wm.zeroCounts[level] + ones
+        else:
+          pos -= ones
       return true
 
-    let ones = wm.levels[level].rank1Unchecked(pos)
-    if actualOne:
-      pos = wm.zeroCounts[level] + ones
-    else:
-      pos -= ones
-
-  true
+  case int(wm.levels[0].level)
+  of 0: runRangeMatch(rank1UncheckedDepth0)
+  of 1: runRangeMatch(rank1UncheckedDepth1)
+  of 2: runRangeMatch(rank1UncheckedDepth2)
+  of 3: runRangeMatch(rank1UncheckedDepth3)
+  of 4: runRangeMatch(rank1UncheckedDepth4)
+  of 5: runRangeMatch(rank1UncheckedDepth5)
+  of 6: runRangeMatch(rank1UncheckedDepth6)
+  of 7: runRangeMatch(rank1UncheckedDepth7)
+  else: runRangeMatch(rank1UncheckedDepth8)
 
 func valueInRangeAt*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, position: int64, low, high: uint64): bool =
@@ -124,19 +153,32 @@ func matchesAtUnchecked*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](
   if not valueFits(rwm.bitWidth, value):
     return false
 
-  var pos = position
-  for level in 0..<rwm.bitWidth:
-    let actualOne = rwm.levels[level].bitAtUnchecked(pos)
-    let expectedOne = ((value shr level) and 1'u64) != 0
-    if actualOne != expectedOne:
-      return false
+  template runMatch(rankFn: untyped) =
+    block:
+      var pos = position
+      for level in 0..<rwm.bitWidth:
+        let actualOne = rwm.levels[level].bitAtUnchecked(pos)
+        let expectedOne = ((value shr level) and 1'u64) != 0
+        if actualOne != expectedOne:
+          return false
 
-    let ones = rwm.levels[level].rank1Unchecked(pos)
-    if actualOne:
-      pos = rwm.zeroCounts[level] + ones
-    else:
-      pos -= ones
-  true
+        let ones = rankFn(rwm.levels[level], pos)
+        if actualOne:
+          pos = rwm.zeroCounts[level] + ones
+        else:
+          pos -= ones
+      return true
+
+  case int(rwm.levels[0].level)
+  of 0: runMatch(rank1UncheckedDepth0)
+  of 1: runMatch(rank1UncheckedDepth1)
+  of 2: runMatch(rank1UncheckedDepth2)
+  of 3: runMatch(rank1UncheckedDepth3)
+  of 4: runMatch(rank1UncheckedDepth4)
+  of 5: runMatch(rank1UncheckedDepth5)
+  of 6: runMatch(rank1UncheckedDepth6)
+  of 7: runMatch(rank1UncheckedDepth7)
+  else: runMatch(rank1UncheckedDepth8)
 
 func matchesAt*[W: ReversedWaveletMatrix | ReversedWaveletMatrixView](
     rwm: W, position: int64, value: uint64): bool =

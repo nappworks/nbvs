@@ -52,6 +52,23 @@ proc checkEquivalent(values: seq[uint64], bitWidth: int) =
     doAssert qwm.select(value, total) == -1
     doAssert qwm.select(value, -1) == -1
 
+  var expectedCounts: seq[QuadValueCount]
+  var expectedDistinct: seq[uint64]
+  for item in wm.valueCounts:
+    expectedCounts.add (value: item.value, frequency: item.frequency)
+    expectedDistinct.add item.value
+  doAssert qwm.valueCounts == expectedCounts
+  doAssert qwm.collectValueCounts == expectedCounts
+  doAssert qwm.distinctValues == expectedDistinct
+  doAssert qwm.collectDistinctValues == expectedDistinct
+
+  let intervals = qwm.collectValueCountFinalIntervals
+  doAssert intervals.len == expectedCounts.len
+  for index, interval in intervals:
+    doAssert interval.value == expectedCounts[index].value
+    doAssert interval.frequency == expectedCounts[index].frequency
+    doAssert interval.right - interval.left == interval.frequency
+
   let shortN = min(values.len, 32)
   for left in 0..shortN:
     for right in left..shortN:
@@ -59,6 +76,20 @@ proc checkEquivalent(values: seq[uint64], bitWidth: int) =
       sorted.sort()
       for k, expected in sorted:
         doAssert qwm.quantile(int64(left), int64(right), int64(k)) == expected
+      var expectedRangeCounts: seq[QuadValueCount]
+      for item in wm.valueCounts(int64(left), int64(right)):
+        expectedRangeCounts.add (
+          value: item.value, frequency: item.frequency)
+      doAssert qwm.valueCounts(int64(left), int64(right)) ==
+        expectedRangeCounts
+      let qIntervals = qwm.collectValueCountFinalIntervals(
+        int64(left), int64(right))
+      doAssert qIntervals.len == expectedRangeCounts.len
+      for index, interval in qIntervals:
+        doAssert interval.value == expectedRangeCounts[index].value
+        doAssert interval.frequency == expectedRangeCounts[index].frequency
+        doAssert interval.right - interval.left == interval.frequency
+
       for lower in 0'u64..8'u64:
         for upper in lower..9'u64:
           doAssert qwm.rangeFreq(int64(left), int64(right), lower, upper) ==
@@ -80,6 +111,10 @@ block emptyAndZeroWidth:
   doAssert zeros.select(0, 2) == 2
   doAssert zeros.select(1, 0) == -1
   doAssert zeros.quantile(0, 3, 1) == 0
+  doAssert zeros.valueCounts == @[
+    (value: 0'u64, frequency: 3'i64)]
+  doAssert zeros.collectValueCountFinalIntervals == @[
+    (value: 0'u64, frequency: 3'i64, left: 0'i64, right: 3'i64)]
   expectRaises(ValueError):
     discard genQuadWaveletMatrix(@[1'u64], 0)
 
@@ -160,6 +195,13 @@ block mmapPersistence:
       let total = heap.rank(value, heap.n)
       if total > 0:
         doAssert view.select(value, total - 1) == heap.select(value, total - 1)
+    doAssert view.valueCounts == heap.valueCounts
+    doAssert view.collectValueCountFinalIntervals ==
+      heap.collectValueCountFinalIntervals
+    doAssert view.quantile(0, view.n, view.n div 2) ==
+      heap.quantile(0, heap.n, heap.n div 2)
+    doAssert view.countLessThan(0, view.n, 1024) ==
+      heap.countLessThan(0, heap.n, 1024)
   finally:
     mapped.close()
 
@@ -174,6 +216,8 @@ block mmapPersistence:
       let total = heap.rank(value, heap.n)
       if total > 0:
         doAssert reopened.select(value, 0) == heap.select(value, 0)
+    doAssert reopened.valueCounts == heap.valueCounts
+    doAssert reopened.collectDistinctValues == heap.collectDistinctValues
   finally:
     mapped.close()
 
