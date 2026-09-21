@@ -64,7 +64,7 @@ WM/RWMの実装は変更していません。
 
 測定は修正後バイナリを各backend 3 process trials実行し、中央値を保存しています。
 CPU affinityはcore 0、Nim 2.2.10、Linux amd64、release、ARC、SIMDはAVX2/BMI2です。
-ベンチマーク対象HEAD SHAは `8439353` です。
+ベンチマーク対象HEAD SHAは `c67f4cf` です（QWM実装commitは `8439353`）。
 
 ### 優先性能ゲート
 
