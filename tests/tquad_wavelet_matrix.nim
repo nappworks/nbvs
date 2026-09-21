@@ -76,6 +76,20 @@ proc checkEquivalent(values: seq[uint64], bitWidth: int) =
       sorted.sort()
       for k, expected in sorted:
         doAssert qwm.quantile(int64(left), int64(right), int64(k)) == expected
+      var expectedRangeCounts: seq[QuadValueCount]
+      for item in wm.valueCounts(int64(left), int64(right)):
+        expectedRangeCounts.add (
+          value: item.value, frequency: item.frequency)
+      doAssert qwm.valueCounts(int64(left), int64(right)) ==
+        expectedRangeCounts
+      let qIntervals = qwm.collectValueCountFinalIntervals(
+        int64(left), int64(right))
+      doAssert qIntervals.len == expectedRangeCounts.len
+      for index, interval in qIntervals:
+        doAssert interval.value == expectedRangeCounts[index].value
+        doAssert interval.frequency == expectedRangeCounts[index].frequency
+        doAssert interval.right - interval.left == interval.frequency
+
       for lower in 0'u64..8'u64:
         for upper in lower..9'u64:
           doAssert qwm.rangeFreq(int64(left), int64(right), lower, upper) ==
