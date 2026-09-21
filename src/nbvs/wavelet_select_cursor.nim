@@ -37,22 +37,40 @@ func initWaveletSelectCursor*[W: WaveletMatrix | WaveletMatrixView](
   if wm.n == 0 or not valueFits(wm.bitWidth, value):
     return
 
-  var left = 0'i64
-  var right = wm.n
-  for level in 0..<wm.bitWidth:
-    let shift = wm.bitWidth - level - 1
-    let targetOne = ((value shr shift) and 1'u64) != 0
-    result.targetOnes[level] = targetOne
-    result.levelCursors[level] = initBitVectorSelectCursor(targetOne)
-    if targetOne:
-      left = wm.zeroCounts[level] + wm.levels[level].rank1Unchecked(left)
-      right = wm.zeroCounts[level] + wm.levels[level].rank1Unchecked(right)
-    else:
-      left -= wm.levels[level].rank1Unchecked(left)
-      right -= wm.levels[level].rank1Unchecked(right)
+  if wm.bitWidth == 0:
+    result.intervalStart = 0
+    result.count = wm.n
+    return
 
-  result.intervalStart = left
-  result.count = right - left
+  template runInit(rankFn: untyped) =
+    block:
+      var left = 0'i64
+      var right = wm.n
+      for level in 0..<wm.bitWidth:
+        let shift = wm.bitWidth - level - 1
+        let targetOne = ((value shr shift) and 1'u64) != 0
+        result.targetOnes[level] = targetOne
+        result.levelCursors[level] = initBitVectorSelectCursor(targetOne)
+        if targetOne:
+          left = wm.zeroCounts[level] + rankFn(wm.levels[level], left)
+          right = wm.zeroCounts[level] + rankFn(wm.levels[level], right)
+        else:
+          left -= rankFn(wm.levels[level], left)
+          right -= rankFn(wm.levels[level], right)
+
+      result.intervalStart = left
+      result.count = right - left
+
+  case int(wm.levels[0].level)
+  of 0: runInit(rank1UncheckedDepth0)
+  of 1: runInit(rank1UncheckedDepth1)
+  of 2: runInit(rank1UncheckedDepth2)
+  of 3: runInit(rank1UncheckedDepth3)
+  of 4: runInit(rank1UncheckedDepth4)
+  of 5: runInit(rank1UncheckedDepth5)
+  of 6: runInit(rank1UncheckedDepth6)
+  of 7: runInit(rank1UncheckedDepth7)
+  else: runInit(rank1UncheckedDepth8)
 
 func selectPrepared*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, cursor: WaveletSelectCursor, occurrence: int64): int64 =
