@@ -50,6 +50,25 @@ QWM は `quantile` と `full_value_counts` / `range_value_counts` で大きく�
 - [QWM pair/all-rank scalar](qwm_pair_enumeration_ab_scalar.csv)
 - [QWM pair/all-rank SIMD](qwm_pair_enumeration_ab_simd.csv)
 
+## Guardrail 結果
+
+既存の WM fixed-depth A/B と WM/QWM end-to-end も同じ環境で再測定しました。
+
+| 対象 | backend | ケース数 | speedup 平均 | 最小 | 最大 | 改善/同等 | 回帰 |
+|:---|:---|---:|---:|---:|---:|---:|---:|
+| WM fixed-depth A/B | scalar | 24 | 1.0255 | 0.8873 | 1.1368 | 15 | 9 |
+| WM fixed-depth A/B | SIMD | 24 | 1.0874 | 0.9522 | 1.3215 | 20 | 4 |
+
+WM/QWM end-to-end は 65,536〜16,777,216 rows、8〜64 bit幅、uniform/skewed の全ケースを
+完走しました。QWMは多くの access/rank/select でWMより速くなりましたが、auxiliary metadata
+容量は増加します。17M rows/64 bitではWM 139,012,096 bytesに対してQWM 144,703,640 bytes
+です。絶対値はCPU負荷の影響を受けるため、全行を生CSVに保存しています。
+
+- [WM fixed-depth guardrail scalar](pr21_wm_fixed_depth_guardrail_scalar.csv)
+- [WM fixed-depth guardrail SIMD](pr21_wm_fixed_depth_guardrail_simd.csv)
+- [WM/QWM end-to-end guardrail scalar](pr21_wm_qwm_guardrail_scalar.csv)
+- [WM/QWM end-to-end guardrail SIMD](pr21_wm_qwm_guardrail_simd.csv)
+
 ## 再現性
 
 CPU frequency、CPU affinity、WSL2のホスト負荷は固定していません。したがって、表の値は
