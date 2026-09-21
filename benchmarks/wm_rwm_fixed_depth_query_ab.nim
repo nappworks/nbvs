@@ -40,6 +40,27 @@ func legacyWmRankRange(wm: WaveletMatrix, value: uint64,
       hi = wm.zeroCounts[level] + wm.levels[level].rank1Unchecked(hi)
   hi - lo
 
+func legacyWmRankPair(wm: WaveletMatrix, value: uint64,
+    left, right: int64): tuple[leftRank, rightRank: int64] =
+  var start = 0'i64
+  var leftPos = left
+  var rightPos = right
+  for level in 0..<wm.bitWidth:
+    let shift = wm.bitWidth - level - 1
+    let startOnes = wm.levels[level].rank1Unchecked(start)
+    let leftOnes = wm.levels[level].rank1Unchecked(leftPos)
+    let rightOnes = wm.levels[level].rank1Unchecked(rightPos)
+    if ((value shr shift) and 1'u64) == 0:
+      start -= startOnes
+      leftPos -= leftOnes
+      rightPos -= rightOnes
+    else:
+      start = wm.zeroCounts[level] + startOnes
+      leftPos = wm.zeroCounts[level] + leftOnes
+      rightPos = wm.zeroCounts[level] + rightOnes
+  result.leftRank = leftPos - start
+  result.rightRank = rightPos - start
+
 func legacyWmCountLessThan(wm: WaveletMatrix, left, right: int64,
     value: uint64): int64 =
   var lo = left
@@ -115,6 +136,28 @@ func legacyRwmRankRange(rwm: ReversedWaveletMatrix, value: uint64,
       lo = rwm.zeroCounts[level] + rwm.levels[level].rank1Unchecked(lo)
       hi = rwm.zeroCounts[level] + rwm.levels[level].rank1Unchecked(hi)
   hi - lo
+
+func legacyRwmSelect(rwm: ReversedWaveletMatrix,
+    value: uint64, occurrence: int64): int64 =
+  var left = 0'i64
+  var right = rwm.n
+  for level in 0..<rwm.bitWidth:
+    if ((value shr level) and 1'u64) == 0:
+      left -= rwm.levels[level].rank1Unchecked(left)
+      right -= rwm.levels[level].rank1Unchecked(right)
+    else:
+      left = rwm.zeroCounts[level] + rwm.levels[level].rank1Unchecked(left)
+      right = rwm.zeroCounts[level] + rwm.levels[level].rank1Unchecked(right)
+  if occurrence < 0 or occurrence >= right - left:
+    return -1
+
+  var pos = left + occurrence
+  for level in countdown(rwm.bitWidth - 1, 0):
+    if ((value shr level) and 1'u64) == 0:
+      pos = rwm.levels[level].select0(pos)
+    else:
+      pos = rwm.levels[level].select1(pos - rwm.zeroCounts[level])
+  pos
 
 func remainingMask(bitWidth, level: int): uint64 {.inline.} =
   let lowMask =
@@ -203,12 +246,20 @@ proc main() =
   let wm = genWaveletMatrix(values)
   let rwm = genReversedWaveletMatrix(values)
 
+  var occurrenceBefore = newSeq[int64](Rows)
+  var seen: array[Cardinality, int64]
+  for index, value in values:
+    occurrenceBefore[index] = seen[int(value)]
+    inc seen[int(value)]
+
   for position in positions[0..<64]:
     let value = values[int(position)]
     let left = max(0'i64, position - 97)
     let right = min(int64(Rows), position + 131)
     doAssert legacyWmRankRange(wm, value, left, right) ==
       wm.rank(value, left, right)
+    doAssert legacyWmRankPair(wm, value, left, right) ==
+      wm.rankPair(value, left, right)
     doAssert legacyWmCountLessThan(wm, left, right, value) ==
       wm.countLessThan(left, right, value)
     let k = (right - left) div 2
@@ -221,6 +272,10 @@ proc main() =
       rwm.rank(value, left, right)
     doAssert legacyRwmOccPosition(rwm, value, position) ==
       rwm.occPosition(value, position)
+    doAssert legacyRwmSelect(
+      rwm, value, occurrenceBefore[int(position)]) == position
+    doAssert rwm.select(
+      value, occurrenceBefore[int(position)]) == position
     doAssert legacyRwmRankLessThan(rwm, value, position) ==
       rwm.rankLessThan(value, position)
 
@@ -239,6 +294,22 @@ proc main() =
         sink = sink xor uint64(wm.rank(
           value, max(0'i64, position - 97),
           min(int64(Rows), position + 131))))))
+
+  emit("wm_rank_pair", measurePair(
+    (block:
+      for position in positions:
+        let value = values[int(position)]
+        let pair = legacyWmRankPair(
+          wm, value, max(0'i64, position - 97),
+          min(int64(Rows), position + 131))
+        sink = sink xor uint64(pair.leftRank) xor uint64(pair.rightRank)),
+    (block:
+      for position in positions:
+        let value = values[int(position)]
+        let pair = wm.rankPair(
+          value, max(0'i64, position - 97),
+          min(int64(Rows), position + 131))
+        sink = sink xor uint64(pair.leftRank) xor uint64(pair.rightRank))))
 
   emit("wm_count_less_than", measurePair(
     (block:
@@ -299,6 +370,18 @@ proc main() =
         sink = sink xor uint64(rwm.rank(
           value, max(0'i64, position - 97),
           min(int64(Rows), position + 131))))))
+
+  emit("rwm_select", measurePair(
+    (block:
+      for position in positions:
+        let value = values[int(position)]
+        sink = sink xor uint64(legacyRwmSelect(
+          rwm, value, occurrenceBefore[int(position)]))),
+    (block:
+      for position in positions:
+        let value = values[int(position)]
+        sink = sink xor uint64(rwm.select(
+          value, occurrenceBefore[int(position)])))))
 
   emit("rwm_occ_position", measurePair(
     (block:
