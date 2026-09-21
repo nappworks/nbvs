@@ -648,7 +648,7 @@ func rankPairUnchecked*(qv: QuadVectorView, symbol: int,
   let rightBlock = (right - 1'i64) shr ViewRankBlockShift
   if leftBlock == rightBlock:
     result.leftRank = qv.rankUnchecked(symbol, left)
-    let allDelta = qv.countSymbolsRange(left, right)
+    let allDelta = qv.countSymbolsBetween(left, right)
     result.rightRank = result.leftRank + allDelta[symbol]
   else:
     result.leftRank = qv.rankUnchecked(symbol, left)
