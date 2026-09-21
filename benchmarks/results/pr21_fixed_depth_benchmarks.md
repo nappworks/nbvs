@@ -1,7 +1,7 @@
 # PR #21 固定depth traversal ベンチマーク
 
 測定日: 2026-09-21  
-対象コミット: `d55dda7`（測定後にコンパイル修正を追加）
+測定対象コード: `e1d090d`（ReversedWaveletMatrixのgeneric型引数修正を含む）
 
 ## 測定条件
 
