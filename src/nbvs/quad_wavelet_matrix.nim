@@ -12,10 +12,16 @@ import ./[packed_array, quad_vector, quad_vector_view]
 
 const
   MaxQuadWaveletLevels* = 32
+  QuadWaveletTraversalStackCapacity = MaxQuadWaveletLevels * 3 + 4
   QuadWaveletRouteWidth = 4
   QuadWaveletRouteBytesPerLevel = QuadWaveletRouteWidth * sizeof(int64)
 
 type
+  QuadValueCount* = tuple[value: uint64, frequency: int64]
+  QuadValueCountFinalInterval* = tuple[
+    value: uint64, frequency: int64, left, right: int64]
+  QuadTraversalNode = tuple[level: int, left, right: int64, value: uint64]
+
   QuadWaveletMatrix* = object
     ## Heap-owned 4-way Wavelet Matrixです。
     n*: int64
@@ -367,8 +373,9 @@ func rank*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
   for level in 0..<wm.levelCount:
     let symbol = int((value shr wm.levelShift(level)) and 3'u64)
     let start = wm.bucketStarts[level][symbol]
-    lo = start + wm.levels[level].rankUnchecked(symbol, lo)
-    hi = start + wm.levels[level].rankUnchecked(symbol, hi)
+    let ranks = wm.levels[level].rankPairUnchecked(symbol, lo, hi)
+    lo = start + ranks.leftRank
+    hi = start + ranks.rightRank
   result = hi - lo
 
 func rankPair*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
@@ -389,8 +396,10 @@ func rankPair*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
   for level in 0..<wm.levelCount:
     let symbol = int((value shr wm.levelShift(level)) and 3'u64)
     let bucket = wm.bucketStarts[level][symbol]
-    startPos = bucket + wm.levels[level].rankUnchecked(symbol, startPos)
-    leftPos = bucket + wm.levels[level].rankUnchecked(symbol, leftPos)
+    let startLeft = wm.levels[level].rankPairUnchecked(
+      symbol, startPos, leftPos)
+    startPos = bucket + startLeft.leftRank
+    leftPos = bucket + startLeft.rightRank
     rightPos = bucket + wm.levels[level].rankUnchecked(symbol, rightPos)
   result.leftRank = leftPos - startPos
   result.rightRank = rightPos - startPos
@@ -413,8 +422,9 @@ func select*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
   for level in 0..<wm.levelCount:
     let symbol = int((value shr wm.levelShift(level)) and 3'u64)
     let start = wm.bucketStarts[level][symbol]
-    left = start + wm.levels[level].rankUnchecked(symbol, left)
-    right = start + wm.levels[level].rankUnchecked(symbol, right)
+    let ranks = wm.levels[level].rankPairUnchecked(symbol, left, right)
+    left = start + ranks.leftRank
+    right = start + ranks.rightRank
   if k >= right - left:
     return -1
 
@@ -445,12 +455,11 @@ func quantile*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
   var hi = right
   var wanted = k
   for level in 0..<wm.levelCount:
-    var leftRanks: array[4, int64]
+    let ranks = wm.levels[level].rankAllPairUnchecked(lo, hi)
     var counts: array[4, int64]
     for symbol in 0..3:
-      leftRanks[symbol] = wm.levels[level].rankUnchecked(symbol, lo)
-      counts[symbol] = wm.levels[level].rankUnchecked(symbol, hi) -
-        leftRanks[symbol]
+      counts[symbol] =
+        ranks.rightRanks[symbol] - ranks.leftRanks[symbol]
 
     var symbol = 0
     while symbol < 3 and wanted >= counts[symbol]:
@@ -458,8 +467,8 @@ func quantile*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
       inc symbol
     result = result or (uint64(symbol) shl wm.levelShift(level))
     let start = wm.bucketStarts[level][symbol]
-    lo = start + leftRanks[symbol]
-    hi = lo + counts[symbol]
+    lo = start + ranks.leftRanks[symbol]
+    hi = start + ranks.rightRanks[symbol]
 
 func countLessThan*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
     wm: W, left, right: int64, value: uint64): int64 =
@@ -477,19 +486,12 @@ func countLessThan*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
   var hi = right
   for level in 0..<wm.levelCount:
     let target = int((value shr wm.levelShift(level)) and 3'u64)
-    var targetLeftRank = 0'i64
-    var targetRightRank = 0'i64
-    for symbol in 0..target:
-      let l = wm.levels[level].rankUnchecked(symbol, lo)
-      let r = wm.levels[level].rankUnchecked(symbol, hi)
-      if symbol < target:
-        result += r - l
-      else:
-        targetLeftRank = l
-        targetRightRank = r
+    let ranks = wm.levels[level].rankAllPairUnchecked(lo, hi)
+    for symbol in 0..<target:
+      result += ranks.rightRanks[symbol] - ranks.leftRanks[symbol]
     let start = wm.bucketStarts[level][target]
-    lo = start + targetLeftRank
-    hi = start + targetRightRank
+    lo = start + ranks.leftRanks[target]
+    hi = start + ranks.rightRanks[target]
 
 func countLessThan*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
     wm: W, value: uint64, pos: int64): int64 =
@@ -534,6 +536,174 @@ func successor*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
   if count >= right - left:
     raise newException(ValueError, "successor does not exist")
   wm.quantile(left, right, count)
+
+iterator collectValueCountsItems*[
+    W: QuadWaveletMatrix | QuadWaveletMatrixView](
+    wm: W, left, right: int64): QuadValueCount =
+  ## `[left,right)` の異なる値と頻度を4-way DFSで逐次返します。
+  wm.checkRange(left, right)
+  if left < right:
+    if wm.levelCount == 0:
+      yield (value: 0'u64, frequency: right - left)
+    else:
+      var stack: array[QuadWaveletTraversalStackCapacity, QuadTraversalNode]
+      var stackLen = 1
+      stack[0] = (level: 0, left: left, right: right, value: 0'u64)
+      while stackLen > 0:
+        dec stackLen
+        let node = stack[stackLen]
+        if node.left >= node.right:
+          continue
+        if node.level == wm.levelCount:
+          yield (value: node.value, frequency: node.right - node.left)
+          continue
+
+        let ranks = wm.levels[node.level].rankAllPairUnchecked(
+          node.left, node.right)
+        let shift = wm.levelShift(node.level)
+        for symbol in countdown(3, 0):
+          let childLeft = wm.bucketStarts[node.level][symbol] +
+            ranks.leftRanks[symbol]
+          let childRight = wm.bucketStarts[node.level][symbol] +
+            ranks.rightRanks[symbol]
+          if childLeft < childRight:
+            stack[stackLen] = (
+              level: node.level + 1,
+              left: childLeft,
+              right: childRight,
+              value: node.value or (uint64(symbol) shl shift))
+            inc stackLen
+
+iterator collectValueCountsItems*[
+    W: QuadWaveletMatrix | QuadWaveletMatrixView](
+    wm: W): QuadValueCount =
+  for item in wm.collectValueCountsItems(0, wm.n):
+    yield item
+
+iterator collectValueCountFinalIntervalsItems*[
+    W: QuadWaveletMatrix | QuadWaveletMatrixView](
+    wm: W, left, right: int64): QuadValueCountFinalInterval =
+  ## value/frequencyと最終4-way permutation intervalを同じDFSで返します。
+  wm.checkRange(left, right)
+  if left < right:
+    if wm.levelCount == 0:
+      yield (value: 0'u64, frequency: right - left,
+        left: left, right: right)
+    else:
+      var stack: array[QuadWaveletTraversalStackCapacity, QuadTraversalNode]
+      var stackLen = 1
+      stack[0] = (level: 0, left: left, right: right, value: 0'u64)
+      while stackLen > 0:
+        dec stackLen
+        let node = stack[stackLen]
+        if node.left >= node.right:
+          continue
+        if node.level == wm.levelCount:
+          yield (value: node.value, frequency: node.right - node.left,
+            left: node.left, right: node.right)
+          continue
+
+        let ranks = wm.levels[node.level].rankAllPairUnchecked(
+          node.left, node.right)
+        let shift = wm.levelShift(node.level)
+        for symbol in countdown(3, 0):
+          let childLeft = wm.bucketStarts[node.level][symbol] +
+            ranks.leftRanks[symbol]
+          let childRight = wm.bucketStarts[node.level][symbol] +
+            ranks.rightRanks[symbol]
+          if childLeft < childRight:
+            stack[stackLen] = (
+              level: node.level + 1,
+              left: childLeft,
+              right: childRight,
+              value: node.value or (uint64(symbol) shl shift))
+            inc stackLen
+
+iterator collectValueCountFinalIntervalsItems*[
+    W: QuadWaveletMatrix | QuadWaveletMatrixView](
+    wm: W): QuadValueCountFinalInterval =
+  for item in wm.collectValueCountFinalIntervalsItems(0, wm.n):
+    yield item
+
+func collectValueCounts*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
+    wm: W, left, right: int64): seq[QuadValueCount] =
+  for item in wm.collectValueCountsItems(left, right):
+    result.add item
+
+func collectValueCounts*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
+    wm: W): seq[QuadValueCount] =
+  wm.collectValueCounts(0, wm.n)
+
+func collectValueCountFinalIntervals*[
+    W: QuadWaveletMatrix | QuadWaveletMatrixView](
+    wm: W, left, right: int64): seq[QuadValueCountFinalInterval] =
+  for item in wm.collectValueCountFinalIntervalsItems(left, right):
+    result.add item
+
+func collectValueCountFinalIntervals*[
+    W: QuadWaveletMatrix | QuadWaveletMatrixView](
+    wm: W): seq[QuadValueCountFinalInterval] =
+  wm.collectValueCountFinalIntervals(0, wm.n)
+
+iterator valueCountsItems*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
+    wm: W, left, right: int64): QuadValueCount =
+  ## 4-way MSB traversalなので数値昇順で返します。
+  for item in wm.collectValueCountsItems(left, right):
+    yield item
+
+iterator valueCountsItems*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
+    wm: W): QuadValueCount =
+  for item in wm.valueCountsItems(0, wm.n):
+    yield item
+
+func valueCounts*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
+    wm: W, left, right: int64): seq[QuadValueCount] =
+  for item in wm.valueCountsItems(left, right):
+    result.add item
+
+func valueCounts*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
+    wm: W): seq[QuadValueCount] =
+  wm.valueCounts(0, wm.n)
+
+iterator collectDistinctValuesItems*[
+    W: QuadWaveletMatrix | QuadWaveletMatrixView](
+    wm: W, left, right: int64): uint64 =
+  for item in wm.collectValueCountsItems(left, right):
+    yield item.value
+
+iterator collectDistinctValuesItems*[
+    W: QuadWaveletMatrix | QuadWaveletMatrixView](wm: W): uint64 =
+  for value in wm.collectDistinctValuesItems(0, wm.n):
+    yield value
+
+func collectDistinctValues*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
+    wm: W, left, right: int64): seq[uint64] =
+  for value in wm.collectDistinctValuesItems(left, right):
+    result.add value
+
+func collectDistinctValues*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
+    wm: W): seq[uint64] =
+  wm.collectDistinctValues(0, wm.n)
+
+iterator distinctValuesItems*[
+    W: QuadWaveletMatrix | QuadWaveletMatrixView](
+    wm: W, left, right: int64): uint64 =
+  for value in wm.collectDistinctValuesItems(left, right):
+    yield value
+
+iterator distinctValuesItems*[
+    W: QuadWaveletMatrix | QuadWaveletMatrixView](wm: W): uint64 =
+  for value in wm.distinctValuesItems(0, wm.n):
+    yield value
+
+func distinctValues*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
+    wm: W, left, right: int64): seq[uint64] =
+  for value in wm.distinctValuesItems(left, right):
+    result.add value
+
+func distinctValues*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
+    wm: W): seq[uint64] =
+  wm.distinctValues(0, wm.n)
 
 iterator items*[W: QuadWaveletMatrix | QuadWaveletMatrixView](wm: W): uint64 =
   ## 元配列順に値を列挙します。
