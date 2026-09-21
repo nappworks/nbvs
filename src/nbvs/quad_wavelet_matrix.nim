@@ -330,10 +330,10 @@ func accessRankUnchecked*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
     let symbol = wm.levels[level].symbolUnchecked(current)
     let shift = wm.levelShift(level)
     result.value = result.value or (uint64(symbol) shl shift)
-    let currentRank = wm.levels[level].rankUnchecked(symbol, current)
-    let leftRank = wm.levels[level].rankUnchecked(symbol, intervalLeft)
-    current = wm.bucketStarts[level][symbol] + currentRank
-    intervalLeft = wm.bucketStarts[level][symbol] + leftRank
+    let ranks = wm.levels[level].rankPairUnchecked(
+      symbol, intervalLeft, current)
+    current = wm.bucketStarts[level][symbol] + ranks.rightRank
+    intervalLeft = wm.bucketStarts[level][symbol] + ranks.leftRank
   result.rankBefore = current - intervalLeft
 
 func accessRank*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
@@ -355,8 +355,9 @@ func rank*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
   for level in 0..<wm.levelCount:
     let symbol = int((value shr wm.levelShift(level)) and 3'u64)
     let start = wm.bucketStarts[level][symbol]
-    left = start + wm.levels[level].rankUnchecked(symbol, left)
-    right = start + wm.levels[level].rankUnchecked(symbol, right)
+    let ranks = wm.levels[level].rankPairUnchecked(symbol, left, right)
+    left = start + ranks.leftRank
+    right = start + ranks.rightRank
   result = right - left
 
 func rank*[W: QuadWaveletMatrix | QuadWaveletMatrixView](
