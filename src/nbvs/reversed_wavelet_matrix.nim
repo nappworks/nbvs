@@ -13,7 +13,6 @@ export ValueCount
 type
   TraversalNode = tuple[level: int, left, right: int64, value: uint64]
 
-const ReversedWaveletTraversalStackCapacity = 66
 
   ReversedWaveletMatrix* = object
     ## Immutable LSB-first wavelet matrix.
@@ -28,6 +27,8 @@ const ReversedWaveletTraversalStackCapacity = 66
     bitWidth*: int
     levels*: ExternalSpan[SuccinctBitVectorView]
     zeroCounts*: ExternalSpan[int64]
+
+const ReversedWaveletTraversalStackCapacity = 66
 
 func initReversedWaveletMatrixView*(n: int64, bitWidth: int,
     levels: ptr UncheckedArray[SuccinctBitVectorView], levelCount: int,
