@@ -2,15 +2,29 @@
 
 ## 目的
 
-Wavelet Matrix上で、inclusive value range `[low, high]` に一致する元配列上の
-physical positionを、極大な連続半開区間 `[left, right)` として列挙する汎用APIを追加します。
+Wavelet Matrixに、**値の範囲を指定して、条件に一致する元入力の連続index区間を返すAPI**
+を追加します。
 
-既存APIには、
+入力:
 
-- 単一positionに対するrange判定: `valueInRangeAt` / `valueInRangeAtUnchecked`
-- 単一valueに対するphysical run列挙: `matchingRunsItems` / `matchingRuns`
+- `low, high`: 値のinclusive range `[low, high]`
+- `left, right`: 省略可能な元入力indexの半開区間 `[left, right)`
 
-があります。本APIはその中間にある「value range × physical run列挙」を提供します。
+出力:
+
+- `MatchingRun(left, right)`
+- 各runは元入力上の半開index区間 `[left, right)`
+- run内の全要素が `low <= value <= high` を満たす
+- 前後へ同条件の要素を追加できない極大区間
+- 複数runは元入力のindex昇順
+
+ここでphysical positionとはWavelet Matrix内部の並べ替え後位置ではなく、
+**元の入力配列におけるindex**を意味します。
+
+既存APIには、単一positionに対するrange判定
+`valueInRangeAt` / `valueInRangeAtUnchecked` と、単一valueのrun列挙
+`matchingRunsItems` / `matchingRuns` があります。
+本APIは「複数valueを含むrange条件について、その一致位置を連続index区間で返す」用途を提供します。
 
 ## 公開API
 
@@ -27,8 +41,15 @@ collectMatchingRangeRuns(wm, low, high)
 
 `WaveletMatrix` と `WaveletMatrixView` の双方で利用できます。
 
-返却される `MatchingRun` は元配列のphysical orderで昇順です。
-隣接する一致positionは必ず1つの極大runへまとめます。
+| API | 引数 | 戻り値 |
+| --- | --- | --- |
+| `matchingRangeRunsItems(wm, low, high, left, right)` | inclusive値範囲 `[low, high]` と元入力index範囲 `[left, right)` | `MatchingRun` をiteratorで順次返す |
+| `matchingRangeRunsItems(wm, low, high)` | inclusive値範囲 `[low, high]` | 入力全体の `MatchingRun` をiteratorで順次返す |
+| `matchingRangeRuns(...)` | 上記と同じ | `seq[MatchingRun]` |
+| `collectMatchingRangeRuns(...)` | 上記と同じ | `matchingRangeRuns` と同じ `seq[MatchingRun]` |
+
+`MatchingRun(left, right)` は元入力上の極大な半開index区間です。
+その区間内の全valueが `low <= value <= high` を満たします。
 
 ## semantics
 
