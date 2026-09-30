@@ -340,8 +340,14 @@ func waveletDomainHigh(bitWidth: int): uint64 {.inline.} =
 
 iterator matchingRangeRunsItems*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, low, high: uint64, left, right: int64): MatchingRun =
-  ## `[left, right)` 内で値がinclusive range `[low, high]` に入る
-  ## positionを、元配列上の極大な連続物理区間として左から列挙します。
+  ## 値のinclusive range `[low, high]` と、元入力のindex範囲
+  ## `[left, right)` を受け取ります。
+  ## 戻り値の `MatchingRun(left, right)` は、元入力上で
+  ## `low <= value <= high` を満たす要素が連続する極大な半開index区間です。
+  ## runは元入力のindex昇順で列挙します。
+  ##
+  ## ここでphysical positionはWavelet Matrix内部の並べ替え後位置ではなく、
+  ## 元の入力配列におけるindexを意味します。
   ##
   ## 全value domainを含むrangeは入力physical rangeをそのまま返し、
   ## `low == high` は既存の等値run列挙へ委譲します。一般rangeは
@@ -375,19 +381,22 @@ iterator matchingRangeRunsItems*[W: WaveletMatrix | WaveletMatrixView](
 
 iterator matchingRangeRunsItems*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, low, high: uint64): MatchingRun =
-  ## Wavelet Matrix全体からinclusive value rangeに一致する極大物理runを列挙します。
+  ## 値のinclusive range `[low, high]` を受け取り、元入力全体から条件に一致する
+  ## 極大な `MatchingRun(left, right)` をindex昇順で列挙します。
   for run in wm.matchingRangeRunsItems(low, high, 0, wm.n):
     yield run
 
 func matchingRangeRuns*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, low, high: uint64, left, right: int64): seq[MatchingRun] =
-  ## `matchingRangeRunsItems(low, high, left, right)` をsequence化します。
+  ## 値範囲 `[low, high]` と元入力index範囲 `[left, right)` を受け取り、
+  ## 一致する極大な元入力index区間を `seq[MatchingRun]` で返します。
   for run in wm.matchingRangeRunsItems(low, high, left, right):
     result.add run
 
 func matchingRangeRuns*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, low, high: uint64): seq[MatchingRun] =
-  ## Wavelet Matrix全体のrange一致runをsequenceとして返します。
+  ## 値範囲 `[low, high]` を受け取り、元入力全体の一致runを
+  ## `seq[MatchingRun]` で返します。
   wm.matchingRangeRuns(low, high, 0, wm.n)
 
 func collectMatchingRangeRuns*[W: WaveletMatrix | WaveletMatrixView](
