@@ -23,8 +23,10 @@ type
     runCount, matchedRows: int64
 
 const
-  DefaultRows = 1_048_576
-  DefaultRepeats = 11
+  # 60 workload cases × baseline/candidate を通常の開発PCで反復できる規模を
+  # defaultにします。1M/11 repeatsは明示引数でextended measurementとして実行します。
+  DefaultRows = 262_144
+  DefaultRepeats = 7
   BitWidths = [8, 16, 32, 64]
   Selectivities = [1, 10, 40, 90, 100]
   BuildFlags = "-d:release --mm:arc"
