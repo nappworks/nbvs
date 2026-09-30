@@ -52,6 +52,30 @@ doAssert wm.matchingRuns(7, 2, 6) == @[
 
 `WaveletMatrixView` でも同じAPIを利用できます。
 
+#### inclusive value rangeをphysical runとして取得する
+
+`matchingRangeRunsItems` / `matchingRangeRuns` は、値がinclusive range
+`[low, high]` に入るpositionを極大なphysical runとして返します。
+
+```nim
+let wm = genWaveletMatrix(@[1'u64, 7, 5, 6, 1, 4, 7, 7, 3])
+
+doAssert wm.matchingRangeRuns(4, 7) == @[
+  (left: 1'i64, right: 4'i64),
+  (left: 5'i64, right: 8'i64)]
+
+for run in wm.matchingRangeRunsItems(4, 7, 2, 7):
+  echo run.left, "..<", run.right
+```
+
+`low == high` は単一valueの `matchingRuns` と同じ結果になります。
+value domain全体を覆うqueryは対象physical rangeを1 runとして返します。
+`low > high` は0件です。
+
+本APIはMSB-first `WaveletMatrix` / `WaveletMatrixView` 専用です。
+LSB-first `ReversedWaveletMatrix` の途中prefixは連続したnumeric intervalを表さないため、
+同じrange pruning contractを持つAPIは提供しません。
+
 ### 2. SuccinctBitVector の 0 / 1 run を取得する
 
 `bitRunsItems` / `bitRuns` は、`1` または `0` が連続する極大区間を返します。
@@ -152,7 +176,9 @@ doAssert bits.selectMonotonic(cursor, 3) == 65
 | 任意の1 occurrenceのpositionを取得する | `select` |
 | 1つの値の全occurrence positionを列挙する | `WaveletSelectCursor` + `nextSelect` |
 | 1つの値の連続物理区間を列挙する | `matchingRunsItems` |
-| 連続物理区間をsequenceで取得する | `matchingRuns` |
+| 1つの値の連続物理区間をsequenceで取得する | `matchingRuns` |
+| value rangeの連続物理区間を列挙する | `matchingRangeRunsItems` |
+| value rangeの連続物理区間をsequenceで取得する | `matchingRangeRuns` |
 | BitVectorの `0` / `1` runを列挙する | `bitRunsItems` |
 | 低レベルの単調増加bit select | `BitVectorSelectCursor` + `selectMonotonic` |
 
@@ -197,6 +223,31 @@ Use `matchingRunsItems` when results can be consumed as a stream and `matchingRu
 Internally, a hybrid strategy selects sequential cursor processing for fragmented matches or terminal-to-root interval lifting for long contiguous groups. The choice is internal; both paths return the same results in the same order. No persistent run-boundary index is stored.
 
 The same APIs are available on `WaveletMatrixView`.
+
+#### Get an inclusive value range as physical runs
+
+`matchingRangeRunsItems` / `matchingRangeRuns` return maximal physical runs
+whose values are inside the inclusive numeric range `[low, high]`.
+
+```nim
+let wm = genWaveletMatrix(@[1'u64, 7, 5, 6, 1, 4, 7, 7, 3])
+
+doAssert wm.matchingRangeRuns(4, 7) == @[
+  (left: 1'i64, right: 4'i64),
+  (left: 5'i64, right: 8'i64)]
+
+for run in wm.matchingRangeRunsItems(4, 7, 2, 7):
+  echo run.left, "..<", run.right
+```
+
+When `low == high`, the result is equivalent to the single-value
+`matchingRuns` API. A query covering the complete value domain returns the
+requested physical range as one run, and `low > high` returns no runs.
+
+These APIs are intentionally limited to the MSB-first `WaveletMatrix` and
+`WaveletMatrixView`. Intermediate prefixes in an LSB-first
+`ReversedWaveletMatrix` do not represent contiguous numeric intervals, so the
+same numeric-range pruning contract is not exposed for RWM.
 
 ### 2. Get 0 / 1 runs from SuccinctBitVector
 
@@ -296,7 +347,9 @@ doAssert bits.selectMonotonic(cursor, 3) == 65
 | Get one arbitrary occurrence position | `select` |
 | Enumerate every occurrence position for one value | `WaveletSelectCursor` + `nextSelect` |
 | Enumerate contiguous physical ranges for one value | `matchingRunsItems` |
-| Collect contiguous physical ranges as a sequence | `matchingRuns` |
+| Collect contiguous physical ranges for one value | `matchingRuns` |
+| Enumerate contiguous physical ranges for a value range | `matchingRangeRunsItems` |
+| Collect contiguous physical ranges for a value range | `matchingRangeRuns` |
 | Enumerate `0` / `1` runs in a bit vector | `bitRunsItems` |
 | Low-level monotonic bit select | `BitVectorSelectCursor` + `selectMonotonic` |
 
