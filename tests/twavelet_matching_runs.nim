@@ -14,6 +14,21 @@ func naiveRuns(xs: openArray[uint64], value: uint64,
       inc i
     result.add (left: int64(start), right: int64(i))
 
+
+func naiveRangeRuns(xs: openArray[uint64], low, high: uint64,
+    left, right: int): seq[MatchingRun] =
+  if low > high:
+    return
+  var i = left
+  while i < right:
+    if xs[i] < low or xs[i] > high:
+      inc i
+      continue
+    let start = i
+    while i < right and xs[i] >= low and xs[i] <= high:
+      inc i
+    result.add (left: int64(start), right: int64(i))
+
 block bitRunsApi:
   var bits = genSuccinctBitVector(8)
   for pos in [1'i64, 2, 3, 5, 6]:
@@ -81,6 +96,76 @@ block edgeCases:
   expectRaises(IndexDefect): discard wm.matchingRuns(2, -1, 2)
   expectRaises(IndexDefect): discard wm.matchingRuns(2, 0, 4)
   expectRaises(IndexDefect): discard wm.matchingRuns(2, 2, 1)
+
+block simpleRangeRuns:
+  let xs = @[1'u64, 7, 5, 6, 1, 4, 7, 7, 3]
+  let wm = genWaveletMatrix(xs, 3)
+  let expected = @[
+    (left: 1'i64, right: 4'i64),
+    (left: 5'i64, right: 8'i64)]
+
+  doAssert wm.matchingRangeRuns(4, 7) == expected
+  doAssert wm.collectMatchingRangeRuns(4, 7) == expected
+  doAssert wm.matchingRangeRuns(4, 7, 2, 7) == @[
+    (left: 2'i64, right: 4'i64),
+    (left: 5'i64, right: 7'i64)]
+  doAssert wm.matchingRangeRuns(7, 7) == wm.matchingRuns(7)
+  doAssert wm.matchingRangeRuns(0, 7) == @[
+    (left: 0'i64, right: int64(xs.len))]
+  doAssert wm.matchingRangeRuns(8, 10).len == 0
+  doAssert wm.matchingRangeRuns(7, 4).len == 0
+  doAssert wm.matchingRangeRuns(4, 7, 3, 3).len == 0
+
+  var iterated: seq[MatchingRun]
+  for run in wm.matchingRangeRunsItems(4, 7):
+    iterated.add run
+  doAssert iterated == expected
+
+  expectRaises(IndexDefect): discard wm.matchingRangeRuns(4, 7, -1, 3)
+  expectRaises(IndexDefect): discard wm.matchingRangeRuns(4, 7, 0, 10)
+  expectRaises(IndexDefect): discard wm.matchingRangeRuns(4, 7, 5, 4)
+
+block rangeRunsExplicitBitWidths:
+  let zeros = genWaveletMatrix(@[0'u64, 0, 0, 0], 0)
+  doAssert zeros.matchingRangeRuns(0, 0, 1, 3) == @[
+    (left: 1'i64, right: 3'i64)]
+  doAssert zeros.matchingRangeRuns(0, uint64.high) == @[
+    (left: 0'i64, right: 4'i64)]
+  doAssert zeros.matchingRangeRuns(1, uint64.high).len == 0
+
+  let xs = @[0'u64, 1'u64 shl 63, uint64.high, 7'u64,
+    uint64.high - 1, uint64.high]
+  let wm = genWaveletMatrix(xs, 64)
+  let queries = [
+    (0'u64, 7'u64),
+    (1'u64 shl 63, uint64.high),
+    (uint64.high - 1, uint64.high),
+    (uint64.high, uint64.high)]
+  for (low, high) in queries:
+    for left in 0..xs.len:
+      for right in left..xs.len:
+        doAssert wm.matchingRangeRuns(
+          low, high, int64(left), int64(right)) ==
+          naiveRangeRuns(xs, low, high, left, right)
+
+block randomRangeRuns:
+  var rng = initRand(0x52414e474552554e'i64)
+  for trial in 0..<120:
+    let length = rng.rand(220)
+    var xs = newSeq[uint64](length)
+    for value in xs.mitems:
+      value = uint64(rng.rand(15))
+    let wm = genWaveletMatrix(xs, 4)
+
+    for sample in 0..<60:
+      let first = uint64(rng.rand(20))
+      let second = uint64(rng.rand(20))
+      let low = min(first, second)
+      let high = max(first, second)
+      let left = rng.rand(length)
+      let right = left + rng.rand(length - left)
+      doAssert wm.matchingRangeRuns(low, high, int64(left), int64(right)) ==
+        naiveRangeRuns(xs, low, high, left, right)
 
 block prefixSplits:
   let xs = @[7'u64, 6, 7, 7, 4, 7, 6, 7]
@@ -189,6 +274,16 @@ block hybridRangesAndViews:
         doAssert wm.matchingRuns(target, int64(left), int64(right)) == expected
         doAssert view.matchingRuns(target, int64(left), int64(right)) == expected
         doAssert view.collectMatchingRuns(target, int64(left), int64(right)) == expected
+        let rangeLow = if bitWidth == 64: uint64.high - 3 else: 5'u64
+        let rangeHigh = target
+        let expectedRange = naiveRangeRuns(
+          xs, rangeLow, rangeHigh, left, right)
+        doAssert wm.matchingRangeRuns(
+          rangeLow, rangeHigh, int64(left), int64(right)) == expectedRange
+        doAssert view.matchingRangeRuns(
+          rangeLow, rangeHigh, int64(left), int64(right)) == expectedRange
+        doAssert view.collectMatchingRangeRuns(
+          rangeLow, rangeHigh, int64(left), int64(right)) == expectedRange
         var iterated: seq[MatchingRun]
         for run in view.matchingRunsItems(target, int64(left), int64(right)):
           iterated.add run
