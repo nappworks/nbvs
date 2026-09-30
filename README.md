@@ -30,7 +30,9 @@ doAssert wm.matchingRuns(7) == @[
   (left: 1'i64, right: 4'i64),
   (left: 5'i64, right: 7'i64)]
 
-# Stream physical runs whose values are inside an inclusive numeric range.
+# low..high is an inclusive value range.
+# Each result is a maximal [left, right) interval of ORIGINAL input indexes
+# whose values all satisfy low <= value <= high.
 for run in wm.matchingRangeRunsItems(5, 7):
   echo run.left, "..<", run.right
 
@@ -86,7 +88,9 @@ doAssert wm.matchingRuns(7) == @[
   (left: 1'i64, right: 4'i64),
   (left: 5'i64, right: 7'i64)]
 
-# inclusive value rangeに一致する連続物理区間を列挙します。
+# low..high は値のinclusive rangeです。
+# 戻り値は、元の入力配列上で low <= value <= high を満たす要素が
+# 連続している極大なindex区間 [left, right) です。
 for run in wm.matchingRangeRunsItems(5, 7):
   echo run.left, "..<", run.right
 
@@ -517,6 +521,16 @@ require `0 <= position < n`. `terminalPositionUnchecked` and
 `accessWithTerminalPositionUnchecked` have the same precondition. The terminal
 APIs are also available on `WaveletMatrixView`.
 
+`matchingRangeRunsItems(low, high, left, right)` takes an inclusive value range
+`[low, high]` and an optional half-open range of original input indexes
+`[left, right)`. It streams `MatchingRun(left, right)` tuples. Each tuple is
+a maximal contiguous interval of ORIGINAL input indexes where every value
+satisfies `low <= value <= high`. The overload without `left, right` searches
+the whole input sequence. `matchingRangeRuns` returns the same runs as
+`seq[MatchingRun]`; `collectMatchingRangeRuns` is an alias.
+"Physical" in this API means positions in the original input sequence, not
+positions in Wavelet Matrix's internal permutations.
+
 `matchingRunsItems(value, left, right)` enumerates maximal matching physical
 intervals in ascending position order. `matchingRuns` collects them into a
 sequence; `collectMatchingRuns` is an alias with the same ordering. All three
@@ -643,6 +657,29 @@ RLE primitives and run-start alternatives. These commands can take substantial t
 ordering, and p50/p90/p95/p99/max latency. On Linux, build with
 `nimble benchFmRev5Perf` and run `bash benchmarks/run_fm_rev5_perf.sh` to collect
 per-query CPU counters when `perf` is installed and permitted by the kernel.
+
+#### WaveletMatrix の value range run 列挙
+
+`matchingRangeRunsItems(low, high, left, right)` は、
+値のinclusive range `[low, high]` と、元の入力配列上の検索範囲
+`[left, right)` を受け取ります。`left, right` を省略した版は入力全体を検索します。
+
+戻り値の `MatchingRun(left, right)` は、**元の入力配列のindex区間**です。
+その区間内の全要素が `low <= value <= high` を満たし、前後には同じ条件を満たす
+要素を追加できない極大な半開区間 `[left, right)` を返します。
+
+`matchingRangeRunsItems` はiterator、`matchingRangeRuns` は
+`seq[MatchingRun]`、`collectMatchingRangeRuns` は同じ結果を返すaliasです。
+ここでphysical positionとはWavelet Matrix内部の並べ替え後位置ではなく、
+**元の入力配列における位置**を指します。
+
+```nim
+let wm = genWaveletMatrix(@[1'u64, 7, 5, 6, 1, 4, 7, 7, 3])
+
+doAssert wm.matchingRangeRuns(4, 7) == @[
+  (left: 1'i64, right: 4'i64),
+  (left: 5'i64, right: 8'i64)]
+```
 
 ### ReversedWaveletMatrix
 
