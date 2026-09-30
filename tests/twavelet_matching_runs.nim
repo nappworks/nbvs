@@ -141,6 +141,9 @@ block rangeRunsExplicitBitWidths:
     (1'u64 shl 63, uint64.high),
     (uint64.high - 1, uint64.high),
     (uint64.high, uint64.high)]
+  doAssert wm.matchingRangeRuns(0, uint64.high) == @[
+    (left: 0'i64, right: int64(xs.len))]
+  doAssert wm.matchingRangeRuns(1, 0).len == 0
   for (low, high) in queries:
     for left in 0..xs.len:
       for right in left..xs.len:
