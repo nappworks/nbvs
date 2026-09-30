@@ -54,8 +54,18 @@ doAssert wm.matchingRuns(7, 2, 6) == @[
 
 #### inclusive value rangeをphysical runとして取得する
 
-`matchingRangeRunsItems` / `matchingRangeRuns` は、値がinclusive range
-`[low, high]` に入るpositionを極大なphysical runとして返します。
+`matchingRangeRunsItems` / `matchingRangeRuns` は、値の範囲と元配列上のindex範囲を受け取り、
+条件に一致する連続index区間を返します。
+
+- `low, high`: 値のinclusive range `[low, high]`
+- `left, right`: 省略可能な元入力のindex範囲 `[left, right)`
+- 戻り値: `MatchingRun(left, right)`。元入力上で `low <= value <= high` を満たす要素が
+  連続する極大な半開区間です
+- `matchingRangeRunsItems`: iteratorで逐次返却
+- `matchingRangeRuns`: `seq[MatchingRun]` で返却
+- `collectMatchingRangeRuns`: `matchingRangeRuns` と同じ結果を返すalias
+
+ここでphysicalとは、Wavelet Matrix内部の並べ替え後位置ではなく**元の入力配列のindex**を意味します。
 
 ```nim
 let wm = genWaveletMatrix(@[1'u64, 7, 5, 6, 1, 4, 7, 7, 3])
@@ -226,8 +236,20 @@ The same APIs are available on `WaveletMatrixView`.
 
 #### Get an inclusive value range as physical runs
 
-`matchingRangeRunsItems` / `matchingRangeRuns` return maximal physical runs
-whose values are inside the inclusive numeric range `[low, high]`.
+`matchingRangeRunsItems` / `matchingRangeRuns` take a value range and,
+optionally, a range of original input indexes, and return contiguous matching
+index intervals.
+
+- `low, high`: inclusive value range `[low, high]`
+- `left, right`: optional half-open range `[left, right)` of ORIGINAL input indexes
+- return value: `MatchingRun(left, right)`, a maximal half-open interval of
+  original indexes whose values all satisfy `low <= value <= high`
+- `matchingRangeRunsItems`: streams runs as an iterator
+- `matchingRangeRuns`: returns `seq[MatchingRun]`
+- `collectMatchingRangeRuns`: alias returning the same result as `matchingRangeRuns`
+
+Here, physical means a position in the original input sequence, not a position
+in an internal Wavelet Matrix permutation.
 
 ```nim
 let wm = genWaveletMatrix(@[1'u64, 7, 5, 6, 1, 4, 7, 7, 3])
