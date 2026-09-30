@@ -1,0 +1,103 @@
+Hint: used config file '/home/vscode/.choosenim/toolchains/nim-2.2.10/config/nim.cfg' [Conf]
+Hint: used config file '/home/vscode/.choosenim/toolchains/nim-2.2.10/config/config.nims' [Conf]
+.................................................................................................................................................
+CC: system/exceptions.nim
+CC: std/private/digitsutils.nim
+CC: std/assertions.nim
+CC: system/dollars.nim
+CC: std/typedthreads.nim
+CC: std/syncio.nim
+CC: system.nim
+CC: algorithm.nim
+CC: parseutils.nim
+CC: unicode.nim
+CC: strutils.nim
+CC: times.nim
+CC: std/monotimes.nim
+CC: pathnorm.nim
+CC: std/oserrors.nim
+CC: std/private/oscommon.nim
+CC: std/private/ospaths2.nim
+CC: std/private/osdirs.nim
+CC: std/envvars.nim
+CC: std/cmdline.nim
+CC: parseopt.nim
+CC: strformat.nim
+CC: nbvs/succinct_bit_vector.nim
+CC: nbvs/bit_vector_select_cursor.nim
+CC: nbvs/wavelet_matrix.nim
+CC: nbvs/wavelet_position_match.nim
+CC: nbvs/wavelet_select_cursor.nim
+CC: nbvs/wavelet_matching_runs.nim
+CC: wm_matching_range_runs_perf.nim
+Hint:  [Link]
+Hint: mm: arc; threads: on; opt: speed; options: -d:release
+67493 lines; 7.550s; 140.715MiB peakmem; proj: /workspaces/myPlayground/myrepo/nbvs/benchmarks/wm_matching_range_runs_perf.nim; out: /workspaces/myPlayground/myrepo/nbvs/benchmarks/wm_matching_range_runs_perf [SuccessX]
+Hint: /workspaces/myPlayground/myrepo/nbvs/benchmarks/wm_matching_range_runs_perf --output=benchmarks/results/pr22_wm_matching_range_runs_scalar.csv [Exec]
+## Summary
+backend,shape,bits,selectivity,p50_ns,p95_ns,p99_ns,speedup,runs,matched_rows
+scalar,random,8,1,22745355.,27414251.,27414251.,5.7476,2110,2129
+scalar,random,8,10,44200557.,56553776.,56553776.,3.0435,23060,25541
+scalar,random,8,40,38812131.,41353638.,41353638.,3.5941,62867,104441
+scalar,random,8,90,41241933.,46502153.,46502153.,3.2823,24795,234438
+scalar,random,8,100,0.,100.,100.,inf,1,262144
+scalar,random,16,1,41118425.,47322185.,47322185.,7.7635,2520,2539
+scalar,random,16,10,41280331.,43487124.,43487124.,7.6886,23795,26455
+scalar,random,16,40,43661479.,49368311.,49368311.,7.4040,62927,105197
+scalar,random,16,90,52698047.,58757794.,58757794.,6.1791,23545,236079
+scalar,random,16,100,0.,200.,200.,inf,1,262144
+scalar,random,32,1,57240996.,86745928.,86745928.,13.4043,2526,2549
+scalar,random,32,10,45731751.,51263987.,51263987.,16.1518,23770,26385
+scalar,random,32,40,44256157.,47823407.,47823407.,16.5200,62936,104909
+scalar,random,32,90,40420545.,43017245.,43017245.,18.1160,23746,235850
+scalar,random,32,100,100.,100.,100.,6514690.8200,1,262144
+scalar,random,64,1,37014503.,40679752.,40679752.,42.7953,2549,2576
+scalar,random,64,10,36916794.,41804091.,41804091.,44.4945,23653,26312
+scalar,random,64,40,36593983.,39135186.,39135186.,43.0371,62727,104879
+scalar,random,64,90,35822629.,45290908.,45290908.,42.6190,23754,235786
+scalar,random,64,100,0.,100.,100.,inf,1,262144
+scalar,clustered,8,1,15065414.,16180659.,16180659.,6.0440,7,1792
+scalar,clustered,8,10,29314795.,31117268.,31117268.,3.0377,106,28160
+scalar,clustered,8,40,28203650.,28924779.,28924779.,3.1696,245,101888
+scalar,clustered,8,90,27233502.,31212663.,31212663.,3.1970,94,235008
+scalar,clustered,8,100,0.,100.,100.,inf,1,262144
+scalar,clustered,16,1,26455370.,29023674.,29023674.,6.8740,7,1792
+scalar,clustered,16,10,28929271.,30732744.,30732744.,6.0644,78,21504
+scalar,clustered,16,40,29394589.,33490855.,33490855.,6.0317,243,103168
+scalar,clustered,16,90,26721191.,30769796.,30769796.,6.4315,102,233984
+scalar,clustered,16,100,100.,100.,100.,1825190.2500,1,262144
+scalar,clustered,32,1,28205530.,30246883.,30246883.,13.0066,12,3072
+scalar,clustered,32,10,30071517.,32503624.,32503624.,12.0690,72,20480
+scalar,clustered,32,40,27634910.,29365386.,29365386.,12.9096,239,102400
+scalar,clustered,32,90,29946248.,33241184.,33241184.,11.8974,97,235520
+scalar,clustered,32,100,100.,100.,100.,3745820.0400,1,262144
+scalar,clustered,64,1,27460825.,28843077.,28843077.,27.1935,5,1280
+scalar,clustered,64,10,27922893.,30702002.,30702002.,26.8376,84,22528
+scalar,clustered,64,40,29980795.,35373511.,35373511.,24.7851,249,102144
+scalar,clustered,64,90,33456535.,37121080.,37121080.,23.4681,82,238848
+scalar,clustered,64,100,100.,100.,100.,7939050.6500,1,262144
+scalar,periodic,8,1,18252813.,19332155.,19332155.,6.5797,2048,2048
+scalar,periodic,8,10,32837482.,38843616.,38843616.,3.7536,21504,25600
+scalar,periodic,8,40,32702577.,36119010.,36119010.,3.9239,21504,104448
+scalar,periodic,8,90,32483968.,36835238.,36835238.,3.5662,21504,234496
+scalar,periodic,8,100,0.,100.,100.,inf,1,262144
+scalar,periodic,16,1,29778177.,36514043.,36514043.,8.3275,2620,2620
+scalar,periodic,16,10,32461483.,33479823.,33479823.,7.9547,26212,26212
+scalar,periodic,16,40,31325438.,38364616.,38364616.,7.3641,104856,104856
+scalar,periodic,16,90,33467031.,40776622.,40776622.,7.1093,26220,235924
+scalar,periodic,16,100,100.,100.,100.,2541301.0900,1,262144
+scalar,periodic,32,1,33091412.,39870081.,39870081.,16.5093,2622,2622
+scalar,periodic,32,10,30733319.,35820121.,35820121.,18.1757,26222,26222
+scalar,periodic,32,40,37566459.,43336282.,43336282.,18.1775,104860,104860
+scalar,periodic,32,90,34872695.,38143626.,38143626.,17.6892,26221,235923
+scalar,periodic,32,100,100.,100.,100.,6010225.4000,1,262144
+scalar,periodic,64,1,35251103.,39236361.,39236361.,50.0639,2621,2621
+scalar,periodic,64,10,34046461.,37526901.,37526901.,45.9124,26214,26214
+scalar,periodic,64,40,32998921.,37208890.,37208890.,44.8984,100130,104858
+scalar,periodic,64,90,31060656.,34352889.,34352889.,45.5914,26215,235929
+scalar,periodic,64,100,0.,100.,100.,inf,1,262144
+sink=0
+backend=scalar
+build_flags="-d:release --mm:arc"
+nim_version=2.2.10
+host=linux/amd64
