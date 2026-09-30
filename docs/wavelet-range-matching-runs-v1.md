@@ -147,6 +147,18 @@ candidate:
 - baselineに対するspeedup
 - Scalar / SIMD
 
+通常の反復測定は 262,144 rows / 7 repeats を既定値とします。
+全60 workloadをScalar/SIMDで反復可能な時間に収め、日常の回帰確認に使います。
+
+より重いextended measurementは明示引数で実行します。
+
+```bash
+nim c --path:src -d:release --mm:arc -r   benchmarks/wm_matching_range_runs_perf.nim --rows=1048576 --repeats=11
+```
+
+extended measurementは長時間実行を許容する追加 evidence とし、通常のPR validationを
+完走不能な既定値にはしません。
+
 benchmarkは測定前にbaselineとcandidateのchecksum、run count、matched row countが一致することを
 assertします。
 
