@@ -658,29 +658,6 @@ ordering, and p50/p90/p95/p99/max latency. On Linux, build with
 `nimble benchFmRev5Perf` and run `bash benchmarks/run_fm_rev5_perf.sh` to collect
 per-query CPU counters when `perf` is installed and permitted by the kernel.
 
-#### WaveletMatrix の value range run 列挙
-
-`matchingRangeRunsItems(low, high, left, right)` は、
-値のinclusive range `[low, high]` と、元の入力配列上の検索範囲
-`[left, right)` を受け取ります。`left, right` を省略した版は入力全体を検索します。
-
-戻り値の `MatchingRun(left, right)` は、**元の入力配列のindex区間**です。
-その区間内の全要素が `low <= value <= high` を満たし、前後には同じ条件を満たす
-要素を追加できない極大な半開区間 `[left, right)` を返します。
-
-`matchingRangeRunsItems` はiterator、`matchingRangeRuns` は
-`seq[MatchingRun]`、`collectMatchingRangeRuns` は同じ結果を返すaliasです。
-ここでphysical positionとはWavelet Matrix内部の並べ替え後位置ではなく、
-**元の入力配列における位置**を指します。
-
-```nim
-let wm = genWaveletMatrix(@[1'u64, 7, 5, 6, 1, 4, 7, 7, 3])
-
-doAssert wm.matchingRangeRuns(4, 7) == @[
-  (left: 1'i64, right: 4'i64),
-  (left: 5'i64, right: 8'i64)]
-```
-
 ### ReversedWaveletMatrix
 
 `ReversedWaveletMatrix` uses the same compact bit-vector representation but
@@ -1300,6 +1277,29 @@ matrixを実行します。`nimble benchRadixChildren`はdegree別のlinear、bi
 p50/p90/p95/p99/max latencyを出力します。Linuxで`perf`が利用可能な場合は
 `nimble benchFmRev5Perf`でbuild後、`bash benchmarks/run_fm_rev5_perf.sh`により
 query単位のCPU counterを取得できます。
+
+#### WaveletMatrix の value range run 列挙
+
+`matchingRangeRunsItems(low, high, left, right)` は、
+値のinclusive range `[low, high]` と、元の入力配列上の検索範囲
+`[left, right)` を受け取ります。`left, right` を省略した版は入力全体を検索します。
+
+戻り値の `MatchingRun(left, right)` は、**元の入力配列のindex区間**です。
+その区間内の全要素が `low <= value <= high` を満たし、前後には同じ条件を満たす
+要素を追加できない極大な半開区間 `[left, right)` を返します。
+
+`matchingRangeRunsItems` はiterator、`matchingRangeRuns` は
+`seq[MatchingRun]`、`collectMatchingRangeRuns` は同じ結果を返すaliasです。
+ここでphysical positionとはWavelet Matrix内部の並べ替え後位置ではなく、
+**元の入力配列における位置**を指します。
+
+```nim
+let wm = genWaveletMatrix(@[1'u64, 7, 5, 6, 1, 4, 7, 7, 3])
+
+doAssert wm.matchingRangeRuns(4, 7) == @[
+  (left: 1'i64, right: 4'i64),
+  (left: 5'i64, right: 8'i64)]
+```
 
 ### ReversedWaveletMatrix
 
