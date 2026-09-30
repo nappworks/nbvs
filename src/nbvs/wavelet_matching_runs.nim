@@ -349,33 +349,29 @@ iterator matchingRangeRunsItems*[W: WaveletMatrix | WaveletMatrixView](
   ## 避けながらphysical orderでrunを形成します。
   if left < 0 or left > right or right > wm.n:
     raise newException(IndexDefect, "range out of bounds")
-  if left >= right or wm.n == 0 or low > high:
-    return
 
-  let domainHigh = waveletDomainHigh(wm.bitWidth)
-  if low > domainHigh:
-    return
-  if low == 0 and high >= domainHigh:
-    yield (left: left, right: right)
-    return
-  if low == high:
-    for run in wm.matchingRunsItems(low, left, right):
-      yield run
-    return
+  if left < right and wm.n > 0 and low <= high:
+    let domainHigh = waveletDomainHigh(wm.bitWidth)
+    if low <= domainHigh:
+      if low == 0 and high >= domainHigh:
+        yield (left: left, right: right)
+      elif low == high:
+        for run in wm.matchingRunsItems(low, left, right):
+          yield run
+      else:
+        var pending = false
+        var pendingLeft = 0'i64
+        for position in left..<right:
+          if wm.valueInRangeAtUnchecked(position, low, high):
+            if not pending:
+              pending = true
+              pendingLeft = position
+          elif pending:
+            yield (left: pendingLeft, right: position)
+            pending = false
 
-  var pending = false
-  var pendingLeft = 0'i64
-  for position in left..<right:
-    if wm.valueInRangeAtUnchecked(position, low, high):
-      if not pending:
-        pending = true
-        pendingLeft = position
-    elif pending:
-      yield (left: pendingLeft, right: position)
-      pending = false
-
-  if pending:
-    yield (left: pendingLeft, right: right)
+        if pending:
+          yield (left: pendingLeft, right: right)
 
 iterator matchingRangeRunsItems*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, low, high: uint64): MatchingRun =
