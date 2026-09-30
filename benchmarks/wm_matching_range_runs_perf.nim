@@ -65,14 +65,19 @@ proc makeValues(rowCount, bitWidth: int, shape: DataShape): seq[uint64] =
     for value in result.mitems:
       value = nextRand(state) and mask
   of dsClustered:
-    # 同一値のphysical runを作り、run fragmentationが低い入力を用意します。
+    # 同一値のphysical runを作りつつ、値域全体へcluster valueを分散します。
     const clusterSize = 256
+    var state = 0x434c555354455245'u64 xor uint64(bitWidth)
+    var clusterValue = 0'u64
     for position in 0..<rowCount:
-      result[position] = uint64(position div clusterSize) and mask
+      if position mod clusterSize == 0:
+        clusterValue = nextRand(state) and mask
+      result[position] = clusterValue
   of dsPeriodic:
-    # value rangeが短いrunとして周期的に現れるfragmented入力です。
+    # odd multiplierで値域へ分散し、隣接一致が少ないfragmented入力を作ります。
+    const multiplier = 0x9e37_79b9_7f4a_7c15'u64
     for position in 0..<rowCount:
-      result[position] = uint64(position) and mask
+      result[position] = (uint64(position) * multiplier) and mask
 
 func queryRange(bitWidth, selectivity: int): tuple[low, high: uint64] =
   let highDomain = domainHigh(bitWidth)
