@@ -29,7 +29,11 @@ const
   DefaultRepeats = 7
   BitWidths = [8, 16, 32, 64]
   Selectivities = [1, 10, 40, 90, 100]
-  BuildFlags = "-d:release --mm:arc"
+  Backend = when defined(nbvsSimd): "simd" else: "scalar"
+  BuildFlags = when defined(nbvsSimd):
+    "-d:release --mm:arc -d:nbvsSimd"
+  else:
+    "-d:release --mm:arc"
 
 var sink {.volatile.}: uint64
 
@@ -154,7 +158,7 @@ proc main() =
       "rows must be positive and repeats must be at least 5")
 
   var lines = @[
-    "shape,bit_width,rows,selectivity,method,repeat,latency_ns," &
+    "backend,shape,bit_width,rows,selectivity,method,repeat,latency_ns," &
     "run_count,matched_rows"]
   var summaries: seq[Summary]
 
@@ -177,11 +181,11 @@ proc main() =
         let apiP50 = percentile(apiSamples, 0.50)
 
         for repeat, latency in baselineSamples:
-          lines.add &"{shape.shapeName},{bitWidth},{rows},{selectivity}," &
+          lines.add &"{Backend},{shape.shapeName},{bitWidth},{rows},{selectivity}," &
             &"access_compare,{repeat + 1},{latency:.0f}," &
             &"{expected.runCount},{expected.matchedRows}"
         for repeat, latency in apiSamples:
-          lines.add &"{shape.shapeName},{bitWidth},{rows},{selectivity}," &
+          lines.add &"{Backend},{shape.shapeName},{bitWidth},{rows},{selectivity}," &
             &"matching_range_runs,{repeat + 1},{latency:.0f}," &
             &"{observed.runCount},{observed.matchedRows}"
 
@@ -207,12 +211,13 @@ proc main() =
     stdout.write(output)
 
   stderr.writeLine("## Summary")
-  stderr.writeLine("shape,bits,selectivity,p50_ns,p95_ns,p99_ns,speedup,runs,matched_rows")
+  stderr.writeLine("backend,shape,bits,selectivity,p50_ns,p95_ns,p99_ns,speedup,runs,matched_rows")
   for item in summaries:
-    stderr.writeLine(&"{item.shape.shapeName},{item.bitWidth}," &
+    stderr.writeLine(&"{Backend},{item.shape.shapeName},{item.bitWidth}," &
       &"{item.selectivity},{item.p50:.0f},{item.p95:.0f},{item.p99:.0f}," &
       &"{item.speedup:.4f},{item.runCount},{item.matchedRows}")
   stderr.writeLine("sink=", sink)
+  stderr.writeLine("backend=", Backend)
   stderr.writeLine("build_flags=", csvEscape(BuildFlags))
   stderr.writeLine("nim_version=", NimVersion)
   stderr.writeLine("host=", hostOS, "/", hostCPU)
