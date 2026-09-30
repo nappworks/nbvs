@@ -30,6 +30,10 @@ doAssert wm.matchingRuns(7) == @[
   (left: 1'i64, right: 4'i64),
   (left: 5'i64, right: 7'i64)]
 
+# Stream physical runs whose values are inside an inclusive numeric range.
+for run in wm.matchingRangeRunsItems(5, 7):
+  echo run.left, "..<", run.right
+
 # Enumerate every matching physical position individually.
 var cursor = wm.initWaveletSelectCursor(7)
 while cursor.remaining > 0:
@@ -54,8 +58,10 @@ doAssert bits.bitRuns(true) == @[
 | Count occurrences | `rank` |
 | Get one arbitrary occurrence | `select` |
 | Enumerate every occurrence position | `WaveletSelectCursor` + `nextSelect` |
-| Stream contiguous matching ranges | `matchingRunsItems` |
-| Collect contiguous matching ranges | `matchingRuns` |
+| Stream contiguous matching ranges for one value | `matchingRunsItems` |
+| Collect contiguous matching ranges for one value | `matchingRuns` |
+| Stream contiguous runs for an inclusive value range | `matchingRangeRunsItems` |
+| Collect contiguous runs for an inclusive value range | `matchingRangeRuns` |
 | Enumerate bit runs | `bitRunsItems` / `bitRuns` |
 
 Advanced hot-path APIs such as `nextSelectUnchecked`, `selectPrepared`,
@@ -79,6 +85,10 @@ for run in wm.matchingRunsItems(7):
 doAssert wm.matchingRuns(7) == @[
   (left: 1'i64, right: 4'i64),
   (left: 5'i64, right: 7'i64)]
+
+# inclusive value rangeに一致する連続物理区間を列挙します。
+for run in wm.matchingRangeRunsItems(5, 7):
+  echo run.left, "..<", run.right
 
 # 一致する全物理positionを1件ずつ取得します。
 var cursor = wm.initWaveletSelectCursor(7)
@@ -104,8 +114,10 @@ doAssert bits.bitRuns(true) == @[
 | occurrence数を数える | `rank` |
 | 任意の1 occurrenceを取得する | `select` |
 | 全occurrence positionを列挙する | `WaveletSelectCursor` + `nextSelect` |
-| 一致する連続物理区間をiteratorで列挙する | `matchingRunsItems` |
-| 一致する連続物理区間をsequenceで取得する | `matchingRuns` |
+| 1つの値に一致する連続物理区間をiteratorで列挙する | `matchingRunsItems` |
+| 1つの値に一致する連続物理区間をsequenceで取得する | `matchingRuns` |
+| inclusive value rangeに一致する連続物理区間を列挙する | `matchingRangeRunsItems` |
+| inclusive value rangeに一致する連続物理区間をsequenceで取得する | `matchingRangeRuns` |
 | BitVectorのrunを列挙する | `bitRunsItems` / `bitRuns` |
 
 `nextSelectUnchecked`、`selectPrepared`、`BitVectorSelectCursor`、
