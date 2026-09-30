@@ -110,6 +110,13 @@ task benchWmPositionPredicate, "Benchmark Wavelet Matrix position predicates":
 task benchWmSelectCursor, "Benchmark repeated Wavelet Matrix select queries":
   exec "nim c --path:src -d:release --mm:arc -r benchmarks/wm_select_cursor_perf.nim"
 
+
+task benchWmMatchingRangeRuns, "Benchmark scalar Wavelet Matrix range-run enumeration":
+  exec "nim c --path:src -d:release --mm:arc -r benchmarks/wm_matching_range_runs_perf.nim"
+
+task benchWmMatchingRangeRunsSimd, "Benchmark SIMD Wavelet Matrix range-run enumeration":
+  exec "nim c --path:src -d:release --mm:arc -d:nbvsSimd -r benchmarks/wm_matching_range_runs_perf.nim"
+
 task benchSuccinctPermutation, "Benchmark SuccinctPermutation against a packed inverse":
   exec "nim c --path:src -d:release --mm:arc -r benchmarks/succinct_permutation_perf.nim"
 
