@@ -91,7 +91,7 @@ func queryRange(bitWidth, selectivity: int): tuple[low, high: uint64] =
   let low = (highDomain - span) div 2'u64
   (low, low + span - 1'u64)
 
-func mixRun(checksum: var uint64, left, right: int64) {.inline.} =
+proc mixRun(checksum: var uint64, left, right: int64) {.inline.} =
   checksum = checksum xor
     ((uint64(left) + 0x9e37_79b9'u64) * 0xbf58_476d'u64)
   checksum = checksum xor
@@ -109,19 +109,19 @@ proc baselineAccessRuns(wm: WaveletMatrix, low, high: uint64):
         pending = true
         pendingLeft = position
     elif pending:
-      result.checksum.mixRun(pendingLeft, position)
+      mixRun(result.checksum, pendingLeft, position)
       inc result.runCount
       result.matchedRows += position - pendingLeft
       pending = false
   if pending:
-    result.checksum.mixRun(pendingLeft, wm.n)
+    mixRun(result.checksum, pendingLeft, wm.n)
     inc result.runCount
     result.matchedRows += wm.n - pendingLeft
 
 proc apiRangeRuns(wm: WaveletMatrix, low, high: uint64):
     tuple[checksum: uint64, runCount, matchedRows: int64] =
   for run in wm.matchingRangeRunsItems(low, high):
-    result.checksum.mixRun(run.left, run.right)
+    mixRun(result.checksum, run.left, run.right)
     inc result.runCount
     result.matchedRows += run.right - run.left
 
