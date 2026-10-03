@@ -1,0 +1,103 @@
+Hint: used config file '/home/vscode/.choosenim/toolchains/nim-2.2.10/config/nim.cfg' [Conf]
+Hint: used config file '/home/vscode/.choosenim/toolchains/nim-2.2.10/config/config.nims' [Conf]
+..................................................................................................................................................
+CC: system/exceptions.nim
+CC: std/private/digitsutils.nim
+CC: std/assertions.nim
+CC: system/dollars.nim
+CC: std/typedthreads.nim
+CC: std/syncio.nim
+CC: system.nim
+CC: algorithm.nim
+CC: parseutils.nim
+CC: unicode.nim
+CC: strutils.nim
+CC: times.nim
+CC: std/monotimes.nim
+CC: pathnorm.nim
+CC: std/oserrors.nim
+CC: std/private/oscommon.nim
+CC: std/private/ospaths2.nim
+CC: std/private/osdirs.nim
+CC: std/envvars.nim
+CC: std/cmdline.nim
+CC: parseopt.nim
+CC: strformat.nim
+CC: nbvs/succinct_bit_vector.nim
+CC: nbvs/bit_vector_select_cursor.nim
+CC: nbvs/wavelet_matrix.nim
+CC: nbvs/wavelet_position_match.nim
+CC: nbvs/wavelet_select_cursor.nim
+CC: nbvs/wavelet_matching_runs.nim
+CC: wm_matching_range_runs_perf.nim
+Hint:  [Link]
+Hint: mm: arc; threads: on; opt: speed; options: -d:release
+67614 lines; 7.080s; 140.586MiB peakmem; proj: /workspaces/myPlayground/myrepo/nbvs/benchmarks/wm_matching_range_runs_perf.nim; out: /workspaces/myPlayground/myrepo/nbvs/benchmarks/wm_matching_range_runs_perf [SuccessX]
+Hint: /workspaces/myPlayground/myrepo/nbvs/benchmarks/wm_matching_range_runs_perf --output=benchmarks/results/pr22_wm_matching_range_runs_simd.csv [Exec]
+## Summary
+backend,shape,bits,selectivity,p50_ns,p95_ns,p99_ns,speedup,runs,matched_rows
+simd,random,8,1,15002704.,17060487.,17060487.,5.5303,2110,2129
+simd,random,8,10,26202155.,26858481.,26858481.,3.0140,23060,25541
+simd,random,8,40,29084470.,48257042.,48257042.,2.9267,62867,104441
+simd,random,8,90,25346920.,27153992.,27153992.,3.0966,24795,234438
+simd,random,8,100,0.,100.,100.,inf,1,262144
+simd,random,16,1,29553983.,33861856.,33861856.,6.4875,2520,2539
+simd,random,16,10,26269352.,30456919.,30456919.,6.8709,23795,26455
+simd,random,16,40,25854235.,27627906.,27627906.,6.7816,62927,105197
+simd,random,16,90,26067043.,28119026.,28119026.,6.4948,23545,236079
+simd,random,16,100,100.,100.,100.,1754779.6300,1,262144
+simd,random,32,1,24991806.,27422004.,27422004.,15.3266,2526,2549
+simd,random,32,10,23682053.,26928584.,26928584.,16.1441,23770,26385
+simd,random,32,40,24494982.,27116986.,27116986.,15.4464,62936,104909
+simd,random,32,90,24677789.,27858116.,27858116.,15.4404,23746,235850
+simd,random,32,100,0.,100.,100.,inf,1,262144
+simd,random,64,1,26274456.,27427902.,27427902.,40.6844,2549,2576
+simd,random,64,10,25251020.,29330285.,29330285.,42.7547,23653,26312
+simd,random,64,40,26686669.,27891617.,27891617.,39.7463,62727,104879
+simd,random,64,90,25326214.,30332316.,30332316.,41.2435,23754,235786
+simd,random,64,100,0.,100.,100.,inf,1,262144
+simd,clustered,8,1,12660008.,14234872.,14234872.,3.9166,7,1792
+simd,clustered,8,10,18879559.,22572307.,22572307.,2.5237,106,28160
+simd,clustered,8,40,17983722.,19598887.,19598887.,2.7322,245,101888
+simd,clustered,8,90,17433201.,19350978.,19350978.,2.8684,94,235008
+simd,clustered,8,100,100.,100.,100.,505048.3000,1,262144
+simd,clustered,16,1,18052826.,20185611.,20185611.,5.2363,7,1792
+simd,clustered,16,10,19151471.,21579869.,21579869.,5.1119,78,21504
+simd,clustered,16,40,21593969.,30139614.,30139614.,4.8413,243,103168
+simd,clustered,16,90,19415782.,21544167.,21544167.,5.3792,102,233984
+simd,clustered,16,100,0.,100.,100.,inf,1,262144
+simd,clustered,32,1,20178513.,22829619.,22829619.,10.4734,12,3072
+simd,clustered,32,10,19687093.,21382062.,21382062.,10.5293,72,20480
+simd,clustered,32,40,17582168.,20374174.,20374174.,10.9090,239,102400
+simd,clustered,32,90,21578221.,31164385.,31164385.,9.8455,97,235520
+simd,clustered,32,100,0.,100.,100.,inf,1,262144
+simd,clustered,64,1,18456725.,21053427.,21053427.,24.8516,5,1280
+simd,clustered,64,10,19592469.,23545225.,23545225.,22.9656,84,22528
+simd,clustered,64,40,29761786.,72238678.,72238678.,14.3776,249,102144
+simd,clustered,64,90,20671824.,21976376.,21976376.,21.1687,82,238848
+simd,clustered,64,100,0.,100.,100.,inf,1,262144
+simd,periodic,8,1,13711547.,16781870.,16781870.,5.4745,2048,2048
+simd,periodic,8,10,23454837.,24241368.,24241368.,3.4156,21504,25600
+simd,periodic,8,40,20294710.,25042100.,25042100.,4.0570,21504,104448
+simd,periodic,8,90,23890253.,27389093.,27389093.,3.3083,21504,234496
+simd,periodic,8,100,0.,100.,100.,inf,1,262144
+simd,periodic,16,1,20092976.,22766779.,22766779.,8.4831,2620,2620
+simd,periodic,16,10,21205919.,22054452.,22054452.,7.1613,26212,26212
+simd,periodic,16,40,23407204.,24274637.,24274637.,6.4397,104856,104856
+simd,periodic,16,90,22618373.,25010766.,25010766.,6.7271,26220,235924
+simd,periodic,16,100,100.,100.,100.,1601048.8300,1,262144
+simd,periodic,32,1,18658145.,20554121.,20554121.,18.5730,2622,2622
+simd,periodic,32,10,22020079.,23816651.,23816651.,16.5171,26222,26222
+simd,periodic,32,40,19986099.,22870114.,22870114.,18.2120,104860,104860
+simd,periodic,32,90,22632204.,27787110.,27787110.,15.5606,26221,235923
+simd,periodic,32,100,0.,100.,100.,inf,1,262144
+simd,periodic,64,1,19364460.,22458781.,22458781.,51.1984,2621,2621
+simd,periodic,64,10,19460675.,23949753.,23949753.,51.8703,26214,26214
+simd,periodic,64,40,21154345.,22269990.,22269990.,48.7619,100130,104858
+simd,periodic,64,90,23189824.,26123341.,26123341.,44.9689,26215,235929
+simd,periodic,64,100,100.,100.,100.,10661872.7900,1,262144
+sink=0
+backend=simd
+build_flags="-d:release --mm:arc -d:nbvsSimd"
+nim_version=2.2.10
+host=linux/amd64

@@ -30,6 +30,12 @@ doAssert wm.matchingRuns(7) == @[
   (left: 1'i64, right: 4'i64),
   (left: 5'i64, right: 7'i64)]
 
+# low..high is an inclusive value range.
+# Each result is a maximal [left, right) interval of ORIGINAL input indexes
+# whose values all satisfy low <= value <= high.
+for run in wm.matchingRangeRunsItems(5, 7):
+  echo run.left, "..<", run.right
+
 # Enumerate every matching physical position individually.
 var cursor = wm.initWaveletSelectCursor(7)
 while cursor.remaining > 0:
@@ -54,8 +60,10 @@ doAssert bits.bitRuns(true) == @[
 | Count occurrences | `rank` |
 | Get one arbitrary occurrence | `select` |
 | Enumerate every occurrence position | `WaveletSelectCursor` + `nextSelect` |
-| Stream contiguous matching ranges | `matchingRunsItems` |
-| Collect contiguous matching ranges | `matchingRuns` |
+| Stream contiguous matching ranges for one value | `matchingRunsItems` |
+| Collect contiguous matching ranges for one value | `matchingRuns` |
+| Stream contiguous runs for an inclusive value range | `matchingRangeRunsItems` |
+| Collect contiguous runs for an inclusive value range | `matchingRangeRuns` |
 | Enumerate bit runs | `bitRunsItems` / `bitRuns` |
 
 Advanced hot-path APIs such as `nextSelectUnchecked`, `selectPrepared`,
@@ -79,6 +87,12 @@ for run in wm.matchingRunsItems(7):
 doAssert wm.matchingRuns(7) == @[
   (left: 1'i64, right: 4'i64),
   (left: 5'i64, right: 7'i64)]
+
+# low..high は値のinclusive rangeです。
+# 戻り値は、元の入力配列上で low <= value <= high を満たす要素が
+# 連続している極大なindex区間 [left, right) です。
+for run in wm.matchingRangeRunsItems(5, 7):
+  echo run.left, "..<", run.right
 
 # 一致する全物理positionを1件ずつ取得します。
 var cursor = wm.initWaveletSelectCursor(7)
@@ -104,8 +118,10 @@ doAssert bits.bitRuns(true) == @[
 | occurrence数を数える | `rank` |
 | 任意の1 occurrenceを取得する | `select` |
 | 全occurrence positionを列挙する | `WaveletSelectCursor` + `nextSelect` |
-| 一致する連続物理区間をiteratorで列挙する | `matchingRunsItems` |
-| 一致する連続物理区間をsequenceで取得する | `matchingRuns` |
+| 1つの値に一致する連続物理区間をiteratorで列挙する | `matchingRunsItems` |
+| 1つの値に一致する連続物理区間をsequenceで取得する | `matchingRuns` |
+| inclusive value rangeに一致する連続物理区間を列挙する | `matchingRangeRunsItems` |
+| inclusive value rangeに一致する連続物理区間をsequenceで取得する | `matchingRangeRuns` |
 | BitVectorのrunを列挙する | `bitRunsItems` / `bitRuns` |
 
 `nextSelectUnchecked`、`selectPrepared`、`BitVectorSelectCursor`、
@@ -504,6 +520,16 @@ an order, while the variants without `collect` guarantee ascending value order.
 require `0 <= position < n`. `terminalPositionUnchecked` and
 `accessWithTerminalPositionUnchecked` have the same precondition. The terminal
 APIs are also available on `WaveletMatrixView`.
+
+`matchingRangeRunsItems(low, high, left, right)` takes an inclusive value range
+`[low, high]` and an optional half-open range of original input indexes
+`[left, right)`. It streams `MatchingRun(left, right)` tuples. Each tuple is
+a maximal contiguous interval of ORIGINAL input indexes where every value
+satisfies `low <= value <= high`. The overload without `left, right` searches
+the whole input sequence. `matchingRangeRuns` returns the same runs as
+`seq[MatchingRun]`; `collectMatchingRangeRuns` is an alias.
+"Physical" in this API means positions in the original input sequence, not
+positions in Wavelet Matrix's internal permutations.
 
 `matchingRunsItems(value, left, right)` enumerates maximal matching physical
 intervals in ascending position order. `matchingRuns` collects them into a
@@ -1251,6 +1277,29 @@ matrixを実行します。`nimble benchRadixChildren`はdegree別のlinear、bi
 p50/p90/p95/p99/max latencyを出力します。Linuxで`perf`が利用可能な場合は
 `nimble benchFmRev5Perf`でbuild後、`bash benchmarks/run_fm_rev5_perf.sh`により
 query単位のCPU counterを取得できます。
+
+#### WaveletMatrix の value range run 列挙
+
+`matchingRangeRunsItems(low, high, left, right)` は、
+値のinclusive range `[low, high]` と、元の入力配列上の検索範囲
+`[left, right)` を受け取ります。`left, right` を省略した版は入力全体を検索します。
+
+戻り値の `MatchingRun(left, right)` は、**元の入力配列のindex区間**です。
+その区間内の全要素が `low <= value <= high` を満たし、前後には同じ条件を満たす
+要素を追加できない極大な半開区間 `[left, right)` を返します。
+
+`matchingRangeRunsItems` はiterator、`matchingRangeRuns` は
+`seq[MatchingRun]`、`collectMatchingRangeRuns` は同じ結果を返すaliasです。
+ここでphysical positionとはWavelet Matrix内部の並べ替え後位置ではなく、
+**元の入力配列における位置**を指します。
+
+```nim
+let wm = genWaveletMatrix(@[1'u64, 7, 5, 6, 1, 4, 7, 7, 3])
+
+doAssert wm.matchingRangeRuns(4, 7) == @[
+  (left: 1'i64, right: 4'i64),
+  (left: 5'i64, right: 8'i64)]
+```
 
 ### ReversedWaveletMatrix
 

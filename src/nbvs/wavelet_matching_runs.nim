@@ -6,6 +6,7 @@
 ## interval lifting を使用します。追加の永続補助構造は使用しません。
 
 import wavelet_matrix
+import wavelet_position_match
 import wavelet_select_cursor
 import succinct_bit_vector
 
@@ -327,3 +328,83 @@ func collectMatchingRuns*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, value: uint64): seq[MatchingRun] =
   ## `matchingRuns(value)` の互換用別名です。
   wm.matchingRuns(value)
+
+
+func waveletDomainHigh(bitWidth: int): uint64 {.inline.} =
+  if bitWidth <= 0:
+    0'u64
+  elif bitWidth >= 64:
+    uint64.high
+  else:
+    (1'u64 shl bitWidth) - 1'u64
+
+iterator matchingRangeRunsItems*[W: WaveletMatrix | WaveletMatrixView](
+    wm: W, low, high: uint64, left, right: int64): MatchingRun =
+  ## 値のinclusive range `[low, high]` と、元入力のindex範囲
+  ## `[left, right)` を受け取ります。
+  ## 戻り値の `MatchingRun(left, right)` は、元入力上で
+  ## `low <= value <= high` を満たす要素が連続する極大な半開index区間です。
+  ## runは元入力のindex昇順で列挙します。
+  ##
+  ## ここでphysical positionはWavelet Matrix内部の並べ替え後位置ではなく、
+  ## 元の入力配列におけるindexを意味します。
+  ##
+  ## 全value domainを含むrangeは入力physical rangeをそのまま返し、
+  ## `low == high` は既存の等値run列挙へ委譲します。一般rangeは
+  ## `valueInRangeAtUnchecked` のprefix pruningを利用し、値全体の復元を
+  ## 避けながらphysical orderでrunを形成します。
+  if left < 0 or left > right or right > wm.n:
+    raise newException(IndexDefect, "range out of bounds")
+
+  if left < right and wm.n > 0 and low <= high:
+    let domainHigh = waveletDomainHigh(wm.bitWidth)
+    if low <= domainHigh:
+      if low == 0 and high >= domainHigh:
+        yield (left: left, right: right)
+      elif low == high:
+        for run in wm.matchingRunsItems(low, left, right):
+          yield run
+      else:
+        var pending = false
+        var pendingLeft = 0'i64
+        for position in left..<right:
+          if wm.valueInRangeAtUnchecked(position, low, high):
+            if not pending:
+              pending = true
+              pendingLeft = position
+          elif pending:
+            yield (left: pendingLeft, right: position)
+            pending = false
+
+        if pending:
+          yield (left: pendingLeft, right: right)
+
+iterator matchingRangeRunsItems*[W: WaveletMatrix | WaveletMatrixView](
+    wm: W, low, high: uint64): MatchingRun =
+  ## 値のinclusive range `[low, high]` を受け取り、元入力全体から条件に一致する
+  ## 極大な `MatchingRun(left, right)` をindex昇順で列挙します。
+  for run in wm.matchingRangeRunsItems(low, high, 0, wm.n):
+    yield run
+
+func matchingRangeRuns*[W: WaveletMatrix | WaveletMatrixView](
+    wm: W, low, high: uint64, left, right: int64): seq[MatchingRun] =
+  ## 値範囲 `[low, high]` と元入力index範囲 `[left, right)` を受け取り、
+  ## 一致する極大な元入力index区間を `seq[MatchingRun]` で返します。
+  for run in wm.matchingRangeRunsItems(low, high, left, right):
+    result.add run
+
+func matchingRangeRuns*[W: WaveletMatrix | WaveletMatrixView](
+    wm: W, low, high: uint64): seq[MatchingRun] =
+  ## 値範囲 `[low, high]` を受け取り、元入力全体の一致runを
+  ## `seq[MatchingRun]` で返します。
+  wm.matchingRangeRuns(low, high, 0, wm.n)
+
+func collectMatchingRangeRuns*[W: WaveletMatrix | WaveletMatrixView](
+    wm: W, low, high: uint64, left, right: int64): seq[MatchingRun] =
+  ## `matchingRangeRuns(low, high, left, right)` の互換用別名です。
+  wm.matchingRangeRuns(low, high, left, right)
+
+func collectMatchingRangeRuns*[W: WaveletMatrix | WaveletMatrixView](
+    wm: W, low, high: uint64): seq[MatchingRun] =
+  ## `matchingRangeRuns(low, high)` の互換用別名です。
+  wm.matchingRangeRuns(low, high)
