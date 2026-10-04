@@ -2,7 +2,7 @@
 ##
 ## 同一Wavelet Matrix・同一physical range・同一value rangeについて、
 ## `access + compare`、PR #22相当のposition predicate scan、
-## range-native `matchingRangeRunsItems` をsame-binaryで比較します。
+## Stage B adaptive `matchingRangeRunsItems` をsame-binaryで比較します。
 
 import std/[algorithm, monotimes, os, parseopt, strformat, strutils, times]
 import nbvs
@@ -18,6 +18,7 @@ type
     bitWidth: int
     selectivity: int
     methodName: string
+    strategyName: string
     p50, p95, p99: float
     speedupVsAccess: float
     speedupVsPosition: float
@@ -192,8 +193,8 @@ proc main() =
       "rows must be positive and repeats must be at least 5")
 
   var lines = @[
-    "backend,shape,bit_width,rows,selectivity,method,repeat,latency_ns," &
-    "run_count,matched_rows"]
+    "backend,shape,bit_width,rows,selectivity,method,strategy,repeat," &
+    "latency_ns,run_count,matched_rows"]
   var summaries: seq[Summary]
 
   for shape in [dsRandom, dsClustered, dsPeriodic]:
@@ -205,9 +206,13 @@ proc main() =
         let (low, high) = queryRange(bitWidth, selectivity)
         let expected = baselineAccessRuns(wm, low, high)
         let positionObserved = positionPredicateRuns(wm, low, high)
-        let nativeObserved = apiRangeRuns(wm, low, high)
+        let adaptiveObserved = apiRangeRuns(wm, low, high)
         doAssert positionObserved == expected
-        doAssert nativeObserved == expected
+        doAssert adaptiveObserved == expected
+        let adaptiveUsesNative =
+          wm.rangeRunAdaptiveUsesNativeBenchmark(low, high, 0, wm.n)
+        let adaptiveStrategy =
+          if adaptiveUsesNative: "native" else: "position"
 
         # 3 methodを1回ずつwarmupした後、repeatごとに開始methodをrotateします。
         sink = sink xor baselineAccessRuns(wm, low, high).checksum
@@ -216,7 +221,7 @@ proc main() =
 
         var baselineSamples = newSeqOfCap[float](repeats)
         var positionSamples = newSeqOfCap[float](repeats)
-        var nativeSamples = newSeqOfCap[float](repeats)
+        var adaptiveSamples = newSeqOfCap[float](repeats)
 
         template recordBaseline() =
           block:
@@ -236,7 +241,7 @@ proc main() =
           block:
             let started = getMonoTime()
             sink = sink xor apiRangeRuns(wm, low, high).checksum
-            nativeSamples.add float(
+            adaptiveSamples.add float(
               (getMonoTime() - started).inNanoseconds)
 
         for repeatIndex in 0..<repeats:
@@ -256,26 +261,28 @@ proc main() =
 
         let baselineP50 = percentile(baselineSamples, 0.50)
         let positionP50 = percentile(positionSamples, 0.50)
-        let nativeP50 = percentile(nativeSamples, 0.50)
+        let adaptiveP50 = percentile(adaptiveSamples, 0.50)
 
         for repeat, latency in baselineSamples:
           lines.add &"{Backend},{shape.shapeName},{bitWidth},{rows},{selectivity}," &
-            &"access_compare,{repeat + 1},{latency:.0f}," &
+            &"access_compare,n/a,{repeat + 1},{latency:.0f}," &
             &"{expected.runCount},{expected.matchedRows}"
         for repeat, latency in positionSamples:
           lines.add &"{Backend},{shape.shapeName},{bitWidth},{rows},{selectivity}," &
-            &"position_predicate_scan,{repeat + 1},{latency:.0f}," &
+            &"position_predicate_scan,position,{repeat + 1},{latency:.0f}," &
             &"{positionObserved.runCount},{positionObserved.matchedRows}"
-        for repeat, latency in nativeSamples:
+        for repeat, latency in adaptiveSamples:
           lines.add &"{Backend},{shape.shapeName},{bitWidth},{rows},{selectivity}," &
-            &"matching_range_runs_native,{repeat + 1},{latency:.0f}," &
-            &"{nativeObserved.runCount},{nativeObserved.matchedRows}"
+            &"matching_range_runs_adaptive,{adaptiveStrategy},{repeat + 1}," &
+            &"{latency:.0f},{adaptiveObserved.runCount}," &
+            &"{adaptiveObserved.matchedRows}"
 
         summaries.add Summary(
           shape: shape,
           bitWidth: bitWidth,
           selectivity: selectivity,
           methodName: "position_predicate_scan",
+          strategyName: "position",
           p50: positionP50,
           p95: percentile(positionSamples, 0.95),
           p99: percentile(positionSamples, 0.99),
@@ -287,14 +294,15 @@ proc main() =
           shape: shape,
           bitWidth: bitWidth,
           selectivity: selectivity,
-          methodName: "matching_range_runs_native",
-          p50: nativeP50,
-          p95: percentile(nativeSamples, 0.95),
-          p99: percentile(nativeSamples, 0.99),
-          speedupVsAccess: baselineP50 / nativeP50,
-          speedupVsPosition: positionP50 / nativeP50,
-          runCount: nativeObserved.runCount,
-          matchedRows: nativeObserved.matchedRows)
+          methodName: "matching_range_runs_adaptive",
+          strategyName: adaptiveStrategy,
+          p50: adaptiveP50,
+          p95: percentile(adaptiveSamples, 0.95),
+          p99: percentile(adaptiveSamples, 0.99),
+          speedupVsAccess: baselineP50 / adaptiveP50,
+          speedupVsPosition: positionP50 / adaptiveP50,
+          runCount: adaptiveObserved.runCount,
+          matchedRows: adaptiveObserved.matchedRows)
 
   let output = lines.join("\n") & "\n"
   if outputPath.len > 0:
@@ -307,11 +315,12 @@ proc main() =
 
   stderr.writeLine("## Summary")
   stderr.writeLine(
-    "backend,shape,bits,selectivity,method,p50_ns,p95_ns,p99_ns," &
+    "backend,shape,bits,selectivity,method,strategy,p50_ns,p95_ns,p99_ns," &
     "speedup_vs_access,speedup_vs_position,runs,matched_rows")
   for item in summaries:
     stderr.writeLine(&"{Backend},{item.shape.shapeName},{item.bitWidth}," &
-      &"{item.selectivity},{item.methodName},{item.p50:.0f},{item.p95:.0f}," &
+      &"{item.selectivity},{item.methodName},{item.strategyName}," &
+      &"{item.p50:.0f},{item.p95:.0f}," &
       &"{item.p99:.0f},{item.speedupVsAccess:.4f}," &
       &"{item.speedupVsPosition:.4f},{item.runCount},{item.matchedRows}")
   stderr.writeLine("sink=", sink)
