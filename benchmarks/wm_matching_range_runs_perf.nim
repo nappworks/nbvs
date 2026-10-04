@@ -210,14 +210,19 @@ proc main() =
         doAssert positionObserved == expected
         doAssert adaptiveObserved == expected
         let adaptiveStrategy =
-          when defined(nbvsRangeRunBenchmark):
-            if wm.rangeRunAdaptiveUsesNativeBenchmark(
-                low, high, 0, wm.n):
-              "native"
-            else:
-              "position"
+          if low == 0 and high >= domainHigh(bitWidth):
+            "full_domain"
+          elif low == high:
+            "equality"
           else:
-            "unobserved"
+            when defined(nbvsRangeRunBenchmark):
+              if wm.rangeRunAdaptiveUsesNativeBenchmark(
+                  low, high, 0, wm.n):
+                "native"
+              else:
+                "position"
+            else:
+              "unobserved"
 
         # 3 methodを1回ずつwarmupした後、repeatごとに開始methodをrotateします。
         sink = sink xor baselineAccessRuns(wm, low, high).checksum
