@@ -209,10 +209,15 @@ proc main() =
         let adaptiveObserved = apiRangeRuns(wm, low, high)
         doAssert positionObserved == expected
         doAssert adaptiveObserved == expected
-        let adaptiveUsesNative =
-          wm.rangeRunAdaptiveUsesNativeBenchmark(low, high, 0, wm.n)
         let adaptiveStrategy =
-          if adaptiveUsesNative: "native" else: "position"
+          when defined(nbvsRangeRunBenchmark):
+            if wm.rangeRunAdaptiveUsesNativeBenchmark(
+                low, high, 0, wm.n):
+              "native"
+            else:
+              "position"
+          else:
+            "unobserved"
 
         # 3 methodを1回ずつwarmupした後、repeatごとに開始methodをrotateします。
         sink = sink xor baselineAccessRuns(wm, low, high).checksum
@@ -237,7 +242,7 @@ proc main() =
             positionSamples.add float(
               (getMonoTime() - started).inNanoseconds)
 
-        template recordNative() =
+        template recordAdaptive() =
           block:
             let started = getMonoTime()
             sink = sink xor apiRangeRuns(wm, low, high).checksum
@@ -249,7 +254,7 @@ proc main() =
           of 0:
             recordBaseline()
             recordPosition()
-            recordNative()
+            recordAdaptive()
           of 1:
             recordPosition()
             recordNative()
