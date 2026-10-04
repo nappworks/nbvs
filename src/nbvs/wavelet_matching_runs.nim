@@ -6,7 +6,6 @@
 ## interval lifting を使用します。追加の永続補助構造は使用しません。
 
 import wavelet_matrix
-import wavelet_position_match
 import wavelet_select_cursor
 import succinct_bit_vector
 
