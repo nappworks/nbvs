@@ -6,6 +6,7 @@
 ## interval lifting を使用します。追加の永続補助構造は使用しません。
 
 import wavelet_matrix
+import wavelet_position_match
 import wavelet_select_cursor
 import succinct_bit_vector
 
@@ -31,6 +32,10 @@ const
   HybridLiftSpan = 32'i64
   BitRunTraversalStackCapacity = 66
   RangeRunTraversalStackCapacity = 66
+  RangeRunAdaptiveProbeWindows = 8
+  RangeRunAdaptiveWindowSize = 64'i64
+  RangeRunAdaptiveMinSpan = 2048'i64
+  RangeRunAdaptiveTransitionLimit = 6
 
 func valueFits(bitWidth: int, value: uint64): bool {.inline.} =
   if bitWidth == 0:
@@ -354,6 +359,68 @@ func rangeLowBitsMask(bitCount: int): uint64 {.inline.} =
   else:
     (1'u64 shl bitCount) - 1'u64
 
+func preferRangeNativeAdaptive[
+    W: WaveletMatrix | WaveletMatrixView](
+    wm: W, low, high: uint64, left, right: int64): bool =
+  ## Stage Bのbounded fragmentation probeです。
+  ##
+  ## physical range全体は走査せず、最大8個の64-row windowだけを均等配置して
+  ## range predicateのmatch/non-match遷移数を数えます。局所遷移が多い場合は
+  ## Stage Aで大幅regressionした高fragmentation workloadとみなしposition scanを
+  ## 選択します。遷移が少ない場合だけrange-native traversalを選択します。
+  ##
+  ## 短いrangeではprobe overheadを回避するためposition scanを優先します。
+  let span = right - left
+  if span < RangeRunAdaptiveMinSpan:
+    return false
+
+  let windowSize = min(span, RangeRunAdaptiveWindowSize)
+  let maxStartOffset = span - windowSize
+  var transitions = 0
+
+  for windowIndex in 0..<RangeRunAdaptiveProbeWindows:
+    let startOffset =
+      if RangeRunAdaptiveProbeWindows <= 1:
+        0'i64
+      else:
+        (maxStartOffset * int64(windowIndex)) div
+          int64(RangeRunAdaptiveProbeWindows - 1)
+    let windowLeft = left + startOffset
+    let windowRight = windowLeft + windowSize
+
+    var previous =
+      wm.valueInRangeAtUnchecked(windowLeft, low, high)
+    var position = windowLeft + 1
+    while position < windowRight:
+      let current = wm.valueInRangeAtUnchecked(position, low, high)
+      if current != previous:
+        inc transitions
+        if transitions > RangeRunAdaptiveTransitionLimit:
+          return false
+      previous = current
+      inc position
+
+  true
+
+iterator matchingRangeRunsPositionScanItems[
+    W: WaveletMatrix | WaveletMatrixView](
+    wm: W, low, high: uint64, left, right: int64): MatchingRun =
+  ## PR #22のgeneral-range routeです。
+  ## physical positionごとにprefix-pruned predicateを評価し、極大runへ結合します。
+  var pending = false
+  var pendingLeft = 0'i64
+  for position in left..<right:
+    if wm.valueInRangeAtUnchecked(position, low, high):
+      if not pending:
+        pending = true
+        pendingLeft = position
+    elif pending:
+      yield (left: pendingLeft, right: position)
+      pending = false
+
+  if pending:
+    yield (left: pendingLeft, right: right)
+
 iterator matchingRangeRunsNativeItems[
     W: WaveletMatrix | WaveletMatrixView](
     wm: W, low, high: uint64, left, right: int64): MatchingRun =
@@ -475,9 +542,9 @@ iterator matchingRangeRunsItems*[W: WaveletMatrix | WaveletMatrixView](
   ## 元の入力配列におけるindexを意味します。
   ##
   ## 全value domainを含むrangeは入力physical rangeをそのまま返し、
-  ## `low == high` は既存の等値run列挙へ委譲します。一般rangeは
-  ## MSB-first prefix subtreeをrangeでpruneし、完全包含されたsubtreeの
-  ## physical区間を直接runへ統合します。
+  ## `low == high` は既存の等値run列挙へ委譲します。一般rangeはbounded
+  ## fragmentation probeでstrategyを選択し、低fragmentationならMSB-first
+  ## range-native traversal、高fragmentationならPR #22のposition scanを使います。
   if left < 0 or left > right or right > wm.n:
     raise newException(IndexDefect, "range out of bounds")
 
@@ -490,8 +557,20 @@ iterator matchingRangeRunsItems*[W: WaveletMatrix | WaveletMatrixView](
         for run in wm.matchingRunsItems(low, left, right):
           yield run
       else:
-        for run in wm.matchingRangeRunsNativeItems(low, high, left, right):
-          yield run
+        if wm.preferRangeNativeAdaptive(low, high, left, right):
+          for run in wm.matchingRangeRunsNativeItems(low, high, left, right):
+            yield run
+        else:
+          for run in wm.matchingRangeRunsPositionScanItems(
+              low, high, left, right):
+            yield run
+
+when defined(nbvsRangeRunBenchmark):
+  func rangeRunAdaptiveUsesNativeBenchmark*[
+      W: WaveletMatrix | WaveletMatrixView](
+      wm: W, low, high: uint64, left, right: int64): bool =
+    ## benchmark専用のstrategy観測hookです。通常buildでは公開されません。
+    wm.preferRangeNativeAdaptive(low, high, left, right)
 
 iterator matchingRangeRunsItems*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, low, high: uint64): MatchingRun =
