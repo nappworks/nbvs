@@ -19,10 +19,19 @@ type
     left: int64,
     right: int64]
 
+  RangeRunNode = tuple[
+    level: int,
+    physicalLeft: int64,
+    physicalRight: int64,
+    mappedLeft: int64,
+    mappedRight: int64,
+    prefix: uint64]
+
 const
   HybridProbeChecks = 96
   HybridLiftSpan = 32'i64
   BitRunTraversalStackCapacity = 66
+  RangeRunTraversalStackCapacity = 66
 
 func valueFits(bitWidth: int, value: uint64): bool {.inline.} =
   if bitWidth == 0:
@@ -338,6 +347,123 @@ func waveletDomainHigh(bitWidth: int): uint64 {.inline.} =
   else:
     (1'u64 shl bitWidth) - 1'u64
 
+func rangeLowBitsMask(bitCount: int): uint64 {.inline.} =
+  if bitCount <= 0:
+    0'u64
+  elif bitCount >= 64:
+    uint64.high
+  else:
+    (1'u64 shl bitCount) - 1'u64
+
+iterator matchingRangeRunsNativeItems[
+    W: WaveletMatrix | WaveletMatrixView](
+    wm: W, low, high: uint64, left, right: int64): MatchingRun =
+  ## 一般range向けのMSB-first native traversalです。
+  ##
+  ## 各nodeは、同じvalue prefixを共有する元physical連続区間と、
+  ## その要素を現在levelへstable projectionしたmapped区間を同時に保持します。
+  ## prefixのvalue intervalがqueryに完全包含されればphysical区間をそのまま採用し、
+  ## 非交差なら破棄します。部分交差時だけcurrent bitをrankで分類し、
+  ## bitが混在する区間だけphysical orderを保ったまま二分します。
+  ##
+  ## 追加metadataやrow materializationは使用しません。
+  if left < right:
+    if wm.bitWidth == 0:
+      if low == 0:
+        yield (left: left, right: right)
+    else:
+      template runRangeNative(rankFn: untyped) =
+        block:
+          var stack: array[RangeRunTraversalStackCapacity, RangeRunNode]
+          var stackLen = 1
+          stack[0] = (
+            level: 0,
+            physicalLeft: left,
+            physicalRight: right,
+            mappedLeft: left,
+            mappedRight: right,
+            prefix: 0'u64)
+
+          var pending = false
+          var pendingLeft = 0'i64
+          var pendingRight = 0'i64
+
+          while stackLen > 0:
+            dec stackLen
+            var node = stack[stackLen]
+            var finished = false
+
+            while not finished:
+              let remainingBits = wm.bitWidth - node.level
+              let possibleLow = node.prefix
+              let possibleHigh =
+                node.prefix or rangeLowBitsMask(remainingBits)
+
+              if possibleHigh < low or possibleLow > high:
+                finished = true
+              elif low <= possibleLow and possibleHigh <= high:
+                if pending and pendingRight == node.physicalLeft:
+                  pendingRight = node.physicalRight
+                else:
+                  if pending:
+                    yield (left: pendingLeft, right: pendingRight)
+                  pending = true
+                  pendingLeft = node.physicalLeft
+                  pendingRight = node.physicalRight
+                finished = true
+              else:
+                let length = node.physicalRight - node.physicalLeft
+                let bits = wm.levels[node.level]
+                let mappedLeftOnes = rankFn(bits, node.mappedLeft)
+                let mappedRightOnes = rankFn(bits, node.mappedRight)
+                let ones = mappedRightOnes - mappedLeftOnes
+                let shift = wm.bitWidth - node.level - 1
+
+                if ones == 0:
+                  node.mappedLeft -= mappedLeftOnes
+                  node.mappedRight -= mappedRightOnes
+                  inc node.level
+                elif ones == length:
+                  node.prefix =
+                    node.prefix or (1'u64 shl shift)
+                  node.mappedLeft =
+                    wm.zeroCounts[node.level] + mappedLeftOnes
+                  node.mappedRight =
+                    wm.zeroCounts[node.level] + mappedRightOnes
+                  inc node.level
+                else:
+                  let leftLength = length shr 1
+                  let physicalMiddle =
+                    node.physicalLeft + leftLength
+                  let mappedMiddle =
+                    node.mappedLeft + leftLength
+
+                  stack[stackLen] = (
+                    level: node.level,
+                    physicalLeft: physicalMiddle,
+                    physicalRight: node.physicalRight,
+                    mappedLeft: mappedMiddle,
+                    mappedRight: node.mappedRight,
+                    prefix: node.prefix)
+                  inc stackLen
+
+                  node.physicalRight = physicalMiddle
+                  node.mappedRight = mappedMiddle
+
+          if pending:
+            yield (left: pendingLeft, right: pendingRight)
+
+      case int(wm.levels[0].level)
+      of 0: runRangeNative(rank1UncheckedDepth0)
+      of 1: runRangeNative(rank1UncheckedDepth1)
+      of 2: runRangeNative(rank1UncheckedDepth2)
+      of 3: runRangeNative(rank1UncheckedDepth3)
+      of 4: runRangeNative(rank1UncheckedDepth4)
+      of 5: runRangeNative(rank1UncheckedDepth5)
+      of 6: runRangeNative(rank1UncheckedDepth6)
+      of 7: runRangeNative(rank1UncheckedDepth7)
+      else: runRangeNative(rank1UncheckedDepth8)
+
 iterator matchingRangeRunsItems*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, low, high: uint64, left, right: int64): MatchingRun =
   ## 値のinclusive range `[low, high]` と、元入力のindex範囲
@@ -351,8 +477,8 @@ iterator matchingRangeRunsItems*[W: WaveletMatrix | WaveletMatrixView](
   ##
   ## 全value domainを含むrangeは入力physical rangeをそのまま返し、
   ## `low == high` は既存の等値run列挙へ委譲します。一般rangeは
-  ## `valueInRangeAtUnchecked` のprefix pruningを利用し、値全体の復元を
-  ## 避けながらphysical orderでrunを形成します。
+  ## MSB-first prefix subtreeをrangeでpruneし、完全包含されたsubtreeの
+  ## physical区間を直接runへ統合します。
   if left < 0 or left > right or right > wm.n:
     raise newException(IndexDefect, "range out of bounds")
 
@@ -365,19 +491,8 @@ iterator matchingRangeRunsItems*[W: WaveletMatrix | WaveletMatrixView](
         for run in wm.matchingRunsItems(low, left, right):
           yield run
       else:
-        var pending = false
-        var pendingLeft = 0'i64
-        for position in left..<right:
-          if wm.valueInRangeAtUnchecked(position, low, high):
-            if not pending:
-              pending = true
-              pendingLeft = position
-          elif pending:
-            yield (left: pendingLeft, right: position)
-            pending = false
-
-        if pending:
-          yield (left: pendingLeft, right: right)
+        for run in wm.matchingRangeRunsNativeItems(low, high, left, right):
+          yield run
 
 iterator matchingRangeRunsItems*[W: WaveletMatrix | WaveletMatrixView](
     wm: W, low, high: uint64): MatchingRun =
