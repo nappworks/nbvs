@@ -173,14 +173,6 @@ proc apiRangeRuns(wm: WaveletMatrix, low, high: uint64):
     inc result.runCount
     result.matchedRows += run.right - run.left
 
-proc measure(action: proc (): uint64 {.closure.}, repeats: int): seq[float] =
-  sink = sink xor action()
-  result = newSeq[float](repeats)
-  for repeat in 0..<repeats:
-    let started = getMonoTime()
-    sink = sink xor action()
-    result[repeat] = float((getMonoTime() - started).inNanoseconds)
-
 proc csvEscape(value: string): string =
   "\"" & value.replace("\"", "\"\"") & "\""
 
@@ -217,12 +209,51 @@ proc main() =
         doAssert positionObserved == expected
         doAssert nativeObserved == expected
 
-        let baselineSamples = measure(proc (): uint64 =
-          baselineAccessRuns(wm, low, high).checksum, repeats)
-        let positionSamples = measure(proc (): uint64 =
-          positionPredicateRuns(wm, low, high).checksum, repeats)
-        let nativeSamples = measure(proc (): uint64 =
-          apiRangeRuns(wm, low, high).checksum, repeats)
+        # 3 methodを1回ずつwarmupした後、repeatごとに開始methodをrotateします。
+        sink = sink xor baselineAccessRuns(wm, low, high).checksum
+        sink = sink xor positionPredicateRuns(wm, low, high).checksum
+        sink = sink xor apiRangeRuns(wm, low, high).checksum
+
+        var baselineSamples = newSeqOfCap[float](repeats)
+        var positionSamples = newSeqOfCap[float](repeats)
+        var nativeSamples = newSeqOfCap[float](repeats)
+
+        template recordBaseline() =
+          block:
+            let started = getMonoTime()
+            sink = sink xor baselineAccessRuns(wm, low, high).checksum
+            baselineSamples.add float(
+              (getMonoTime() - started).inNanoseconds)
+
+        template recordPosition() =
+          block:
+            let started = getMonoTime()
+            sink = sink xor positionPredicateRuns(wm, low, high).checksum
+            positionSamples.add float(
+              (getMonoTime() - started).inNanoseconds)
+
+        template recordNative() =
+          block:
+            let started = getMonoTime()
+            sink = sink xor apiRangeRuns(wm, low, high).checksum
+            nativeSamples.add float(
+              (getMonoTime() - started).inNanoseconds)
+
+        for repeatIndex in 0..<repeats:
+          case repeatIndex mod 3
+          of 0:
+            recordBaseline()
+            recordPosition()
+            recordNative()
+          of 1:
+            recordPosition()
+            recordNative()
+            recordBaseline()
+          else:
+            recordNative()
+            recordBaseline()
+            recordPosition()
+
         let baselineP50 = percentile(baselineSamples, 0.50)
         let positionP50 = percentile(positionSamples, 0.50)
         let nativeP50 = percentile(nativeSamples, 0.50)
