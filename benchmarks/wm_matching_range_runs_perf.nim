@@ -1,8 +1,8 @@
 ## Wavelet Matrix range-run列挙をaccess baselineと比較するbenchmarkです。
 ##
 ## 同一Wavelet Matrix・同一physical range・同一value rangeについて、
-## `access + compare` でrunを形成するbaselineと
-## `matchingRangeRunsItems` を比較します。
+## `access + compare`、PR #22相当のposition predicate scan、
+## range-native `matchingRangeRunsItems` をsame-binaryで比較します。
 
 import std/[algorithm, monotimes, os, parseopt, strformat, strutils, times]
 import nbvs
@@ -19,16 +19,17 @@ type
     selectivity: int
     methodName: string
     p50, p95, p99: float
-    speedup: float
+    speedupVsAccess: float
+    speedupVsPosition: float
     runCount, matchedRows: int64
 
 const
-  # 60 workload cases × baseline/candidate を通常の開発PCで反復できる規模を
+  # 84 workload cases × 3 methods を通常の開発PCで反復できる規模を
   # defaultにします。1M/11 repeatsは明示引数でextended measurementとして実行します。
   DefaultRows = 262_144
   DefaultRepeats = 7
   BitWidths = [8, 16, 32, 64]
-  Selectivities = [1, 10, 40, 90, 100]
+  Selectivities = [1, 5, 10, 25, 40, 90, 100]
   Backend = when defined(nbvsSimd): "simd" else: "scalar"
   BuildFlags = when defined(nbvsSimd):
     "-d:release --mm:arc -d:nbvsSimd"
@@ -124,6 +125,29 @@ proc baselineAccessRuns(wm: WaveletMatrix, low, high: uint64):
     inc result.runCount
     result.matchedRows += wm.n - pendingLeft
 
+proc positionPredicateRuns(wm: WaveletMatrix, low, high: uint64):
+    tuple[checksum: uint64, runCount, matchedRows: int64] =
+  ## PR #22のgeneral range実装をbenchmark内で固定再現します。
+  ## `valueInRangeAtUnchecked` をphysical positionごとに呼び、
+  ## matching positionを極大runへまとめます。
+  var pending = false
+  var pendingLeft = 0'i64
+  for position in 0'i64..<wm.n:
+    if wm.valueInRangeAtUnchecked(position, low, high):
+      if not pending:
+        pending = true
+        pendingLeft = position
+    elif pending:
+      mixRun(result.checksum, pendingLeft, position)
+      inc result.runCount
+      result.matchedRows += position - pendingLeft
+      pending = false
+
+  if pending:
+    mixRun(result.checksum, pendingLeft, wm.n)
+    inc result.runCount
+    result.matchedRows += wm.n - pendingLeft
+
 proc apiRangeRuns(wm: WaveletMatrix, low, high: uint64):
     tuple[checksum: uint64, runCount, matchedRows: int64] =
   for run in wm.matchingRangeRunsItems(low, high):
@@ -170,36 +194,58 @@ proc main() =
       for selectivity in Selectivities:
         let (low, high) = queryRange(bitWidth, selectivity)
         let expected = baselineAccessRuns(wm, low, high)
-        let observed = apiRangeRuns(wm, low, high)
-        doAssert observed == expected
+        let positionObserved = positionPredicateRuns(wm, low, high)
+        let nativeObserved = apiRangeRuns(wm, low, high)
+        doAssert positionObserved == expected
+        doAssert nativeObserved == expected
 
         let baselineSamples = measure(proc (): uint64 =
           baselineAccessRuns(wm, low, high).checksum, repeats)
-        let apiSamples = measure(proc (): uint64 =
+        let positionSamples = measure(proc (): uint64 =
+          positionPredicateRuns(wm, low, high).checksum, repeats)
+        let nativeSamples = measure(proc (): uint64 =
           apiRangeRuns(wm, low, high).checksum, repeats)
         let baselineP50 = percentile(baselineSamples, 0.50)
-        let apiP50 = percentile(apiSamples, 0.50)
+        let positionP50 = percentile(positionSamples, 0.50)
+        let nativeP50 = percentile(nativeSamples, 0.50)
 
         for repeat, latency in baselineSamples:
           lines.add &"{Backend},{shape.shapeName},{bitWidth},{rows},{selectivity}," &
             &"access_compare,{repeat + 1},{latency:.0f}," &
             &"{expected.runCount},{expected.matchedRows}"
-        for repeat, latency in apiSamples:
+        for repeat, latency in positionSamples:
           lines.add &"{Backend},{shape.shapeName},{bitWidth},{rows},{selectivity}," &
-            &"matching_range_runs,{repeat + 1},{latency:.0f}," &
-            &"{observed.runCount},{observed.matchedRows}"
+            &"position_predicate_scan,{repeat + 1},{latency:.0f}," &
+            &"{positionObserved.runCount},{positionObserved.matchedRows}"
+        for repeat, latency in nativeSamples:
+          lines.add &"{Backend},{shape.shapeName},{bitWidth},{rows},{selectivity}," &
+            &"matching_range_runs_native,{repeat + 1},{latency:.0f}," &
+            &"{nativeObserved.runCount},{nativeObserved.matchedRows}"
 
         summaries.add Summary(
           shape: shape,
           bitWidth: bitWidth,
           selectivity: selectivity,
-          methodName: "matching_range_runs",
-          p50: apiP50,
-          p95: percentile(apiSamples, 0.95),
-          p99: percentile(apiSamples, 0.99),
-          speedup: baselineP50 / apiP50,
-          runCount: observed.runCount,
-          matchedRows: observed.matchedRows)
+          methodName: "position_predicate_scan",
+          p50: positionP50,
+          p95: percentile(positionSamples, 0.95),
+          p99: percentile(positionSamples, 0.99),
+          speedupVsAccess: baselineP50 / positionP50,
+          speedupVsPosition: 1.0,
+          runCount: positionObserved.runCount,
+          matchedRows: positionObserved.matchedRows)
+        summaries.add Summary(
+          shape: shape,
+          bitWidth: bitWidth,
+          selectivity: selectivity,
+          methodName: "matching_range_runs_native",
+          p50: nativeP50,
+          p95: percentile(nativeSamples, 0.95),
+          p99: percentile(nativeSamples, 0.99),
+          speedupVsAccess: baselineP50 / nativeP50,
+          speedupVsPosition: positionP50 / nativeP50,
+          runCount: nativeObserved.runCount,
+          matchedRows: nativeObserved.matchedRows)
 
   let output = lines.join("\n") & "\n"
   if outputPath.len > 0:
@@ -211,11 +257,14 @@ proc main() =
     stdout.write(output)
 
   stderr.writeLine("## Summary")
-  stderr.writeLine("backend,shape,bits,selectivity,p50_ns,p95_ns,p99_ns,speedup,runs,matched_rows")
+  stderr.writeLine(
+    "backend,shape,bits,selectivity,method,p50_ns,p95_ns,p99_ns," &
+    "speedup_vs_access,speedup_vs_position,runs,matched_rows")
   for item in summaries:
     stderr.writeLine(&"{Backend},{item.shape.shapeName},{item.bitWidth}," &
-      &"{item.selectivity},{item.p50:.0f},{item.p95:.0f},{item.p99:.0f}," &
-      &"{item.speedup:.4f},{item.runCount},{item.matchedRows}")
+      &"{item.selectivity},{item.methodName},{item.p50:.0f},{item.p95:.0f}," &
+      &"{item.p99:.0f},{item.speedupVsAccess:.4f}," &
+      &"{item.speedupVsPosition:.4f},{item.runCount},{item.matchedRows}")
   stderr.writeLine("sink=", sink)
   stderr.writeLine("backend=", Backend)
   stderr.writeLine("build_flags=", csvEscape(BuildFlags))
