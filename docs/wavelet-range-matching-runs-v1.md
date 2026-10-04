@@ -1,4 +1,4 @@
-# Wavelet Matrix Range Matching Runs v1
+# Wavelet Matrix Range Matching Runs v1 / Range-Native v2
 
 ## 目的
 
@@ -77,7 +77,9 @@ physical range指定版は半開区間です。
 
 ## 実装方針
 
-v1ではquery shapeに応じて経路を分けます。
+### v1
+
+PR #22で導入したv1はquery shapeに応じて経路を分けます。
 
 ```text
 range covers complete value domain
@@ -87,15 +89,67 @@ low == high
   -> matchingRunsItems(value)へ委譲
 
 general numeric range
-  -> physical orderを走査
+  -> physical orderをposition scan
   -> valueInRangeAtUnchecked(position, low, high)
   -> matching positionを極大runへまとめる
 ```
 
-一般rangeでも `access(position)` で値全体を復元してから比較するのではなく、
-MSB-first prefix pruningを使う既存 `valueInRangeAtUnchecked` を利用します。
+general rangeはvalue全体の復元を避けられますが、
+対象physical rangeの全positionを最低1回訪問します。
 
-このv1では永続補助構造、run-boundary index、追加metadataは持ちません。
+### Range-Native v2
+
+PR #23 Stage Aではgeneral rangeをMSB-first prefix subtree traversalへ変更します。
+公開APIとresult semanticsはv1のままです。
+
+internal node:
+
+```nim
+RangeRunNode = tuple[
+  level: int,
+  physicalLeft: int64,
+  physicalRight: int64,
+  mappedLeft: int64,
+  mappedRight: int64,
+  prefix: uint64]
+```
+
+各nodeは次のinvariantを持ちます。
+
+- `[physicalLeft, physicalRight)` は元入力上の連続区間
+- `[mappedLeft, mappedRight)` は同じrow集合をcurrent Wavelet levelへstable projectionした区間
+- physical lengthとmapped lengthは一致
+- node内の全rowは同じ既知value prefixを共有
+- DFSはphysical left-to-right orderを維持
+
+現在prefixが表すvalue intervalとquery `[low, high]` の関係でnodeを分類します。
+
+```text
+disjoint
+  -> node全体を破棄
+
+fully contained
+  -> physical intervalをmatching runとして直接採用
+
+partial overlap
+  -> current levelのbit分布をrankで確認
+```
+
+partial overlapでcurrent bitが全0または全1なら、
+そのnode全体を次levelへstable projectionします。
+
+current bitが混在する場合だけ、
+
+```text
+physical midpoint
+mapped midpoint
+```
+
+を同じoffsetで二分し、current levelを継続します。
+left childを先に処理するため、結果は元physical index昇順のままです。
+隣接するfully-contained intervalはyield前に結合し、既存の極大run contractを維持します。
+
+v2でも永続補助構造、run-boundary index、row materialization、result sortは導入しません。
 
 ## ReversedWaveletMatrixを対象にしない判断
 
@@ -142,22 +196,38 @@ oracleは元配列をscalar scanし、同じinclusive range semanticsでrun化�
 
 ## Performance benchmark
 
-`benchmarks/wm_matching_range_runs_perf.nim` で次を同一dataset上で比較します。
+PR #23では `benchmarks/wm_matching_range_runs_perf.nim` を
+3-way same-binary比較へ拡張します。
 
 ```text
-baseline:
+access_compare
   wm.access(position)
   -> low <= value <= high
   -> physical run化
 
-candidate:
-  wm.matchingRangeRunsItems(low, high)
+position_predicate_scan
+  PR #22 general-range実装をbenchmark内で固定再現
+  -> physical positionごとにvalueInRangeAtUnchecked
+
+matching_range_runs_native
+  public matchingRangeRunsItems
+  -> Range-Native v2
 ```
+
+主比較は、
+
+```text
+position_predicate_scan
+vs
+matching_range_runs_native
+```
+
+です。
 
 測定軸:
 
 - bit width: 8 / 16 / 32 / 64
-- selectivity: 1 / 10 / 40 / 90 / 100%
+- selectivity: 1 / 5 / 10 / 25 / 40 / 90 / 100%
 - data shape:
   - random
   - clustered
@@ -165,11 +235,12 @@ candidate:
 - run count
 - matched row count
 - p50 / p95 / p99
-- baselineに対するspeedup
+- access baselineに対するspeedup
+- v1 position scanに対するspeedup
 - Scalar / SIMD
 
 通常の反復測定は 262,144 rows / 7 repeats を既定値とします。
-全60 workloadをScalar/SIMDで反復可能な時間に収め、日常の回帰確認に使います。
+全84 workload × 3 methodsをScalar/SIMDで比較します。
 
 より重いextended measurementは明示引数で実行します。
 
@@ -183,13 +254,23 @@ extended measurementは長時間実行を許容する追加 evidence とし、�
 benchmarkは測定前にbaselineとcandidateのchecksum、run count、matched row countが一致することを
 assertします。
 
-## 後続最適化候補
+## Range-Native v2の採用判断
 
-v1の測定後、一般rangeのposition-by-position predicateが支配的であれば、
-MSB-first value subtreeをrangeでpruneし、一致intervalをphysical orderへprojectionする
-range-native traversalを検討します。
+Stage Aではpure native traversalだけを実装し、測定前にadaptive thresholdを導入しません。
 
-その場合も公開API contractは本PRの6 APIを維持し、内部strategyのみを変更します。
+採用条件:
+
+1. correctnessがv1 scalar oracleと一致
+2. 低〜中selectivityでposition scanより有意に高速
+3. p95/p99に重大なregressionがない
+4. fragmented workloadのregression範囲を説明できる
+5. benchmark後に実行コードを変更しない
+
+random / periodicの高fragmentation条件で明確なregressionが確認された場合は、
+同じPR #23のStage Bとしてadaptive strategyを検討します。
+thresholdはStage Aの測定結果を根拠に決定します。
+
+公開API contractは変更しません。
 
 ## 変更しないもの
 
