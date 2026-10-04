@@ -276,6 +276,25 @@ thresholdはStage Aの測定結果を根拠に決定します。
 
 公開API contractは変更しません。
 
+### Stage Aローカル測定結果
+
+2026-10-04にNim 2.2.10 / Linux amd64で、scalarとSIMDの両方を測定しました。
+全84 workloadを実行するbenchmarkのdefault条件は、native traversalの高fragmentation時の
+実行時間が長く、この環境では完走を確認できませんでした。そのため、同じ84 workloadを
+`rows=16384` / `repeats=5`へ縮小した測定を採用判断に使用しています。
+
+scalarでは、clustered workloadのnative対position scanのp50比が約6.3--8.3倍でした。
+一方、random / periodicでは約0.026--0.044倍にとどまり、position scanより約23--38倍遅くなりました。
+SIMDでも同じ傾向で、clusteredは約4.1--4.9倍、random / periodicは約0.016--0.032倍でした。
+3 methodのchecksum、run count、matched row countは全workloadで一致し、scalar/SIMD correctness
+assertは成功しています。
+
+この結果は「低〜中selectivityでposition scanより有意に高速」「p95/p99に重大なregressionなし」
+というStage Aの採用条件を満たしません。したがって、Stage Aのpure native traversalは
+無条件には採用せず、fragmentationを検出してposition scanへ戻すStage B adaptive strategyを
+別途設計・測定する必要があります。本PRでは測定後に閾値を追加せず、公開API contractと
+storage layoutも変更しません。
+
 ## 変更しないもの
 
 - Wavelet Matrix storage layout
