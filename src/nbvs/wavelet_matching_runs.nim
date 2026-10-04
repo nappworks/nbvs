@@ -383,8 +383,10 @@ func preferRangeNativeAdaptive[
       if RangeRunAdaptiveProbeWindows <= 1:
         0'i64
       else:
-        (maxStartOffset * int64(windowIndex)) div
-          int64(RangeRunAdaptiveProbeWindows - 1)
+        let denominator = int64(RangeRunAdaptiveProbeWindows - 1)
+        let index = int64(windowIndex)
+        (maxStartOffset div denominator) * index +
+          ((maxStartOffset mod denominator) * index) div denominator
     let windowLeft = left + startOffset
     let windowRight = windowLeft + windowSize
 
