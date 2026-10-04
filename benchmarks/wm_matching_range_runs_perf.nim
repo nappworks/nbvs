@@ -127,9 +127,27 @@ proc baselineAccessRuns(wm: WaveletMatrix, low, high: uint64):
 
 proc positionPredicateRuns(wm: WaveletMatrix, low, high: uint64):
     tuple[checksum: uint64, runCount, matchedRows: int64] =
-  ## PR #22のgeneral range実装をbenchmark内で固定再現します。
-  ## `valueInRangeAtUnchecked` をphysical positionごとに呼び、
-  ## matching positionを極大runへまとめます。
+  ## PR #22のpublic routeをbenchmark内で固定再現します。
+  ## full-domain / equality fast pathは維持し、general rangeだけ
+  ## `valueInRangeAtUnchecked` をphysical positionごとに呼びます。
+  if wm.n == 0 or low > high:
+    return
+
+  let highDomain = domainHigh(wm.bitWidth)
+  if low > highDomain:
+    return
+  if low == 0 and high >= highDomain:
+    mixRun(result.checksum, 0, wm.n)
+    result.runCount = 1
+    result.matchedRows = wm.n
+    return
+  if low == high:
+    for run in wm.matchingRunsItems(low):
+      mixRun(result.checksum, run.left, run.right)
+      inc result.runCount
+      result.matchedRows += run.right - run.left
+    return
+
   var pending = false
   var pendingLeft = 0'i64
   for position in 0'i64..<wm.n:
