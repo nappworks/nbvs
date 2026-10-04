@@ -396,7 +396,8 @@ Stage Cのdefault benchmark（`rows=262144` / `repeats=7`）をNim 2.2.10 / Linu
 scalarとSIMDの両方について完走させました。全workloadでchecksum、run count、matched row
 countのassertが成功しました。
 
-general range 84 casesのstrategy選択は、scalar/SIMDとも次の内訳でした。
+全84 workload（general range 72 casesとfull-domain 12 cases）のstrategy選択は、
+scalar/SIMDとも次の内訳でした。
 
 ```text
 position = 64
