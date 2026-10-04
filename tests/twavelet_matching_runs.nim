@@ -173,6 +173,15 @@ block adaptiveRangeRuns:
     doAssert not clusteredWm.rangeRunAdaptiveUsesNativeBenchmark(
       64, 127, 0, 1024)
 
+  var sparse = newSeq[uint64](4096)
+  sparse[2048] = 80
+  let sparseWm = genWaveletMatrix(sparse, 8)
+  doAssert sparseWm.matchingRangeRuns(64, 127) ==
+    naiveRangeRuns(sparse, 64, 127, 0, sparse.len)
+  when defined(nbvsRangeRunBenchmark):
+    doAssert not sparseWm.rangeRunAdaptiveUsesNativeBenchmark(
+      64, 127, 0, sparseWm.n)
+
 block rangeRunsExplicitBitWidths:
   let zeros = genWaveletMatrix(@[0'u64, 0, 0, 0], 0)
   doAssert zeros.matchingRangeRuns(0, 0, 1, 3) == @[

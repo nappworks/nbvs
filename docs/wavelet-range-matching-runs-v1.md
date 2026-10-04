@@ -329,10 +329,13 @@ window rows         = 64
 max predicate probes= 512
 minimum span        = 2,048
 transition limit    = 6
+minimum matched samples = 16
+minimum matching windows = 2
 ```
 
 - spanが2,048未満ならprobe overheadを避けてposition scan
 - 局所遷移が6回を超えた時点でposition scan
+- match sampleが16未満、またはmatchを含むwindowが2未満ならposition scan
 - それ以外はrange-native
 
 この判定はperformance heuristicだけで、どちらのrouteも同じpublic resultを返します。
@@ -382,7 +385,33 @@ Stage B採用条件:
 5. default条件が現実的な時間で完走
 6. benchmark後にexecution codeを変更しない
 
-閾値が不十分な場合だけStage Cとしてprobe parameterを調整します。
+Stage Bのdefault測定では、低密度で遷移が少ないrangeがnativeへ誤選択されるケースを
+確認しました。Stage Cとして、match sample数とmatching window数の下限を追加し、
+疎なqueryをposition scanへ戻します。Stage Cの再測定でrandom / periodicの低selectivity
+regressionが解消されることを確認します。
+
+### Stage Cローカル測定結果
+
+Stage Cのdefault benchmark（`rows=262144` / `repeats=7`）をNim 2.2.10 / Linux amd64で
+scalarとSIMDの両方について完走させました。全workloadでchecksum、run count、matched row
+countのassertが成功しました。
+
+general range 84 casesのstrategy選択は、scalar/SIMDとも次の内訳でした。
+
+```text
+position = 64
+native   = 8
+full_domain = 12
+```
+
+Stage Cによりrandom / periodicの低selectivityで発生していたnativeの重大regressionは
+解消され、position routeはposition scan比約0.88--1.07倍の範囲でした。一方、clusteredで
+nativeを選択した8ケースは、scalarで約0.50--0.54倍、SIMDで約0.33--0.35倍にとどまり、
+position scanを上回りませんでした。
+
+したがって、Stage Bの「fragmented regression解消」は満たしましたが、
+「clusteredでStage A nativeの有意なgainを保持」は満たしていません。Stage Bは現時点では
+採用せず、native traversal自体の大規模入力での性能改善をStage C以降の残課題とします。
 
 ## 変更しないもの
 

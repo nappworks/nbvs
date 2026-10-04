@@ -36,6 +36,8 @@ const
   RangeRunAdaptiveWindowSize = 64'i64
   RangeRunAdaptiveMinSpan = 2048'i64
   RangeRunAdaptiveTransitionLimit = 6
+  RangeRunAdaptiveMinMatchedSamples = 16'i64
+  RangeRunAdaptiveMinMatchingWindows = 2
 
 func valueFits(bitWidth: int, value: uint64): bool {.inline.} =
   if bitWidth == 0:
@@ -367,7 +369,8 @@ func preferRangeNativeAdaptive[
   ## physical range全体は走査せず、最大8個の64-row windowだけを均等配置して
   ## range predicateのmatch/non-match遷移数を数えます。局所遷移が多い場合は
   ## Stage Aで大幅regressionした高fragmentation workloadとみなしposition scanを
-  ## 選択します。遷移が少ない場合だけrange-native traversalを選択します。
+  ## 選択します。match sampleやmatching windowが少ない疎なqueryもposition scanへ
+  ## 戻し、それ以外の場合だけrange-native traversalを選択します。
   ##
   ## 短いrangeではprobe overheadを回避するためposition scanを優先します。
   let span = right - left
@@ -377,6 +380,8 @@ func preferRangeNativeAdaptive[
   let windowSize = min(span, RangeRunAdaptiveWindowSize)
   let maxStartOffset = span - windowSize
   var transitions = 0
+  var matchedSamples = 0'i64
+  var matchingWindows = 0
 
   for windowIndex in 0..<RangeRunAdaptiveProbeWindows:
     let startOffset =
@@ -392,15 +397,27 @@ func preferRangeNativeAdaptive[
 
     var previous =
       wm.valueInRangeAtUnchecked(windowLeft, low, high)
+    var windowHasMatch = previous
+    if previous:
+      inc matchedSamples
     var position = windowLeft + 1
     while position < windowRight:
       let current = wm.valueInRangeAtUnchecked(position, low, high)
+      if current:
+        inc matchedSamples
+        windowHasMatch = true
       if current != previous:
         inc transitions
         if transitions > RangeRunAdaptiveTransitionLimit:
           return false
       previous = current
       inc position
+    if windowHasMatch:
+      inc matchingWindows
+
+  if matchedSamples < RangeRunAdaptiveMinMatchedSamples or
+      matchingWindows < RangeRunAdaptiveMinMatchingWindows:
+    return false
 
   true
 
