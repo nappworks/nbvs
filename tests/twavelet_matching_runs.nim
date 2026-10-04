@@ -125,6 +125,28 @@ block simpleRangeRuns:
   expectRaises(IndexDefect): discard wm.matchingRangeRuns(4, 7, 0, 10)
   expectRaises(IndexDefect): discard wm.matchingRangeRuns(4, 7, 5, 4)
 
+block rangeNativePrefixSubtrees:
+  # queryに完全包含されるvalue prefixと、部分交差するprefixを同じphysical列で
+  # 混在させ、native traversalが元physical orderの極大runを維持することを確認する。
+  let xs = @[
+    12'u64, 64, 65, 95, 127, 200, 80, 81, 130, 159, 32, 63, 96, 160,
+    72, 73, 74, 250]
+  let wm = genWaveletMatrix(xs, 8)
+
+  for query in [
+      (64'u64, 127'u64),
+      (48'u64, 159'u64),
+      (65'u64, 130'u64),
+      (1'u64, 254'u64)]:
+    let (low, high) = query
+    doAssert wm.matchingRangeRuns(low, high) ==
+      naiveRangeRuns(xs, low, high, 0, xs.len)
+    for left in 0..xs.len:
+      for right in left..xs.len:
+        doAssert wm.matchingRangeRuns(
+          low, high, int64(left), int64(right)) ==
+          naiveRangeRuns(xs, low, high, left, right)
+
 block rangeRunsExplicitBitWidths:
   let zeros = genWaveletMatrix(@[0'u64, 0, 0, 0], 0)
   doAssert zeros.matchingRangeRuns(0, 0, 1, 3) == @[
