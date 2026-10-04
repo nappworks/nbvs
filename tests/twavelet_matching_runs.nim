@@ -147,6 +147,32 @@ block rangeNativePrefixSubtrees:
           low, high, int64(left), int64(right)) ==
           naiveRangeRuns(xs, low, high, left, right)
 
+block adaptiveRangeRuns:
+  var clustered = newSeq[uint64](4096)
+  for position in 0..<clustered.len:
+    let cluster = position div 256
+    clustered[position] =
+      if (cluster and 1) == 0: 80'u64 else: 200'u64
+  let clusteredWm = genWaveletMatrix(clustered, 8)
+  doAssert clusteredWm.matchingRangeRuns(64, 127) ==
+    naiveRangeRuns(clustered, 64, 127, 0, clustered.len)
+
+  var fragmented = newSeq[uint64](4096)
+  for position in 0..<fragmented.len:
+    fragmented[position] =
+      if (position and 1) == 0: 80'u64 else: 200'u64
+  let fragmentedWm = genWaveletMatrix(fragmented, 8)
+  doAssert fragmentedWm.matchingRangeRuns(64, 127) ==
+    naiveRangeRuns(fragmented, 64, 127, 0, fragmented.len)
+
+  when defined(nbvsRangeRunBenchmark):
+    doAssert clusteredWm.rangeRunAdaptiveUsesNativeBenchmark(
+      64, 127, 0, clusteredWm.n)
+    doAssert not fragmentedWm.rangeRunAdaptiveUsesNativeBenchmark(
+      64, 127, 0, fragmentedWm.n)
+    doAssert not clusteredWm.rangeRunAdaptiveUsesNativeBenchmark(
+      64, 127, 0, 1024)
+
 block rangeRunsExplicitBitWidths:
   let zeros = genWaveletMatrix(@[0'u64, 0, 0, 0], 0)
   doAssert zeros.matchingRangeRuns(0, 0, 1, 3) == @[
