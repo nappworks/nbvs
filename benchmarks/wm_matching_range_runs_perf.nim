@@ -257,10 +257,10 @@ proc main() =
             recordAdaptive()
           of 1:
             recordPosition()
-            recordNative()
+            recordAdaptive()
             recordBaseline()
           else:
-            recordNative()
+            recordAdaptive()
             recordBaseline()
             recordPosition()
 
