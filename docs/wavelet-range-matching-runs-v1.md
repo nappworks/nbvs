@@ -206,8 +206,9 @@ access_compare
   -> physical run化
 
 position_predicate_scan
-  PR #22 general-range実装をbenchmark内で固定再現
-  -> physical positionごとにvalueInRangeAtUnchecked
+  PR #22 public routeをbenchmark内で固定再現
+  -> full-domain / equality fast pathは維持
+  -> general rangeだけphysical positionごとにvalueInRangeAtUnchecked
 
 matching_range_runs_native
   public matchingRangeRunsItems
@@ -242,6 +243,9 @@ matching_range_runs_native
 通常の反復測定は 262,144 rows / 7 repeats を既定値とします。
 全84 workload × 3 methodsをScalar/SIMDで比較します。
 
+各workloadで3 methodを1回ずつwarmupし、repeatごとに開始methodを
+`mod 3` でrotateして測定順序biasを抑えます。
+
 より重いextended measurementは明示引数で実行します。
 
 ```bash
@@ -251,7 +255,7 @@ nim c --path:src -d:release --mm:arc -r   benchmarks/wm_matching_range_runs_perf
 extended measurementは長時間実行を許容する追加 evidence とし、通常のPR validationを
 完走不能な既定値にはしません。
 
-benchmarkは測定前にbaselineとcandidateのchecksum、run count、matched row countが一致することを
+benchmarkは測定前に3 methodのchecksum、run count、matched row countが一致することを
 assertします。
 
 ## Range-Native v2の採用判断
