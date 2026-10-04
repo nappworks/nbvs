@@ -210,9 +210,10 @@ position_predicate_scan
   -> full-domain / equality fast pathは維持
   -> general rangeだけphysical positionごとにvalueInRangeAtUnchecked
 
-matching_range_runs_native
+matching_range_runs_adaptive
   public matchingRangeRunsItems
-  -> Range-Native v2
+  -> Stage B bounded fragmentation probe
+  -> native または position scan
 ```
 
 主比較は、
@@ -220,7 +221,7 @@ matching_range_runs_native
 ```text
 position_predicate_scan
 vs
-matching_range_runs_native
+matching_range_runs_adaptive
 ```
 
 です。
@@ -238,6 +239,7 @@ matching_range_runs_native
 - p50 / p95 / p99
 - access baselineに対するspeedup
 - v1 position scanに対するspeedup
+- adaptive strategy (`native` / `position`)
 - Scalar / SIMD
 
 通常の反復測定は 262,144 rows / 7 repeats を既定値とします。
@@ -294,6 +296,93 @@ assertは成功しています。
 無条件には採用せず、fragmentationを検出してposition scanへ戻すStage B adaptive strategyを
 別途設計・測定する必要があります。本PRでは測定後に閾値を追加せず、公開API contractと
 storage layoutも変更しません。
+
+## Stage B: adaptive range-run strategy
+
+Stage Aではclustered workloadで大幅な改善を確認した一方、
+random / periodicではpure native traversalが大幅にregressionしました。
+
+Stage Bではpublic APIを変更せず、general rangeに対してbounded fragmentation probeを
+追加してstrategyを選択します。
+
+```text
+full domain
+  -> existing fast path
+
+equality
+  -> matchingRunsItems
+
+general range
+  -> bounded fragmentation probe
+       |
+       +-- low fragmentation  -> range-native
+       |
+       +-- high fragmentation -> PR #22 position scan
+```
+
+probeはphysical range全体を走査しません。最大8個の64-row windowを対象rangeへ
+均等配置し、各window内のrange predicateのmatch/non-match遷移数だけを数えます。
+
+```text
+probe windows       = 8
+window rows         = 64
+max predicate probes= 512
+minimum span        = 2,048
+transition limit    = 6
+```
+
+- spanが2,048未満ならprobe overheadを避けてposition scan
+- 局所遷移が6回を超えた時点でposition scan
+- それ以外はrange-native
+
+この判定はperformance heuristicだけで、どちらのrouteも同じpublic resultを返します。
+全体run countを事前materializeしたり、全physical rangeを二重走査したりしません。
+
+通常buildでは追加public APIはありません。
+`-d:nbvsRangeRunBenchmark` のbenchmark build時だけ、選択strategyを観測する
+`rangeRunAdaptiveUsesNativeBenchmark` hookを有効にします。
+
+### Stage B correctness
+
+synthetic workloadで次を固定します。
+
+```text
+256-row clustered runs -> native
+alternating rows       -> position
+short range (< 2048)   -> position
+```
+
+各caseの最終runはscalar oracleと一致することを要求します。
+既存randomized / 64-bit / Heap/View testも継承します。
+
+### Stage B benchmark
+
+same-binaryで次を比較します。
+
+```text
+access_compare
+position_predicate_scan
+matching_range_runs_adaptive
+```
+
+strategy観測を含む測定では、
+
+```bash
+-d:nbvsRangeRunBenchmark
+```
+
+を付けます。
+
+Stage B採用条件:
+
+1. correctness完全一致
+2. random / periodicでposition scanに対する重大regressionを解消
+3. clusteredでStage A nativeの有意なgainを保持
+4. 特にselectivity 1 / 5 / 10 / 25 / 40%でp50とtailを確認
+5. default条件が現実的な時間で完走
+6. benchmark後にexecution codeを変更しない
+
+閾値が不十分な場合だけStage Cとしてprobe parameterを調整します。
 
 ## 変更しないもの
 
